@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>第二脑</title>
+    <link rel="stylesheet" href="css/base.css">
+    <link rel="stylesheet" href="css/app.css">
+    <script src="js/vendor/tailwind-browser.js"></script>
+    <script src="js/vendor/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--note-background);
+    --color-foreground: var(--note-foreground);
+    --color-card: var(--note-card);
+    --color-card-foreground: var(--note-card-foreground);
+    --color-popover: var(--note-popover);
+    --color-popover-foreground: var(--note-popover-foreground);
+    --color-primary: var(--note-primary);
+    --color-primary-foreground: var(--note-primary-foreground);
+    --color-muted: var(--note-muted);
+    --color-muted-foreground: var(--note-muted-foreground);
+    --color-border: var(--note-border);
+    --color-input: var(--note-input);
+    --color-ring: var(--note-ring);
+    --radius-sm: var(--note-radius-sm);
+    --radius-md: var(--note-radius-md);
+    --radius-lg: var(--note-radius-lg);
+  }
+  @layer base {
+    body { background: var(--note-background); color: var(--note-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--note-background); }
+      .text-foreground { color: var(--note-foreground); }
+      .border-border { border-color: var(--note-border); }
+      .bg-card { background-color: var(--note-card); }
+      .text-card { color: var(--note-card); }
+      .bg-popover { background-color: var(--note-popover); }
+      .text-popover { color: var(--note-popover); }
+      .bg-primary { background-color: var(--note-primary); }
+      .text-primary { color: var(--note-primary); }
+      .bg-muted { background-color: var(--note-muted); }
+      .text-muted { color: var(--note-muted); }
+    </style>
+</head>
+<body style="background: var(--note-background); color: var(--note-foreground);">
+  <main class="app-main">
+    <!-- ===== 标题栏 (36px) ===== -->
+    <!-- 标题栏：可拖拽区域（桌面端 -webkit-app-region: drag） -->
+    <header class="h-9 flex items-center justify-between pl-3 border-b shrink-0" style="border-color: var(--note-border); background: var(--note-surface); -webkit-app-region: drag;">
+      <button data-dom-id="vault-picker" title="切换笔记库" class="flex items-center gap-1.5 text-[13px] px-1.5 py-0.5 rounded transition-colors hover:opacity-80" style="color: var(--note-ink-2); -webkit-app-region: no-drag; cursor: pointer; background: transparent; border: none;">
+          <i data-lucide="book" class="w-3.5 h-3.5"></i>
+          <span id="vault-name" class="font-medium" style="color: var(--note-ink);">我的笔记库</span>
+          <i data-lucide="chevron-down" id="vault-chevron" class="w-3 h-3" style="color: var(--note-ink-3); transition: transform .15s;"></i>
+      </button>
+      <!-- 中部：面包屑（随视图变化） -->
+      <div id="crumbs" class="titlebar-breadcrumb flex items-center gap-1 text-[12px]" style="color: var(--note-ink-3);">
+        <span>日记</span>
+        <i data-lucide="chevron-right" class="w-3 h-3"></i>
+        <span>2024年</span>
+        <i data-lucide="chevron-right" class="w-3 h-3"></i>
+        <span style="color: var(--note-ink-2);">09月</span>
+      </div>
+      <!-- 右侧：搜索 + Windows 窗口控制按钮 -->
+      <div class="flex items-stretch h-full" style="-webkit-app-region: no-drag;">
+        <div class="titlebar-actions flex items-center gap-2">
+          <button data-dom-id="open-command-palette" class="titlebar-cmd flex items-center gap-1.5 px-2 py-1 rounded text-[12px] border transition-colors hover:opacity-80" style="border-color: var(--note-border); color: var(--note-ink-3); background: var(--note-surface-2);">
+            <i data-lucide="search" class="w-3 h-3"></i>
+            <span>搜索</span>
+            <kbd class="kbd-hint text-[10px] px-1 rounded" style="background: var(--note-surface); color: var(--note-ink-3);">⌘P</kbd>
+          </button>
+        </div>
+        <!-- Windows 风格窗口控制按钮（桌面端通过 IPC 控制窗口） -->
+        <div class="window-controls">
+          <button data-win="min" title="最小化" aria-label="最小化"><i data-lucide="minus" class="w-4 h-4"></i></button>
+          <button data-win="max" title="最大化" aria-label="最大化"><i data-lucide="square" class="w-3.5 h-3.5"></i></button>
+          <button data-win="close" title="关闭" aria-label="关闭" class="win-close"><i data-lucide="x" class="w-4 h-4"></i></button>
+        </div>
+      </div>
+    </header>
+
+    <div class="app-row">
+      <!-- ===== Ribbon (48px) ===== -->
+      <nav class="ribbon w-12 shrink-0 flex flex-col items-center py-3 gap-1 border-r" style="border-color: var(--note-border); background: var(--note-surface);">
+        <button data-nav-key="file" data-route="#/editor" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors" title="编辑器">
+          <i data-lucide="file-text" class="w-5 h-5"></i>
+        </button>
+        <button data-dom-id="open-command-palette-ribbon" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="搜索">
+          <i data-lucide="search" class="w-5 h-5"></i>
+        </button>
+        <button data-nav-key="graph" data-route="#/graph" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="图谱视图">
+          <i data-lucide="git-fork" class="w-5 h-5"></i>
+        </button>
+        <button data-nav-key="plugins" data-route="#/plugins" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="插件市场">
+          <i data-lucide="puzzle" class="w-5 h-5"></i>
+        </button>
+        <button data-nav-key="ai" data-route="#/ai" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="AI 问答">
+          <i data-lucide="brain" class="w-5 h-5"></i>
+        </button>
+        <button data-nav-key="settings" data-route="#/settings" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="设置">
+          <i data-lucide="settings" class="w-5 h-5"></i>
+        </button>
+        <div class="ribbon-spacer flex-1"></div>
+        <div class="w-2 h-2 rounded-full" style="background: var(--state-success);" title="已同步"></div>
+      </nav>
+
+      <!-- ===== 视图装载区 ===== -->
+      <div class="app-fill relative" style="background: var(--note-background);">
+        <div id="view-root" style="height: 100%;"></div>
+
+        <!-- ===== 命令面板覆盖层 ===== -->
+        <div id="palette-overlay" class="absolute inset-0" style="display:none; z-index: 50;">
+          <div data-dom-id="palette-backdrop" class="backdrop-enter absolute inset-0" style="background: rgba(0,0,0,0.5);"></div>
+          <div class="palette palette-enter shadow-2xl" style="border: 1px solid var(--note-border); background: var(--note-popover); box-shadow: var(--note-shadow-3); z-index: 51;">
+            <div class="flex items-center gap-3 px-4" style="height: 52px;">
+              <i data-lucide="search" class="w-4 h-4 shrink-0" style="color: var(--note-ink-3);"></i>
+              <input id="palette-input" type="text" placeholder="输入命令或搜索笔记..." autocomplete="off"
+                     class="flex-1 bg-transparent outline-none text-[15px] placeholder:opacity-60" style="color: var(--note-ink);" />
+              <button data-dom-id="palette-close" class="text-[11px] px-1.5 py-0.5 rounded font-mono shrink-0 hover:opacity-80" style="background: var(--note-surface-2); color: var(--note-ink-3); border: 1px solid var(--note-border);">ESC</button>
+            </div>
+            <div style="height: 1px; background: var(--note-border);"></div>
+            <div id="palette-list" class="app-scroll py-2" style="flex: 1;"></div>
+            <div class="flex items-center justify-between px-4 py-2.5 border-t text-[12px]" style="border-color: var(--note-border); background: var(--note-surface);">
+              <div class="flex items-center gap-3" style="color: var(--note-ink-3);">
+                <span class="flex items-center gap-1"><kbd class="px-1 py-0.5 rounded font-mono text-[10px]" style="background: var(--note-surface-2); color: var(--note-ink-2);">↑↓</kbd>导航</span>
+                <span class="flex items-center gap-1"><kbd class="px-1 py-0.5 rounded font-mono text-[10px]" style="background: var(--note-surface-2); color: var(--note-ink-2);">↵</kbd>选择</span>
+                <span class="flex items-center gap-1"><kbd class="px-1 py-0.5 rounded font-mono text-[10px]" style="background: var(--note-surface-2); color: var(--note-ink-2);">esc</kbd>关闭</span>
+              </div>
+              <span id="palette-count" class="nums" style="color: var(--note-ink-3);"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 移动端底栏 ===== -->
+        <div class="mobile-bar hidden-el rounded-lg border absolute left-3 top-3 z-40 overflow-hidden shadow-lg" style="border-color: var(--note-border); background: var(--note-surface);">
+          <button id="m-toggle-leaf" class="w-9 h-9 flex items-center justify-center" style="color: var(--note-ink-2);" title="侧栏"><i data-lucide="panel-left" class="w-4 h-4"></i></button>
+          <button id="m-toggle-side" class="w-9 h-9 flex items-center justify-center border-l" style="color: var(--note-ink-2); border-color: var(--note-border);" title="面板"><i data-lucide="panel-right" class="w-4 h-4"></i></button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 视图模板注入 -->
+  <div id="view-templates" style="display:none;"></div>
+  <script>
+    lucide.createIcons();
+  </script>
+  <script src="js/app-core.js?v=4"></script>
+  <script src="js/app-note.js?v=4"></script>
+  <script src="js/app-editor.js?v=4"></script>
+  <script src="js/app-graph.js?v=4"></script>
+  <script src="js/app-plugins.js?v=4"></script>
+  <script src="js/app-settings.js?v=4"></script>
+  <script src="js/app-ai.js?v=4"></script>
+  <script src="js/app-vault.js?v=4"></script>
+  <script src="js/app-editor-ctx.js?v=4"></script>
+  <script src="js/file-tree-ctx.js?v=4"></script>
+  <script src="js/app-layout.js?v=4"></script>
+</body>
+</html>

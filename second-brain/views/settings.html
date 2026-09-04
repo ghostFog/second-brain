@@ -1,0 +1,122 @@
+<div class="view-row" style="background: var(--note-background);">
+  <!-- 左侧分类 -->
+  <aside class="resp-leaf w-[220px] shrink-0 flex flex-col border-r" style="border-color: var(--note-border); background: var(--note-surface);">
+    <div class="px-4 py-4 border-b shrink-0" style="border-color: var(--note-border);">
+      <h2 class="text-h3" style="color: var(--note-ink);">设置</h2>
+    </div>
+    <nav class="flex-1 px-2 py-2 flex flex-col gap-0.5 overflow-y-auto no-scrollbar">
+      <div class="settings-cat" data-cat="外观" data-active="1"><i data-lucide="palette" class="w-4 h-4"></i><span>外观</span></div>
+      <div class="settings-cat" data-cat="编辑器"><i data-lucide="file-text" class="w-4 h-4"></i><span>编辑器</span></div>
+      <div class="settings-cat" data-cat="快捷键"><i data-lucide="keyboard" class="w-4 h-4"></i><span>快捷键</span></div>
+      <div class="settings-cat" data-cat="同步与备份"><i data-lucide="cloud" class="w-4 h-4"></i><span>同步与备份</span></div>
+      <div class="settings-cat" data-cat="隐私与安全"><i data-lucide="shield" class="w-4 h-4"></i><span>隐私与安全</span></div>
+      <div class="settings-cat" data-cat="插件管理"><i data-lucide="puzzle" class="w-4 h-4"></i><span>插件管理</span></div>
+      <div class="settings-cat" data-cat="AI 问答"><i data-lucide="brain" class="w-4 h-4"></i><span>AI 问答</span></div>
+      <div class="settings-cat" data-cat="关于"><i data-lucide="info" class="w-4 h-4"></i><span>关于</span></div>
+    </nav>
+  </aside>
+
+  <!-- 右侧内容 -->
+  <div id="settings-content" class="flex-1 overflow-y-auto">
+    <div class="max-w-3xl mx-auto px-8 py-8">
+      <div class="mb-8">
+        <h1 id="settings-title" class="text-h1" style="color: var(--note-ink);">外观</h1>
+        <p id="settings-sub" class="text-body mt-1" style="color: var(--note-ink-2);">自定义你的编辑器外观</p>
+      </div>
+
+      <section class="settings-group">
+        <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">主题模式</h3>
+        <div class="grid grid-cols-3 gap-3">
+          <div class="theme-card" data-theme-mode="dark">
+            <div class="mb-3"><div class="w-full h-16 rounded-md overflow-hidden flex" style="border: 1px solid var(--note-border);"><div class="flex-1" style="background: #1E1E2E;"></div><div style="width: 30%; background: #2D2D3F;"></div></div></div>
+            <div class="flex items-center justify-between"><span class="text-[14px]" style="color: var(--note-ink);">深色</span><i data-lucide="check" class="w-4 h-4" style="color: var(--note-brand-600);"></i></div>
+          </div>
+          <div class="theme-card" data-theme-mode="light">
+            <div class="mb-3"><div class="w-full h-16 rounded-md overflow-hidden flex" style="border: 1px solid var(--note-border);"><div class="flex-1" style="background: #FFFFFF;"></div><div style="width: 30%; background: #F7F7FA;"></div></div></div>
+            <div class="flex items-center justify-between"><span class="text-[14px]" style="color: var(--note-ink-2);">浅色</span></div>
+          </div>
+          <div class="theme-card" data-theme-mode="auto">
+            <div class="mb-3"><div class="w-full h-16 rounded-md overflow-hidden flex" style="border: 1px solid var(--note-border);"><div class="flex-1" style="background: linear-gradient(90deg, #1E1E2E 50%, #FFFFFF 50%);"></div><div style="width: 30%; background: linear-gradient(90deg, #2D2D3F 50%, #F7F7FA 50%);"></div></div></div>
+            <div class="flex items-center justify-between"><span class="text-[14px]" style="color: var(--note-ink-2);">跟随系统</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-group">
+        <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">强调色</h3>
+        <p class="text-caption mb-4" style="color: var(--note-ink-3);">选择应用主色调，影响按钮、链接和高亮元素。</p>
+        <div class="flex items-center gap-4 flex-wrap">
+          <div class="color-dot" data-accent="#7C3AED" style="background: #7C3AED;"></div>
+          <div class="color-dot" data-accent="#3B82F6" style="background: #3B82F6;"></div>
+          <div class="color-dot" data-accent="#22C55E" style="background: #22C55E;"></div>
+          <div class="color-dot" data-accent="#F97316" style="background: #F97316;"></div>
+          <div class="color-dot" data-accent="#EF4444" style="background: #EF4444;"></div>
+          <div class="color-dot" data-accent="#EC4899" style="background: #EC4899;"></div>
+        </div>
+      </section>
+
+      <section class="settings-group">
+        <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">字体设置</h3>
+        <div class="mb-6">
+          <div class="flex items-center justify-between mb-3">
+            <div><div class="text-[14px]" style="color: var(--note-ink);">字体大小</div><div class="text-caption" style="color: var(--note-ink-3);">调整编辑器正文的字号</div></div>
+            <span id="font-size-label" class="text-mono nums px-2 py-0.5 rounded" style="background: var(--note-surface-2); color: var(--note-ink);">15px</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-caption" style="color: var(--note-ink-3);">14</span>
+            <input id="font-size-slider" type="range" min="14" max="18" value="15" class="range-slider flex-1">
+            <span class="text-caption" style="color: var(--note-ink-3);">18</span>
+          </div>
+        </div>
+        <div class="mb-4">
+          <div class="flex items-center justify-between gap-4 flex-wrap">
+            <div class="flex-1 min-w-[120px]"><div class="text-[14px]" style="color: var(--note-ink);">字体族</div><div class="text-caption" style="color: var(--note-ink-3);">编辑器正文使用的字体</div></div>
+            <div class="relative">
+              <select id="font-family-select" class="select-box"><option>Inter</option><option>Noto Sans SC</option><option>系统默认</option></select>
+              <i data-lucide="chevron-down" class="w-4 h-4 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style="color: var(--note-ink-3);"></i>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center justify-between gap-4 flex-wrap">
+            <div class="flex-1 min-w-[120px]"><div class="text-[14px]" style="color: var(--note-ink);">代码字体</div><div class="text-caption" style="color: var(--note-ink-3);">代码块使用的等宽字体</div></div>
+            <div class="relative">
+              <select id="font-mono-select" class="select-box"><option>JetBrains Mono</option><option>Fira Code</option><option>Cascadia Code</option></select>
+              <i data-lucide="chevron-down" class="w-4 h-4 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style="color: var(--note-ink-3);"></i>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-group">
+        <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">界面密度</h3>
+        <p class="text-caption mb-4" style="color: var(--note-ink-3);">调整界面元素的间距与紧凑程度。</p>
+        <div class="grid grid-cols-3 gap-3">
+          <div class="density-opt" data-skey="density" data-value="紧凑">
+            <div class="flex items-center gap-2 mb-1"><span class="density-radio"></span><span class="text-[14px]" style="color: var(--note-ink);">紧凑</span></div>
+            <p class="text-caption" style="color: var(--note-ink-3);">更小的间距，适合小屏幕</p>
+          </div>
+          <div class="density-opt" data-skey="density" data-value="标准" data-active="1">
+            <div class="flex items-center gap-2 mb-1"><span class="density-radio"></span><span class="text-[14px]" style="color: var(--note-ink);">标准</span></div>
+            <p class="text-caption" style="color: var(--note-ink-3);">平衡的间距与可读性</p>
+          </div>
+          <div class="density-opt" data-skey="density" data-value="舒适">
+            <div class="flex items-center gap-2 mb-1"><span class="density-radio"></span><span class="text-[14px]" style="color: var(--note-ink);">舒适</span></div>
+            <p class="text-caption" style="color: var(--note-ink-3);">更宽松的间距，缓解视觉疲劳</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-group">
+        <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">其他</h3>
+        <div class="flex flex-col gap-1">
+          <div class="flex items-center justify-between py-3"><div class="flex-1 pr-4"><div class="text-[14px]" style="color: var(--note-ink);">显示行号</div><div class="text-caption" style="color: var(--note-ink-3);">在代码块和编辑区左侧显示行号</div></div><label class="toggle"><input type="checkbox" data-skey="lineNumbers" checked><span class="toggle-track"></span></label></div>
+          <div class="border-t" style="border-color: var(--note-border);"></div>
+          <div class="flex items-center justify-between py-3"><div class="flex-1 pr-4"><div class="text-[14px]" style="color: var(--note-ink);">自动换行</div><div class="text-caption" style="color: var(--note-ink-3);">长文本行自动折行显示，避免横向滚动</div></div><label class="toggle"><input type="checkbox" data-skey="wrap" checked><span class="toggle-track"></span></label></div>
+          <div class="border-t" style="border-color: var(--note-border);"></div>
+          <div class="flex items-center justify-between py-3"><div class="flex-1 pr-4"><div class="text-[14px]" style="color: var(--note-ink);">减少动画</div><div class="text-caption" style="color: var(--note-ink-3);">降低界面过渡与动画强度</div></div><label class="toggle"><input type="checkbox" data-skey="reduceMotion"><span class="toggle-track"></span></label></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>

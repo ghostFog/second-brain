@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NoteApp</title>
+    <style id="theme-vars">
+/* ============================================
+ * NoteApp Brand CSS — Obsidian-Inspired Theme
+ * Brand prefix: note
+ * Single brand hue: Violet (#7C3AED)
+ * ============================================ */
+
+/* === Design Tokens (shared) === */
+:root {
+  /* Brand primary hue — Violet (Obsidian-inspired) */
+  --note-brand-50: #F5F3FF;
+  --note-brand-100: #EDE9FE;
+  --note-brand-200: #DDD6FE;
+  --note-brand-300: #C4B5FD;
+  --note-brand-400: #A78BFA;
+  --note-brand-500: #8B5CF6;
+  --note-brand-600: #7C3AED;
+  --note-brand-700: #6D28D9;
+  --note-brand-800: #5B21B6;
+  --note-brand-900: #4C1D95;
+  --note-brand-950: #2E1065;
+
+  /* Neutral scale — cool dark gray */
+  --note-neutral-0: #FFFFFF;
+  --note-neutral-50: #F7F7FA;
+  --note-neutral-100: #ECECF2;
+  --note-neutral-200: #D9D9E3;
+  --note-neutral-300: #B8B8C8;
+  --note-neutral-400: #9494A8;
+  --note-neutral-500: #6B6B7B;
+  --note-neutral-600: #525262;
+  --note-neutral-700: #3F3F50;
+  --note-neutral-800: #2D2D3F;
+  --note-neutral-900: #1E1E2E;
+  --note-neutral-950: #141419;
+
+  /* State colors — semantic only */
+  --state-success: #22C55E;
+  --state-warning: #F59E0B;
+  --state-error: #EF4444;
+  --state-info: #3B82F6;
+
+  /* Radius scale — restrained */
+  --note-radius-sm: 4px;
+  --note-radius-md: 8px;
+  --note-radius-lg: 12px;
+  --note-radius-full: 9999px;
+
+  /* Typography */
+  --note-font-sans: 'Inter', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --note-font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+
+  /* Type scale */
+  --note-text-display: clamp(32px, 4vw, 48px);
+  --note-text-h1: clamp(24px, 2.5vw, 36px);
+  --note-text-h2: clamp(20px, 2vw, 28px);
+  --note-text-h3: 18px;
+  --note-text-body-l: 17px;
+  --note-text-body: 15px;
+  --note-text-caption: 13px;
+  --note-text-mono: 13px;
+}
+
+/* === Dark Mode (default) === */
+:root {
+  --note-background: var(--note-neutral-900);
+  --note-foreground: #DCDCE4;
+  --note-card: var(--note-neutral-800);
+  --note-card-foreground: #DCDCE4;
+  --note-popover: var(--note-neutral-800);
+  --note-popover-foreground: #DCDCE4;
+  --note-primary: var(--note-brand-600);
+  --note-primary-foreground: #FFFFFF;
+  --note-muted: var(--note-neutral-800);
+  --note-muted-foreground: #9B9BA8;
+  --note-border: var(--note-neutral-700);
+  --note-input: var(--note-neutral-700);
+  --note-ring: var(--note-brand-600);
+
+  /* Extended semantic tokens */
+  --note-surface: var(--note-neutral-800);
+  --note-surface-2: #333346;
+  --note-ink: #DCDCE4;
+  --note-ink-2: #9B9BA8;
+  --note-ink-3: #6B6B7B;
+  --note-line: var(--note-neutral-700);
+  --note-brand: var(--note-brand-600);
+  --note-brand-ink: #FFFFFF;
+
+  /* Shadows — dark mode */
+  --note-shadow-1: 0 1px 2px rgba(0,0,0,0.2), 0 1px 1px rgba(0,0,0,0.1);
+  --note-shadow-2: 0 8px 24px -8px rgba(0,0,0,0.5);
+  --note-shadow-3: 0 24px 60px -20px rgba(0,0,0,0.6);
+}
+
+/* === Light Mode === */
+html.light {
+  --note-background: var(--note-neutral-0);
+  --note-foreground: var(--note-neutral-900);
+  --note-card: var(--note-neutral-50);
+  --note-card-foreground: var(--note-neutral-900);
+  --note-popover: var(--note-neutral-0);
+  --note-popover-foreground: var(--note-neutral-900);
+  --note-primary: var(--note-brand-600);
+  --note-primary-foreground: #FFFFFF;
+  --note-muted: var(--note-neutral-100);
+  --note-muted-foreground: var(--note-neutral-500);
+  --note-border: var(--note-neutral-200);
+  --note-input: var(--note-neutral-200);
+  --note-ring: var(--note-brand-600);
+
+  --note-surface: var(--note-neutral-50);
+  --note-surface-2: var(--note-neutral-100);
+  --note-ink: var(--note-neutral-900);
+  --note-ink-2: var(--note-neutral-500);
+  --note-ink-3: var(--note-neutral-400);
+  --note-line: var(--note-neutral-200);
+
+  /* Shadows — light mode */
+  --note-shadow-1: 0 1px 2px rgba(15,23,42,0.05), 0 1px 1px rgba(15,23,42,0.03);
+  --note-shadow-2: 0 8px 24px -8px rgba(15,23,42,0.18);
+  --note-shadow-3: 0 24px 60px -20px rgba(15,23,42,0.30);
+}
+
+/* === Typography utility classes === */
+.font-sans { font-family: var(--note-font-sans); }
+.font-mono { font-family: var(--note-font-mono); }
+
+.text-display { font-size: var(--note-text-display); line-height: 1.1; font-weight: 600; letter-spacing: -0.02em; }
+.text-h1 { font-size: var(--note-text-h1); line-height: 1.2; font-weight: 600; letter-spacing: -0.015em; }
+.text-h2 { font-size: var(--note-text-h2); line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; }
+.text-h3 { font-size: var(--note-text-h3); line-height: 1.3; font-weight: 600; }
+.text-body-l { font-size: var(--note-text-body-l); line-height: 1.6; font-weight: 400; }
+.text-body { font-size: var(--note-text-body); line-height: 1.6; font-weight: 400; }
+.text-caption { font-size: var(--note-text-caption); line-height: 1.5; font-weight: 400; }
+.text-mono { font-family: var(--note-font-mono); font-size: var(--note-text-mono); line-height: 1.5; font-weight: 500; }
+
+.nums { font-variant-numeric: tabular-nums; }
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--note-background);
+    --color-foreground: var(--note-foreground);
+    --color-card: var(--note-card);
+    --color-card-foreground: var(--note-card-foreground);
+    --color-popover: var(--note-popover);
+    --color-popover-foreground: var(--note-popover-foreground);
+    --color-primary: var(--note-primary);
+    --color-primary-foreground: var(--note-primary-foreground);
+    --color-muted: var(--note-muted);
+    --color-muted-foreground: var(--note-muted-foreground);
+    --color-border: var(--note-border);
+    --color-input: var(--note-input);
+    --color-ring: var(--note-ring);
+    --radius-sm: var(--note-radius-sm);
+    --radius-md: var(--note-radius-md);
+    --radius-lg: var(--note-radius-lg);
+  }
+  @layer base {
+    body { background: var(--note-background); color: var(--note-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--note-background); }
+      .text-background { color: var(--note-background); }
+      .border-background { border-color: var(--note-background); }
+      .ring-background { --tw-ring-color: var(--note-background); }
+      .bg-foreground { background-color: var(--note-foreground); }
+      .text-foreground { color: var(--note-foreground); }
+      .border-foreground { border-color: var(--note-foreground); }
+      .ring-foreground { --tw-ring-color: var(--note-foreground); }
+      .bg-card { background-color: var(--note-card); }
+      .text-card { color: var(--note-card); }
+      .border-card { border-color: var(--note-card); }
+      .ring-card { --tw-ring-color: var(--note-card); }
+      .bg-card-foreground { background-color: var(--note-card-foreground); }
+      .text-card-foreground { color: var(--note-card-foreground); }
+      .border-card-foreground { border-color: var(--note-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--note-card-foreground); }
+      .bg-popover { background-color: var(--note-popover); }
+      .text-popover { color: var(--note-popover); }
+      .border-popover { border-color: var(--note-popover); }
+      .ring-popover { --tw-ring-color: var(--note-popover); }
+      .bg-popover-foreground { background-color: var(--note-popover-foreground); }
+      .text-popover-foreground { color: var(--note-popover-foreground); }
+      .border-popover-foreground { border-color: var(--note-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--note-popover-foreground); }
+      .bg-primary { background-color: var(--note-primary); }
+      .text-primary { color: var(--note-primary); }
+      .border-primary { border-color: var(--note-primary); }
+      .ring-primary { --tw-ring-color: var(--note-primary); }
+      .bg-primary-foreground { background-color: var(--note-primary-foreground); }
+      .text-primary-foreground { color: var(--note-primary-foreground); }
+      .border-primary-foreground { border-color: var(--note-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--note-primary-foreground); }
+      .bg-muted { background-color: var(--note-muted); }
+      .text-muted { color: var(--note-muted); }
+      .border-muted { border-color: var(--note-muted); }
+      .ring-muted { --tw-ring-color: var(--note-muted); }
+      .bg-muted-foreground { background-color: var(--note-muted-foreground); }
+      .text-muted-foreground { color: var(--note-muted-foreground); }
+      .border-muted-foreground { border-color: var(--note-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--note-muted-foreground); }
+      .bg-border { background-color: var(--note-border); }
+      .text-border { color: var(--note-border); }
+      .border-border { border-color: var(--note-border); }
+      .ring-border { --tw-ring-color: var(--note-border); }
+      .bg-input { background-color: var(--note-input); }
+      .text-input { color: var(--note-input); }
+      .border-input { border-color: var(--note-input); }
+      .ring-input { --tw-ring-color: var(--note-input); }
+      .bg-ring { background-color: var(--note-ring); }
+      .text-ring { color: var(--note-ring); }
+      .border-ring { border-color: var(--note-ring); }
+      .ring-ring { --tw-ring-color: var(--note-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="h-screen overflow-hidden font-sans antialiased" style="background: var(--note-background); color: var(--note-foreground);">
+    <!-- ===== Page-specific component styles (head CSS untouched) ===== -->
+    <style>
+      /* 设置分类项 */
+      .settings-cat {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: var(--note-radius-md);
+        cursor: pointer;
+        color: var(--note-ink-2);
+        font-size: 14px;
+        border-left: 2px solid transparent;
+        transition: background-color .15s, color .15s;
+      }
+      .settings-cat:hover {
+        background: var(--note-surface-2);
+        color: var(--note-ink);
+      }
+      .settings-cat.active {
+        border-left-color: var(--note-brand-600);
+        color: var(--note-brand-600);
+        background: rgba(124, 58, 237, 0.08);
+      }
+
+      /* 主题模式卡片 */
+      .theme-card {
+        cursor: pointer;
+        border: 1px solid var(--note-border);
+        border-radius: var(--note-radius-lg);
+        padding: 12px;
+        transition: border-color .15s, background-color .15s;
+      }
+      .theme-card:hover { border-color: var(--note-ink-3); }
+      .theme-card.active {
+        border-color: var(--note-brand-600);
+        background: rgba(124, 58, 237, 0.06);
+      }
+
+      /* 强调色圆点 */
+      .color-dot {
+        width: 28px;
+        height: 28px;
+        border-radius: var(--note-radius-full);
+        cursor: pointer;
+        position: relative;
+        transition: box-shadow .15s, transform .15s;
+      }
+      .color-dot:hover { transform: scale(1.08); }
+      .color-dot.active::after {
+        content: "";
+        position: absolute;
+        inset: -5px;
+        border: 2px solid var(--note-ink);
+        border-radius: var(--note-radius-full);
+      }
+
+      /* 界面密度单选项 */
+      .density-opt {
+        cursor: pointer;
+        border: 1px solid var(--note-border);
+        border-radius: var(--note-radius-md);
+        padding: 12px 14px;
+        transition: border-color .15s, background-color .15s;
+      }
+      .density-opt:hover { border-color: var(--note-ink-3); }
+      .density-opt.active {
+        border-color: var(--note-brand-600);
+        background: rgba(124, 58, 237, 0.06);
+      }
+      .density-radio {
+        width: 16px;
+        height: 16px;
+        border-radius: var(--note-radius-full);
+        border: 2px solid var(--note-ink-3);
+        flex-shrink: 0;
+        position: relative;
+        transition: border-color .15s;
+      }
+      .density-opt.active .density-radio { border-color: var(--note-brand-600); }
+      .density-opt.active .density-radio::after {
+        content: "";
+        position: absolute;
+        inset: 3px;
+        border-radius: var(--note-radius-full);
+        background: var(--note-brand-600);
+      }
+
+      /* Toggle 开关 */
+      .toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+      .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+      .toggle-track {
+        position: absolute;
+        inset: 0;
+        cursor: pointer;
+        background: var(--note-surface-2);
+        border-radius: var(--note-radius-full);
+        transition: background-color .2s;
+      }
+      .toggle-track::before {
+        content: "";
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        left: 2px;
+        top: 2px;
+        background: #FFFFFF;
+        border-radius: var(--note-radius-full);
+        transition: transform .2s;
+      }
+      .toggle input:checked + .toggle-track { background: var(--note-brand-600); }
+      .toggle input:checked + .toggle-track::before { transform: translateX(16px); }
+
+      /* 滑块 */
+      .range-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: 4px;
+        border-radius: var(--note-radius-full);
+        background: var(--note-surface-2);
+        outline: none;
+      }
+      .range-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        border-radius: var(--note-radius-full);
+        background: var(--note-brand-600);
+        cursor: pointer;
+        border: 2px solid var(--note-background);
+      }
+      .range-slider::-moz-range-thumb {
+        width: 16px;
+        height: 16px;
+        border-radius: var(--note-radius-full);
+        background: var(--note-brand-600);
+        cursor: pointer;
+        border: 2px solid var(--note-background);
+      }
+
+      /* 下拉选择 */
+      .select-box {
+        appearance: none;
+        -webkit-appearance: none;
+        background: var(--note-surface);
+        border: 1px solid var(--note-border);
+        border-radius: var(--note-radius-md);
+        color: var(--note-ink);
+        padding: 8px 32px 8px 12px;
+        font-size: 14px;
+        cursor: pointer;
+        outline: none;
+        transition: border-color .15s;
+      }
+      .select-box:hover { border-color: var(--note-ink-3); }
+      .select-box:focus { border-color: var(--note-brand-600); }
+
+      /* 设置分组 */
+      .settings-group + .settings-group { margin-top: 40px; padding-top: 32px; border-top: 1px solid var(--note-border); }
+    </style>
+
+    <main class="h-screen flex flex-col">
+      <!-- ===== Title Bar (36px) ===== -->
+      <header class="h-9 flex items-center justify-between px-3 border-b" style="border-color: var(--note-border); background: var(--note-surface);">
+        <!-- Left: traffic lights + vault name -->
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full" style="background:#FF5F57;"></span>
+            <span class="w-3 h-3 rounded-full" style="background:#FEBC2E;"></span>
+            <span class="w-3 h-3 rounded-full" style="background:#28C840;"></span>
+          </div>
+          <div class="flex items-center gap-1.5 text-[13px]" style="color: var(--note-ink-2);">
+            <i data-lucide="book" class="w-3.5 h-3.5"></i>
+            <span style="color: var(--note-ink);">我的笔记库</span>
+          </div>
+        </div>
+        <!-- Center: breadcrumb -->
+        <div class="flex items-center gap-1 text-[12px]" style="color: var(--note-ink-3);">
+          <span>日记</span>
+          <i data-lucide="chevron-right" class="w-3 h-3"></i>
+          <span>2024年</span>
+          <i data-lucide="chevron-right" class="w-3 h-3"></i>
+          <span style="color: var(--note-ink-2);">09月</span>
+        </div>
+        <!-- Right: command palette trigger + window actions -->
+        <div class="flex items-center gap-2">
+          <button data-dom-id="open-command-palette" class="flex items-center gap-1.5 px-2 py-1 rounded text-[12px] border transition-colors hover:opacity-80" style="border-color: var(--note-border); color: var(--note-ink-3); background: var(--note-surface-2);">
+            <i data-lucide="search" class="w-3 h-3"></i>
+            <span>搜索</span>
+            <kbd class="text-[10px] px-1 rounded" style="background: var(--note-surface); color: var(--note-ink-3);">⌘P</kbd>
+          </button>
+        </div>
+      </header>
+
+      <!-- ===== Main Row: Ribbon + Content ===== -->
+      <div class="flex-1 flex overflow-hidden">
+        <!-- ===== Ribbon (48px) ===== -->
+        <nav class="w-12 flex flex-col items-center py-3 gap-1 border-r" style="border-color: var(--note-border); background: var(--note-surface);">
+          <!-- File / Editor -->
+          <button data-nav-key="file" data-dom-id="nav-editor" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="编辑器">
+            <i data-lucide="file-text" class="w-5 h-5"></i>
+          </button>
+          <!-- Search -->
+          <button data-nav-key="search" data-dom-id="open-command-palette-ribbon" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="搜索">
+            <i data-lucide="search" class="w-5 h-5"></i>
+          </button>
+          <!-- Graph -->
+          <button data-nav-key="graph" data-dom-id="nav-graph" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="图谱视图">
+            <i data-lucide="git-fork" class="w-5 h-5"></i>
+          </button>
+          <!-- Plugins -->
+          <button data-nav-key="plugins" data-dom-id="nav-plugins" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="插件市场">
+            <i data-lucide="puzzle" class="w-5 h-5"></i>
+          </button>
+          <!-- Settings (ACTIVE) -->
+          <button data-nav-key="settings" data-dom-id="nav-settings" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors" style="background: var(--note-brand-600); color: #FFFFFF;" title="设置">
+            <i data-lucide="settings" class="w-5 h-5"></i>
+          </button>
+          <!-- Spacer -->
+          <div class="flex-1"></div>
+          <!-- Bottom: sync status -->
+          <div class="w-2 h-2 rounded-full" style="background: var(--state-success);" title="已同步"></div>
+        </nav>
+
+        <!-- ===== Content Area ===== -->
+        <div class="flex-1 flex overflow-hidden" style="background: var(--note-background);">
+          <!-- ===== Left: Settings category sidebar (220px) ===== -->
+          <aside class="w-[220px] flex flex-col border-r" style="border-color: var(--note-border); background: var(--note-surface);">
+            <!-- Top title -->
+            <div class="px-4 py-4 border-b" style="border-color: var(--note-border);">
+              <h2 class="text-h3" style="color: var(--note-ink);">设置</h2>
+            </div>
+            <!-- Category list -->
+            <nav class="flex-1 px-2 py-2 flex flex-col gap-0.5 overflow-y-auto no-scrollbar">
+              <div class="settings-cat active">
+                <i data-lucide="palette" class="w-4 h-4"></i>
+                <span>外观</span>
+              </div>
+              <div class="settings-cat">
+                <i data-lucide="file-text" class="w-4 h-4"></i>
+                <span>编辑器</span>
+              </div>
+              <div class="settings-cat">
+                <i data-lucide="keyboard" class="w-4 h-4"></i>
+                <span>快捷键</span>
+              </div>
+              <div class="settings-cat">
+                <i data-lucide="cloud" class="w-4 h-4"></i>
+                <span>同步与备份</span>
+              </div>
+              <div class="settings-cat">
+                <i data-lucide="shield" class="w-4 h-4"></i>
+                <span>隐私与安全</span>
+              </div>
+              <div class="settings-cat">
+                <i data-lucide="puzzle" class="w-4 h-4"></i>
+                <span>插件管理</span>
+              </div>
+              <div class="settings-cat">
+                <i data-lucide="info" class="w-4 h-4"></i>
+                <span>关于</span>
+              </div>
+            </nav>
+          </aside>
+
+          <!-- ===== Right: Settings content panel ===== -->
+          <div class="flex-1 overflow-y-auto">
+            <div class="max-w-3xl mx-auto px-8 py-8">
+              <!-- Page header -->
+              <div class="mb-8">
+                <h1 class="text-h1" style="color: var(--note-ink);">外观</h1>
+                <p class="text-body mt-1" style="color: var(--note-ink-2);">自定义你的编辑器外观</p>
+              </div>
+
+              <!-- ===== Group 1: 主题模式 ===== -->
+              <section class="settings-group">
+                <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">主题模式</h3>
+                <div class="grid grid-cols-3 gap-3">
+                  <!-- 深色 (选中) -->
+                  <div class="theme-card active">
+                    <div class="flex items-center justify-between mb-3">
+                      <div class="w-full h-16 rounded-md overflow-hidden flex" style="border: 1px solid var(--note-border);">
+                        <div class="flex-1" style="background: #1E1E2E;"></div>
+                        <div style="width: 30%; background: #2D2D3F;"></div>
+                      </div>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <span class="text-[14px]" style="color: var(--note-ink);">深色</span>
+                      <i data-lucide="check" class="w-4 h-4" style="color: var(--note-brand-600);"></i>
+                    </div>
+                  </div>
+                  <!-- 浅色 -->
+                  <div class="theme-card">
+                    <div class="flex items-center justify-between mb-3">
+                      <div class="w-full h-16 rounded-md overflow-hidden flex" style="border: 1px solid var(--note-border);">
+                        <div class="flex-1" style="background: #FFFFFF;"></div>
+                        <div style="width: 30%; background: #F7F7FA;"></div>
+                      </div>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <span class="text-[14px]" style="color: var(--note-ink-2);">浅色</span>
+                    </div>
+                  </div>
+                  <!-- 跟随系统 -->
+                  <div class="theme-card">
+                    <div class="flex items-center justify-between mb-3">
+                      <div class="w-full h-16 rounded-md overflow-hidden flex" style="border: 1px solid var(--note-border);">
+                        <div class="flex-1" style="background: linear-gradient(90deg, #1E1E2E 50%, #FFFFFF 50%);"></div>
+                        <div style="width: 30%; background: linear-gradient(90deg, #2D2D3F 50%, #F7F7FA 50%);"></div>
+                      </div>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <span class="text-[14px]" style="color: var(--note-ink-2);">跟随系统</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- ===== Group 2: 强调色 ===== -->
+              <section class="settings-group">
+                <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">强调色</h3>
+                <p class="text-caption mb-4" style="color: var(--note-ink-3);">选择应用主色调，影响按钮、链接和高亮元素。</p>
+                <div class="flex items-center gap-4">
+                  <div class="color-dot active" style="background: #7C3AED;"></div>
+                  <div class="color-dot" style="background: #3B82F6;"></div>
+                  <div class="color-dot" style="background: #22C55E;"></div>
+                  <div class="color-dot" style="background: #F97316;"></div>
+                  <div class="color-dot" style="background: #EF4444;"></div>
+                  <div class="color-dot" style="background: #EC4899;"></div>
+                </div>
+              </section>
+
+              <!-- ===== Group 3: 字体设置 ===== -->
+              <section class="settings-group">
+                <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">字体设置</h3>
+
+                <!-- 字体大小滑块 -->
+                <div class="mb-6">
+                  <div class="flex items-center justify-between mb-3">
+                    <div>
+                      <div class="text-[14px]" style="color: var(--note-ink);">字体大小</div>
+                      <div class="text-caption" style="color: var(--note-ink-3);">调整编辑器正文的字号</div>
+                    </div>
+                    <span class="text-mono nums px-2 py-0.5 rounded" style="background: var(--note-surface-2); color: var(--note-ink);">15px</span>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <span class="text-caption" style="color: var(--note-ink-3);">14</span>
+                    <input type="range" min="14" max="18" value="15" class="range-slider flex-1">
+                    <span class="text-caption" style="color: var(--note-ink-3);">18</span>
+                  </div>
+                </div>
+
+                <!-- 字体族下拉 -->
+                <div class="mb-4">
+                  <div class="flex items-center justify-between gap-4">
+                    <div class="flex-1">
+                      <div class="text-[14px]" style="color: var(--note-ink);">字体族</div>
+                      <div class="text-caption" style="color: var(--note-ink-3);">编辑器正文使用的字体</div>
+                    </div>
+                    <div class="relative">
+                      <select class="select-box">
+                        <option>Inter</option>
+                        <option>Noto Sans SC</option>
+                        <option>系统默认</option>
+                      </select>
+                      <i data-lucide="chevron-down" class="w-4 h-4 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style="color: var(--note-ink-3);"></i>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 代码字体下拉 -->
+                <div>
+                  <div class="flex items-center justify-between gap-4">
+                    <div class="flex-1">
+                      <div class="text-[14px]" style="color: var(--note-ink);">代码字体</div>
+                      <div class="text-caption" style="color: var(--note-ink-3);">代码块使用的等宽字体</div>
+                    </div>
+                    <div class="relative">
+                      <select class="select-box">
+                        <option>JetBrains Mono</option>
+                        <option>Fira Code</option>
+                        <option>Cascadia Code</option>
+                      </select>
+                      <i data-lucide="chevron-down" class="w-4 h-4 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style="color: var(--note-ink-3);"></i>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- ===== Group 4: 界面密度 ===== -->
+              <section class="settings-group">
+                <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">界面密度</h3>
+                <p class="text-caption mb-4" style="color: var(--note-ink-3);">调整界面元素的间距与紧凑程度。</p>
+                <div class="grid grid-cols-3 gap-3">
+                  <!-- 紧凑 -->
+                  <div class="density-opt">
+                    <div class="flex items-center gap-2 mb-1">
+                      <span class="density-radio"></span>
+                      <span class="text-[14px]" style="color: var(--note-ink);">紧凑</span>
+                    </div>
+                    <p class="text-caption" style="color: var(--note-ink-3);">更小的间距，适合小屏幕</p>
+                  </div>
+                  <!-- 标准 (选中) -->
+                  <div class="density-opt active">
+                    <div class="flex items-center gap-2 mb-1">
+                      <span class="density-radio"></span>
+                      <span class="text-[14px]" style="color: var(--note-ink);">标准</span>
+                    </div>
+                    <p class="text-caption" style="color: var(--note-ink-3);">平衡的间距与可读性</p>
+                  </div>
+                  <!-- 舒适 -->
+                  <div class="density-opt">
+                    <div class="flex items-center gap-2 mb-1">
+                      <span class="density-radio"></span>
+                      <span class="text-[14px]" style="color: var(--note-ink);">舒适</span>
+                    </div>
+                    <p class="text-caption" style="color: var(--note-ink-3);">更宽松的间距，缓解视觉疲劳</p>
+                  </div>
+                </div>
+              </section>
+
+              <!-- ===== Group 5: 其他 ===== -->
+              <section class="settings-group">
+                <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">其他</h3>
+
+                <div class="flex flex-col gap-1">
+                  <!-- 显示行号 (开启) -->
+                  <div class="flex items-center justify-between py-3">
+                    <div class="flex-1 pr-4">
+                      <div class="text-[14px]" style="color: var(--note-ink);">显示行号</div>
+                      <div class="text-caption" style="color: var(--note-ink-3);">在代码块和编辑区左侧显示行号</div>
+                    </div>
+                    <label class="toggle">
+                      <input type="checkbox" checked>
+                      <span class="toggle-track"></span>
+                    </label>
+                  </div>
+
+                  <div class="border-t" style="border-color: var(--note-border);"></div>
+
+                  <!-- 自动换行 (开启) -->
+                  <div class="flex items-center justify-between py-3">
+                    <div class="flex-1 pr-4">
+                      <div class="text-[14px]" style="color: var(--note-ink);">自动换行</div>
+                      <div class="text-caption" style="color: var(--note-ink-3);">长文本行自动折行显示，避免横向滚动</div>
+                    </div>
+                    <label class="toggle">
+                      <input type="checkbox" checked>
+                      <span class="toggle-track"></span>
+                    </label>
+                  </div>
+
+                  <div class="border-t" style="border-color: var(--note-border);"></div>
+
+                  <!-- 减少动画 (关闭) -->
+                  <div class="flex items-center justify-between py-3">
+                    <div class="flex-1 pr-4">
+                      <div class="text-[14px]" style="color: var(--note-ink);">减少动画</div>
+                      <div class="text-caption" style="color: var(--note-ink-3);">降低界面过渡与动画强度</div>
+                    </div>
+                    <label class="toggle">
+                      <input type="checkbox">
+                      <span class="toggle-track"></span>
+                    </label>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

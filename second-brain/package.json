@@ -1,0 +1,72 @@
+{
+  "name": "second-brain",
+  "version": "1.0.0",
+  "description": "第二脑 桌面版 — Obsidian 风格笔记应用 (Electron)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "author": "火 冰",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "jsdom": "^23.2.0"
+  },
+  "build": {
+    "appId": "com.shr25.secondbrain.desktop",
+    "productName": "第二脑",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "ai-engine.js",
+      "index.html",
+      "css/**/*",
+      "js/**/*",
+      "views/**/*",
+      "package.json",
+      "!node_modules/onnxruntime-node/bin/napi-v3/darwin/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v3/linux/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**/*",
+      "!node_modules/onnxruntime-web/**/*.wasm",
+      "!node_modules/onnxruntime-web/**/*.map",
+      "!node_modules/@xenova/transformers/dist/*.wasm",
+      "!node_modules/@xenova/transformers/dist/*.map",
+      "!node_modules/@xenova/transformers/types/**/*",
+      "!node_modules/@xenova/transformers/README.md",
+      "!node_modules/sharp/**/*",
+      "!node_modules/**/*.map"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.17.2",
+    "gray-matter": "^4.0.3",
+    "onnxruntime-node": "^1.14.0"
+  }
+}

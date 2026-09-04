@@ -1,17 +1,58 @@
-.eunit
-*.o
-*.beam
-*.plt
-erl_crash.dump
-.concrete/DEV_MODE
+# ------------------------------------------------------------
+# 项目通用忽略规则
+# 作者：火 冰
+# ------------------------------------------------------------
 
-# rebar 2.x
-.rebar
-rel/example_project
-ebin/*.beam
-deps
+# ---- Node.js ----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+*.tsbuildinfo
 
-# rebar 3
-.rebar3
-_build/
-_checkouts/
+# ---- 打包 / 构建产物 ----
+# electron-builder 输出
+dist/
+release/
+build/
+out/
+win-unpacked/
+*.blockmap
+
+# ---- 日志 ----
+*.log
+
+# ---- 敏感配置 ----
+.env
+.env.*
+!.env.example
+*.pem
+
+# ---- 运行时数据 / 本地缓存 ----
+data/
+*.index.json
+.cache/
+tmp/
+
+# ---- 操作系统文件 ----
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---- 编辑器 / IDE ----
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# ---- TRAE IDE 本地目录 ----
+.trae/
+
+# ---- 其他临时文件 ----
+*_tmp_*
+*.bak
+*.orig
+*.tmp

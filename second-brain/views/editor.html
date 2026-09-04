@@ -1,0 +1,153 @@
+<div class="view-row" style="background: var(--note-background);">
+  <!-- ===== 左侧文件树 (240px) ===== -->
+  <aside class="resp-leaf w-60 shrink-0 flex flex-col border-r overflow-hidden" style="border-color: var(--note-border); background: var(--note-surface);">
+    <div class="p-2.5 border-b" style="border-color: var(--note-border);">
+      <div class="flex items-center gap-1.5">
+        <button data-dom-id="leaf-collapse" class="w-7 h-7 flex items-center justify-center rounded-md border transition-colors hover:opacity-80 shrink-0" style="border-color: var(--note-border); background: var(--note-surface-2); color: var(--note-ink-2);" title="收起文件树">
+          <i data-lucide="panel-left-close" class="w-3.5 h-3.5"></i>
+        </button>
+        <div class="flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-md border" style="border-color: var(--note-border); background: var(--note-surface-2);">
+          <i data-lucide="search" class="w-3.5 h-3.5 shrink-0" style="color: var(--note-ink-3);"></i>
+          <input id="file-search" type="text" placeholder="搜索文件..." class="flex-1 bg-transparent text-[12px] outline-none" style="color: var(--note-ink-2);">
+        </div>
+        <button data-action="new-note" class="w-7 h-7 flex items-center justify-center rounded-md border transition-colors hover:opacity-80 shrink-0" style="border-color: var(--note-border); background: var(--note-surface-2); color: var(--note-ink-2);" title="新建笔记">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- 文件树（由 JS 按笔记库数据渲染） -->
+    <div id="file-tree" class="flex-1 overflow-y-auto py-1.5 text-[13px]"></div>
+
+    <div class="px-3 py-2 border-t flex items-center justify-between text-[11px]" style="border-color: var(--note-border); color: var(--note-ink-3);">
+      <span id="vault-stat">共 0 篇笔记</span>
+      <div class="flex items-center gap-1"><i data-lucide="hard-drive" class="w-3 h-3"></i><span id="vault-size">0 KB</span></div>
+    </div>
+  </aside>
+
+  <!-- 目录区调整宽度拖拽条 -->
+  <div id="tree-resizer" class="tree-resizer" title="拖拽调整目录区宽度"></div>
+
+  <!-- ===== 中间编辑器 ===== -->
+  <section class="flex-1 flex flex-col overflow-hidden" style="background: var(--note-background);">
+    <!-- Tab 栏 + 工具按钮 一体化（设计稿样式，单行节省垂直空间） -->
+    <div id="editor-tabs-row" class="h-9 shrink-0 flex items-stretch border-b" style="border-color: var(--note-border); background: var(--note-surface);">
+      <div id="editor-tabs" class="flex-1 flex items-center gap-1 px-2 overflow-x-auto no-scrollbar"></div>
+      <div class="flex items-center gap-1 px-2 shrink-0">
+        <span id="ed-mode-label" class="mr-1 text-[11px] shrink-0" style="color: var(--note-ink-3);">分屏</span>
+        <button data-mode="edit" title="仅编辑（源码）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>
+        <button data-mode="preview" title="仅预览（渲染）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="eye" class="w-3.5 h-3.5"></i></button>
+        <button data-mode="split" title="分屏（源码+预览左右并排）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="columns-2" class="w-3.5 h-3.5"></i></button>
+        <button data-action="toggle-line-numbers" title="显示/隐藏行号" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="list-ordered" class="w-3.5 h-3.5"></i></button>
+        <button data-action="toggle-wrap" title="自动换行（关闭则横向滚动）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="wrap-text" class="w-3.5 h-3.5"></i></button>
+        <div class="w-px h-4 mx-1" style="background: var(--note-border);"></div>
+        <button data-action="view-index" title="查看当前笔记索引" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="color: var(--note-ink-3);"><i data-lucide="database" class="w-3.5 h-3.5"></i></button>
+        <button data-action="delete-note" title="删除笔记" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="color: var(--note-ink-3);"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+      </div>
+    </div>
+
+    <!-- 查找/替换条：Ctrl+F 查找、Ctrl+R 替换 -->
+    <div id="ed-findbar" class="ed-findbar shrink-0" hidden>
+      <i data-lucide="search" class="w-3.5 h-3.5 shrink-0" style="color: var(--note-ink-3);"></i>
+      <input id="ed-find-input" type="text" placeholder="查找…" class="find-input" spellcheck="false">
+      <span id="ed-find-count" class="find-count">0 / 0</span>
+      <button data-find-action="prev" title="上一个 (Shift+Enter)" class="find-btn"><i data-lucide="chevron-up" class="w-3.5 h-3.5"></i></button>
+      <button data-find-action="next" title="下一个 (Enter)" class="find-btn"><i data-lucide="chevron-down" class="w-3.5 h-3.5"></i></button>
+      <div class="w-px h-4 mx-1 shrink-0" style="background: var(--note-border);"></div>
+      <span class="find-replace text-[11px] shrink-0" style="color: var(--note-ink-3);">替换为</span>
+      <input id="ed-replace-input" type="text" placeholder="替换…" class="find-input find-replace" spellcheck="false">
+      <button data-find-action="replace" title="替换当前 (Enter)" class="find-btn find-replace">替换</button>
+      <button data-find-action="replace-all" title="全部替换" class="find-btn find-replace">全部</button>
+      <button data-find-action="close" title="关闭 (Esc)" class="find-btn"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
+    </div>
+
+    <!-- 编辑器内容：编辑（源码 | 所见即所得）| 预览，统一右缘滚动 -->
+    <div class="flex-1 min-h-0 flex flex-col">
+      <div id="editor-meta" class="max-w-3xl mx-auto px-8 pt-6 flex items-center gap-3 text-[12px]" style="color: var(--note-ink-3);"></div>
+      <!-- ed-split：唯一滚动容器，只有最右侧一条纵向滚动条；源码与预览同步滚动 -->
+      <div id="ed-split" class="ed-scroll flex-1 min-h-0">
+        <div class="ed-row">
+          <!-- 源码 / 所见即所得（二者按 edSource 状态显隐，绝不共存） -->
+          <div id="ed-pane-src" class="ed-pane">
+            <div id="ed-gutter" class="ed-gutter" hidden></div>
+            <div id="ed-current-line" class="ed-current-line" hidden></div>
+            <textarea id="ed-edit" spellcheck="false" placeholder="# 在此输入 Markdown..." class="block w-full h-auto resize-none max-w-3xl mx-auto px-8 mb-8 pt-4 outline-none overflow-hidden" style="background: var(--note-background); color: var(--note-ink); font-family: var(--note-font-mono); font-size: 14px; line-height: 1.7;"></textarea>
+            <div id="ed-wysiwyg" class="editor-article wysiwyg max-w-3xl mx-auto px-8 py-8" contenteditable="true" spellcheck="false" hidden></div>
+          </div>
+          <div id="ed-split-sep" class="ed-sep w-px shrink-0" style="background: var(--note-border);"></div>
+          <!-- 预览 -->
+          <div id="ed-pane-prev" class="ed-pane">
+            <article id="ed-preview" class="editor-article max-w-3xl mx-auto px-8 py-8 transition-all" style="color: var(--note-ink);"></article>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 当前笔记索引（内联，点工具栏「查看索引」展开/收起） -->
+      <div id="ed-index-panel" class="shrink-0 border-t app-scroll" hidden style="border-color: var(--note-border); background: var(--note-surface);">
+        <div class="h-9 shrink-0 flex items-center gap-2 px-4 border-b text-[12px] font-medium" style="border-color: var(--note-border);">
+          <i data-lucide="database" class="w-3.5 h-3.5 shrink-0" style="color: var(--note-brand-400);"></i>
+          <span style="color: var(--note-ink);">当前笔记索引</span>
+          <span id="ed-index-path" class="text-[11px] truncate max-w-[40%]" style="color: var(--note-ink-3);"></span>
+          <span id="ed-index-count" class="text-[11px] shrink-0 nums" style="color: var(--note-ink-3);"></span>
+          <div class="flex-1"></div>
+          <button data-action="index-toggle" title="收起索引" class="w-6 h-6 flex items-center justify-center rounded hover:opacity-80" style="color: var(--note-ink-3);"><i data-lucide="chevron-down" class="w-3.5 h-3.5"></i></button>
+        </div>
+        <div id="ed-index-body" class="px-4 py-3 app-scroll" style="max-height: 300px; overflow-y: auto;"></div>
+      </div>
+
+    <!-- 状态栏 -->
+    <div class="h-7 shrink-0 flex items-center justify-between px-4 border-t text-[11px]" style="border-color: var(--note-border); background: var(--note-surface); color: var(--note-ink-3);">
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-1"><i data-lucide="circle-check" class="w-3 h-3" style="color: var(--state-success);"></i><span id="ed-saved">已自动保存</span></div>
+        <span>Markdown</span><span>UTF-8</span>
+      </div>
+      <div class="flex items-center gap-4">
+        <span id="cursor-pos">行 1, 列 1</span>
+        <span id="ed-count">0 字</span>
+        <div class="flex items-center gap-1"><i data-lucide="languages" class="w-3 h-3"></i><span>中文</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 右侧侧边面板 (280px)，左侧带拖拽调宽条 -->
+  <div id="side-resizer" class="side-resizer" title="拖拽调整侧边面板宽度"></div>
+  <aside id="right-panel" class="resp-sidebar w-72 shrink-0 flex flex-col border-l overflow-hidden" style="border-color: var(--note-border); background: var(--note-surface);">
+    <div class="h-9 shrink-0 flex items-center justify-between px-3 border-b" style="border-color: var(--note-border);">
+      <span class="text-[12px] font-semibold" style="color: var(--note-ink);">侧边面板</span>
+      <div class="flex items-center gap-1">
+        <button data-action="expand-all" class="w-6 h-6 flex items-center justify-center rounded hover:opacity-80" style="color: var(--note-ink-3);" title="展开全部"><i data-lucide="chevrons-down-up" class="w-3.5 h-3.5"></i></button>
+        <button data-dom-id="close-sidebar" class="w-6 h-6 flex items-center justify-center rounded hover:opacity-80" style="color: var(--note-ink-3);" title="关闭面板"><i data-lucide="panel-right-close" class="w-3.5 h-3.5"></i></button>
+      </div>
+    </div>
+
+    <div class="app-scroll">
+      <!-- 大纲 -->
+      <div class="border-b" style="border-color: var(--note-border);">
+        <div class="collapse-head flex items-center justify-between px-3 py-2 cursor-pointer hover:opacity-80">
+          <div class="flex items-center gap-2"><i data-lucide="list" class="w-4 h-4" style="color: var(--note-brand-400);"></i><span class="text-[12px] font-semibold" style="color: var(--note-ink);">大纲</span></div>
+          <i data-lucide="chevron-down" class="w-4 h-4" style="color: var(--note-ink-3);"></i>
+        </div>
+        <div id="ed-outline" class="collapse-body pb-3"></div>
+      </div>
+
+      <!-- 反向链接 -->
+      <div class="border-b" style="border-color: var(--note-border);">
+        <div class="collapse-head flex items-center justify-between px-3 py-2 cursor-pointer hover:opacity-80">
+          <div class="flex items-center gap-2"><i data-lucide="link-2" class="w-4 h-4" style="color: var(--note-brand-400);"></i><span class="text-[12px] font-semibold" style="color: var(--note-ink);">反向链接</span><span id="ed-backlink-count" class="px-1.5 rounded text-[10px]" style="background: var(--note-surface-2); color: var(--note-ink-3);">0</span></div>
+          <i data-lucide="chevron-down" class="w-4 h-4" style="color: var(--note-ink-3);"></i>
+        </div>
+        <div id="ed-backlinks" class="collapse-body pb-3 space-y-2"></div>
+      </div>
+
+      <!-- 标签 -->
+      <div>
+        <div class="collapse-head flex items-center justify-between px-3 py-2 cursor-pointer hover:opacity-80">
+          <div class="flex items-center gap-2"><i data-lucide="tags" class="w-4 h-4" style="color: var(--note-brand-400);"></i><span class="text-[12px] font-semibold" style="color: var(--note-ink);">标签</span><span id="ed-tags-count" class="px-1.5 rounded text-[10px]" style="background: var(--note-surface-2); color: var(--note-ink-3);">0</span></div>
+          <i data-lucide="chevron-down" class="w-4 h-4" style="color: var(--note-ink-3);"></i>
+        </div>
+        <div id="ed-tags" class="collapse-body pb-3 px-3 flex flex-wrap gap-1.5"></div>
+      </div>
+    </div>
+  </aside>
+</div>

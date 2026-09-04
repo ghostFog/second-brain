@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NoteApp — 命令面板</title>
+    <style id="theme-vars">
+/* ============================================
+ * NoteApp Brand CSS — Obsidian-Inspired Theme
+ * Brand prefix: note
+ * Single brand hue: Violet (#7C3AED)
+ * ============================================ */
+
+/* === Design Tokens (shared) === */
+:root {
+  /* Brand primary hue — Violet (Obsidian-inspired) */
+  --note-brand-50: #F5F3FF;
+  --note-brand-100: #EDE9FE;
+  --note-brand-200: #DDD6FE;
+  --note-brand-300: #C4B5FD;
+  --note-brand-400: #A78BFA;
+  --note-brand-500: #8B5CF6;
+  --note-brand-600: #7C3AED;
+  --note-brand-700: #6D28D9;
+  --note-brand-800: #5B21B6;
+  --note-brand-900: #4C1D95;
+  --note-brand-950: #2E1065;
+
+  /* Neutral scale — cool dark gray */
+  --note-neutral-0: #FFFFFF;
+  --note-neutral-50: #F7F7FA;
+  --note-neutral-100: #ECECF2;
+  --note-neutral-200: #D9D9E3;
+  --note-neutral-300: #B8B8C8;
+  --note-neutral-400: #9494A8;
+  --note-neutral-500: #6B6B7B;
+  --note-neutral-600: #525262;
+  --note-neutral-700: #3F3F50;
+  --note-neutral-800: #2D2D3F;
+  --note-neutral-900: #1E1E2E;
+  --note-neutral-950: #141419;
+
+  /* State colors — semantic only */
+  --state-success: #22C55E;
+  --state-warning: #F59E0B;
+  --state-error: #EF4444;
+  --state-info: #3B82F6;
+
+  /* Radius scale — restrained */
+  --note-radius-sm: 4px;
+  --note-radius-md: 8px;
+  --note-radius-lg: 12px;
+  --note-radius-full: 9999px;
+
+  /* Typography */
+  --note-font-sans: 'Inter', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --note-font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+
+  /* Type scale */
+  --note-text-display: clamp(32px, 4vw, 48px);
+  --note-text-h1: clamp(24px, 2.5vw, 36px);
+  --note-text-h2: clamp(20px, 2vw, 28px);
+  --note-text-h3: 18px;
+  --note-text-body-l: 17px;
+  --note-text-body: 15px;
+  --note-text-caption: 13px;
+  --note-text-mono: 13px;
+}
+
+/* === Dark Mode (default) === */
+:root {
+  --note-background: var(--note-neutral-900);
+  --note-foreground: #DCDCE4;
+  --note-card: var(--note-neutral-800);
+  --note-card-foreground: #DCDCE4;
+  --note-popover: var(--note-neutral-800);
+  --note-popover-foreground: #DCDCE4;
+  --note-primary: var(--note-brand-600);
+  --note-primary-foreground: #FFFFFF;
+  --note-muted: var(--note-neutral-800);
+  --note-muted-foreground: #9B9BA8;
+  --note-border: var(--note-neutral-700);
+  --note-input: var(--note-neutral-700);
+  --note-ring: var(--note-brand-600);
+
+  /* Extended semantic tokens */
+  --note-surface: var(--note-neutral-800);
+  --note-surface-2: #333346;
+  --note-ink: #DCDCE4;
+  --note-ink-2: #9B9BA8;
+  --note-ink-3: #6B6B7B;
+  --note-line: var(--note-neutral-700);
+  --note-brand: var(--note-brand-600);
+  --note-brand-ink: #FFFFFF;
+
+  /* Shadows — dark mode */
+  --note-shadow-1: 0 1px 2px rgba(0,0,0,0.2), 0 1px 1px rgba(0,0,0,0.1);
+  --note-shadow-2: 0 8px 24px -8px rgba(0,0,0,0.5);
+  --note-shadow-3: 0 24px 60px -20px rgba(0,0,0,0.6);
+}
+
+/* === Light Mode === */
+html.light {
+  --note-background: var(--note-neutral-0);
+  --note-foreground: var(--note-neutral-900);
+  --note-card: var(--note-neutral-50);
+  --note-card-foreground: var(--note-neutral-900);
+  --note-popover: var(--note-neutral-0);
+  --note-popover-foreground: var(--note-neutral-900);
+  --note-primary: var(--note-brand-600);
+  --note-primary-foreground: #FFFFFF;
+  --note-muted: var(--note-neutral-100);
+  --note-muted-foreground: var(--note-neutral-500);
+  --note-border: var(--note-neutral-200);
+  --note-input: var(--note-neutral-200);
+  --note-ring: var(--note-brand-600);
+
+  --note-surface: var(--note-neutral-50);
+  --note-surface-2: var(--note-neutral-100);
+  --note-ink: var(--note-neutral-900);
+  --note-ink-2: var(--note-neutral-500);
+  --note-ink-3: var(--note-neutral-400);
+  --note-line: var(--note-neutral-200);
+
+  /* Shadows — light mode */
+  --note-shadow-1: 0 1px 2px rgba(15,23,42,0.05), 0 1px 1px rgba(15,23,42,0.03);
+  --note-shadow-2: 0 8px 24px -8px rgba(15,23,42,0.18);
+  --note-shadow-3: 0 24px 60px -20px rgba(15,23,42,0.30);
+}
+
+/* === Typography utility classes === */
+.font-sans { font-family: var(--note-font-sans); }
+.font-mono { font-family: var(--note-font-mono); }
+
+.text-display { font-size: var(--note-text-display); line-height: 1.1; font-weight: 600; letter-spacing: -0.02em; }
+.text-h1 { font-size: var(--note-text-h1); line-height: 1.2; font-weight: 600; letter-spacing: -0.015em; }
+.text-h2 { font-size: var(--note-text-h2); line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; }
+.text-h3 { font-size: var(--note-text-h3); line-height: 1.3; font-weight: 600; }
+.text-body-l { font-size: var(--note-text-body-l); line-height: 1.6; font-weight: 400; }
+.text-body { font-size: var(--note-text-body); line-height: 1.6; font-weight: 400; }
+.text-caption { font-size: var(--note-text-caption); line-height: 1.5; font-weight: 400; }
+.text-mono { font-family: var(--note-font-mono); font-size: var(--note-text-mono); line-height: 1.5; font-weight: 500; }
+
+.nums { font-variant-numeric: tabular-nums; }
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--note-background);
+    --color-foreground: var(--note-foreground);
+    --color-card: var(--note-card);
+    --color-card-foreground: var(--note-card-foreground);
+    --color-popover: var(--note-popover);
+    --color-popover-foreground: var(--note-popover-foreground);
+    --color-primary: var(--note-primary);
+    --color-primary-foreground: var(--note-primary-foreground);
+    --color-muted: var(--note-muted);
+    --color-muted-foreground: var(--note-muted-foreground);
+    --color-border: var(--note-border);
+    --color-input: var(--note-input);
+    --color-ring: var(--note-ring);
+    --radius-sm: var(--note-radius-sm);
+    --radius-md: var(--note-radius-md);
+    --radius-lg: var(--note-radius-lg);
+  }
+  @layer base {
+    body { background: var(--note-background); color: var(--note-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--note-background); }
+      .text-background { color: var(--note-background); }
+      .border-background { border-color: var(--note-background); }
+      .ring-background { --tw-ring-color: var(--note-background); }
+      .bg-foreground { background-color: var(--note-foreground); }
+      .text-foreground { color: var(--note-foreground); }
+      .border-foreground { border-color: var(--note-foreground); }
+      .ring-foreground { --tw-ring-color: var(--note-foreground); }
+      .bg-card { background-color: var(--note-card); }
+      .text-card { color: var(--note-card); }
+      .border-card { border-color: var(--note-card); }
+      .ring-card { --tw-ring-color: var(--note-card); }
+      .bg-card-foreground { background-color: var(--note-card-foreground); }
+      .text-card-foreground { color: var(--note-card-foreground); }
+      .border-card-foreground { border-color: var(--note-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--note-card-foreground); }
+      .bg-popover { background-color: var(--note-popover); }
+      .text-popover { color: var(--note-popover); }
+      .border-popover { border-color: var(--note-popover); }
+      .ring-popover { --tw-ring-color: var(--note-popover); }
+      .bg-popover-foreground { background-color: var(--note-popover-foreground); }
+      .text-popover-foreground { color: var(--note-popover-foreground); }
+      .border-popover-foreground { border-color: var(--note-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--note-popover-foreground); }
+      .bg-primary { background-color: var(--note-primary); }
+      .text-primary { color: var(--note-primary); }
+      .border-primary { border-color: var(--note-primary); }
+      .ring-primary { --tw-ring-color: var(--note-primary); }
+      .bg-primary-foreground { background-color: var(--note-primary-foreground); }
+      .text-primary-foreground { color: var(--note-primary-foreground); }
+      .border-primary-foreground { border-color: var(--note-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--note-primary-foreground); }
+      .bg-muted { background-color: var(--note-muted); }
+      .text-muted { color: var(--note-muted); }
+      .border-muted { border-color: var(--note-muted); }
+      .ring-muted { --tw-ring-color: var(--note-muted); }
+      .bg-muted-foreground { background-color: var(--note-muted-foreground); }
+      .text-muted-foreground { color: var(--note-muted-foreground); }
+      .border-muted-foreground { border-color: var(--note-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--note-muted-foreground); }
+      .bg-border { background-color: var(--note-border); }
+      .text-border { color: var(--note-border); }
+      .border-border { border-color: var(--note-border); }
+      .ring-border { --tw-ring-color: var(--note-border); }
+      .bg-input { background-color: var(--note-input); }
+      .text-input { color: var(--note-input); }
+      .border-input { border-color: var(--note-input); }
+      .ring-input { --tw-ring-color: var(--note-input); }
+      .bg-ring { background-color: var(--note-ring); }
+      .text-ring { color: var(--note-ring); }
+      .border-ring { border-color: var(--note-ring); }
+      .ring-ring { --tw-ring-color: var(--note-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="h-screen overflow-hidden font-sans antialiased" style="background: var(--note-background); color: var(--note-foreground);">
+    <main class="h-screen flex flex-col">
+      <!-- ===== Title Bar (36px) ===== -->
+      <header class="h-9 flex items-center justify-between px-3 border-b" style="border-color: var(--note-border); background: var(--note-surface);">
+        <!-- Left: traffic lights + vault name -->
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full" style="background:#FF5F57;"></span>
+            <span class="w-3 h-3 rounded-full" style="background:#FEBC2E;"></span>
+            <span class="w-3 h-3 rounded-full" style="background:#28C840;"></span>
+          </div>
+          <div class="flex items-center gap-1.5 text-[13px]" style="color: var(--note-ink-2);">
+            <i data-lucide="book" class="w-3.5 h-3.5"></i>
+            <span style="color: var(--note-ink);">我的笔记库</span>
+          </div>
+        </div>
+        <!-- Center: breadcrumb -->
+        <div class="flex items-center gap-1 text-[12px]" style="color: var(--note-ink-3);">
+          <span>日记</span>
+          <i data-lucide="chevron-right" class="w-3 h-3"></i>
+          <span>2024年</span>
+          <i data-lucide="chevron-right" class="w-3 h-3"></i>
+          <span style="color: var(--note-ink-2);">09月</span>
+        </div>
+        <!-- Right: command palette trigger + window actions -->
+        <div class="flex items-center gap-2">
+          <button data-dom-id="open-command-palette" class="flex items-center gap-1.5 px-2 py-1 rounded text-[12px] border transition-colors hover:opacity-80" style="border-color: var(--note-border); color: var(--note-ink-3); background: var(--note-surface-2);">
+            <i data-lucide="search" class="w-3 h-3"></i>
+            <span>搜索</span>
+            <kbd class="text-[10px] px-1 rounded" style="background: var(--note-surface); color: var(--note-ink-3);">⌘P</kbd>
+          </button>
+        </div>
+      </header>
+
+      <!-- ===== Main Row: Ribbon + Content ===== -->
+      <div class="flex-1 flex overflow-hidden">
+        <!-- ===== Ribbon (48px) ===== -->
+        <nav class="w-12 flex flex-col items-center py-3 gap-1 border-r" style="border-color: var(--note-border); background: var(--note-surface);">
+          <!-- File / Editor -->
+          <button data-nav-key="file" data-dom-id="nav-editor" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="编辑器">
+            <i data-lucide="file-text" class="w-5 h-5"></i>
+          </button>
+          <!-- Search -->
+          <button data-nav-key="search" data-dom-id="open-command-palette-ribbon" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="搜索">
+            <i data-lucide="search" class="w-5 h-5"></i>
+          </button>
+          <!-- Graph -->
+          <button data-nav-key="graph" data-dom-id="nav-graph" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="图谱视图">
+            <i data-lucide="git-fork" class="w-5 h-5"></i>
+          </button>
+          <!-- Plugins -->
+          <button data-nav-key="plugins" data-dom-id="nav-plugins" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="插件市场">
+            <i data-lucide="puzzle" class="w-5 h-5"></i>
+          </button>
+          <!-- Settings -->
+          <button data-nav-key="settings" data-dom-id="nav-settings" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="设置">
+            <i data-lucide="settings" class="w-5 h-5"></i>
+          </button>
+          <!-- Spacer -->
+          <div class="flex-1"></div>
+          <!-- Bottom: sync status -->
+          <div class="w-2 h-2 rounded-full" style="background: var(--state-success);" title="已同步"></div>
+        </nav>
+
+        <!-- ===== Content Area ===== -->
+        <!-- 覆盖层状态：不设置任何 ribbon 按钮为激活态 -->
+        <div class="flex-1 flex overflow-hidden relative" style="background: var(--note-background);">
+
+          <!-- ===== 底层：暗淡的编辑器背景（简化三列布局） ===== -->
+          <div class="absolute inset-0 flex" style="filter: brightness(0.4); pointer-events: none;">
+            <!-- 左侧：文件树侧栏 -->
+            <aside class="w-52 flex flex-col border-r" style="border-color: var(--note-border); background: var(--note-surface);">
+              <div class="px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider" style="color: var(--note-ink-3);">文件资源管理器</div>
+              <div class="flex-1 overflow-y-auto px-1.5 pb-2 text-[13px]" style="color: var(--note-ink-2);">
+                <div class="flex items-center gap-1.5 px-1.5 py-1 rounded" style="color: var(--note-ink);">
+                  <i data-lucide="chevron-down" class="w-3.5 h-3.5"></i>
+                  <i data-lucide="folder" class="w-3.5 h-3.5"></i>
+                  <span>日记</span>
+                </div>
+                <div class="pl-4">
+                  <div class="flex items-center gap-1.5 px-1.5 py-1 rounded">
+                    <i data-lucide="file-text" class="w-3.5 h-3.5"></i>
+                    <span>09月01日.md</span>
+                  </div>
+                  <div class="flex items-center gap-1.5 px-1.5 py-1 rounded" style="background: var(--note-surface-2); color: var(--note-ink);">
+                    <i data-lucide="file-text" class="w-3.5 h-3.5"></i>
+                    <span>09月02日.md</span>
+                  </div>
+                </div>
+                <div class="flex items-center gap-1.5 px-1.5 py-1 rounded mt-1">
+                  <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+                  <i data-lucide="folder" class="w-3.5 h-3.5"></i>
+                  <span>读书笔记</span>
+                </div>
+                <div class="flex items-center gap-1.5 px-1.5 py-1 rounded mt-1">
+                  <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+                  <i data-lucide="folder" class="w-3.5 h-3.5"></i>
+                  <span>项目</span>
+                </div>
+              </div>
+            </aside>
+
+            <!-- 中间：笔记列表 -->
+            <section class="w-64 flex flex-col border-r" style="border-color: var(--note-border); background: var(--note-background);">
+              <div class="px-3 py-2.5 flex items-center justify-between border-b" style="border-color: var(--note-border);">
+                <span class="text-[13px] font-semibold" style="color: var(--note-ink);">日记</span>
+                <span class="text-[11px]" style="color: var(--note-ink-3);">2 篇</span>
+              </div>
+              <div class="flex-1 overflow-y-auto px-2 py-1.5 space-y-1">
+                <div class="px-2.5 py-2 rounded-md" style="background: var(--note-surface-2);">
+                  <div class="text-[13px] font-medium" style="color: var(--note-ink);">09月02日</div>
+                  <div class="text-[11px] mt-0.5 line-clamp-2" style="color: var(--note-ink-3);">今天完成了命令面板的设计稿，整理了笔记...</div>
+                  <div class="text-[10px] mt-1" style="color: var(--note-ink-3);">14:32</div>
+                </div>
+                <div class="px-2.5 py-2 rounded-md">
+                  <div class="text-[13px] font-medium" style="color: var(--note-ink-2);">09月01日</div>
+                  <div class="text-[11px] mt-0.5 line-clamp-2" style="color: var(--note-ink-3);">新的一个月开始了，设定了本月的目标...</div>
+                  <div class="text-[10px] mt-1" style="color: var(--note-ink-3);">09:15</div>
+                </div>
+              </div>
+            </section>
+
+            <!-- 右侧：编辑器内容 -->
+            <section class="flex-1 flex flex-col overflow-hidden">
+              <div class="px-8 py-3 flex items-center justify-between border-b" style="border-color: var(--note-border);">
+                <span class="text-[13px]" style="color: var(--note-ink-2);">09月02日.md</span>
+                <div class="flex items-center gap-3 text-[11px]" style="color: var(--note-ink-3);">
+                  <span>1,248 字</span>
+                  <span>Markdown</span>
+                </div>
+              </div>
+              <div class="flex-1 overflow-y-auto px-8 py-6">
+                <h1 class="text-h1 mb-4" style="color: var(--note-ink);">09月02日</h1>
+                <p class="text-body mb-3" style="color: var(--note-ink-2);">今天完成了命令面板的设计稿，整理了笔记结构。</p>
+                <p class="text-body mb-3" style="color: var(--note-ink-2);">主要任务包括：搜索输入框、命令分组列表、快捷键展示。</p>
+                <h2 class="text-h2 mt-6 mb-3" style="color: var(--note-ink);">待办事项</h2>
+                <p class="text-body mb-1" style="color: var(--note-ink-2);">- 导出为 PDF 格式</p>
+                <p class="text-body mb-1" style="color: var(--note-ink-2);">- 同步云端设置</p>
+              </div>
+            </section>
+          </div>
+
+          <!-- ===== 遮罩层：半透明黑色背景，点击关闭 ===== -->
+          <div data-dom-id="palette-backdrop" class="absolute inset-0" style="background: rgba(0,0,0,0.5);"></div>
+
+          <!-- ===== 命令面板浮窗 ===== -->
+          <div class="absolute left-1/2 -translate-x-1/2 w-[calc(100%-32px)] max-w-[640px] flex flex-col overflow-hidden rounded-xl border"
+               style="top: 15vh; border-color: var(--note-border); background: var(--note-popover); box-shadow: var(--note-shadow-3); border-radius: var(--note-radius-lg); max-height: 70vh;">
+
+            <!-- 顶部搜索输入框 -->
+            <div class="flex items-center gap-3 px-4" style="height: 52px;">
+              <i data-lucide="search" class="w-4 h-4 shrink-0" style="color: var(--note-ink-3);"></i>
+              <input type="text"
+                     placeholder="输入命令或搜索笔记..."
+                     autofocus
+                     class="flex-1 bg-transparent outline-none text-[15px] placeholder:opacity-60"
+                     style="color: var(--note-ink);" />
+              <kbd data-dom-id="palette-close" class="text-[11px] px-1.5 py-0.5 rounded font-mono shrink-0"
+                   style="background: var(--note-surface-2); color: var(--note-ink-3); border: 1px solid var(--note-border);">ESC</kbd>
+            </div>
+
+            <!-- 分割线 -->
+            <div style="height: 1px; background: var(--note-border);"></div>
+
+            <!-- 命令列表（可滚动） -->
+            <div class="flex-1 overflow-y-auto py-2">
+              <!-- 分组：最近使用 -->
+              <div class="px-2 mb-1">
+                <div class="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider" style="color: var(--note-ink-3);">最近使用</div>
+                <!-- 新建笔记（选中/高亮态） -->
+                <div class="flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer" style="background: var(--note-surface-2);">
+                  <i data-lucide="file-plus" class="w-4 h-4 shrink-0" style="color: var(--note-brand);"></i>
+                  <span class="flex-1 text-[14px]" style="color: var(--note-ink);">新建笔记</span>
+                  <kbd class="text-[11px] px-1.5 py-0.5 rounded font-mono" style="background: var(--note-surface); color: var(--note-ink-3);">⌘N</kbd>
+                </div>
+                <!-- 打开笔记 -->
+                <div class="flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-colors hover:opacity-90">
+                  <i data-lucide="folder-open" class="w-4 h-4 shrink-0" style="color: var(--note-ink-2);"></i>
+                  <span class="flex-1 text-[14px]" style="color: var(--note-ink);">打开笔记</span>
+                  <kbd class="text-[11px] px-1.5 py-0.5 rounded font-mono" style="background: var(--note-surface); color: var(--note-ink-3);">⌘O</kbd>
+                </div>
+              </div>
+
+              <!-- 分组：文件操作 -->
+              <div class="px-2 mb-1 mt-2">
+                <div class="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider" style="color: var(--note-ink-3);">文件操作</div>
+                <!-- 搜索笔记 -->
+                <div class="flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-colors hover:opacity-90">
+                  <i data-lucide="search" class="w-4 h-4 shrink-0" style="color: var(--note-ink-2);"></i>
+                  <span class="flex-1 text-[14px]" style="color: var(--note-ink);">搜索笔记</span>
+                  <kbd class="text-[11px] px-1.5 py-0.5 rounded font-mono" style="background: var(--note-surface); color: var(--note-ink-3);">⌘F</kbd>
+                </div>
+                <!-- 导出为PDF -->
+                <div class="flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-colors hover:opacity-90">
+                  <i data-lucide="file-down" class="w-4 h-4 shrink-0" style="color: var(--note-ink-2);"></i>
+                  <span class="flex-1 text-[14px]" style="color: var(--note-ink);">导出为PDF</span>
+                </div>
+              </div>
+
+              <!-- 分组：导航 -->
+              <div class="px-2 mb-1 mt-2">
+                <div class="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider" style="color: var(--note-ink-3);">导航</div>
+                <!-- 打开图谱视图（可导航到图谱页面） -->
+                <div data-dom-id="command-open-graph" class="flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-colors hover:opacity-90">
+                  <i data-lucide="git-fork" class="w-4 h-4 shrink-0" style="color: var(--note-ink-2);"></i>
+                  <span class="flex-1 text-[14px]" style="color: var(--note-ink);">打开图谱视图</span>
+                  <kbd class="text-[11px] px-1.5 py-0.5 rounded font-mono" style="background: var(--note-surface); color: var(--note-ink-3);">⌘G</kbd>
+                </div>
+              </div>
+
+              <!-- 分组：插件 -->
+              <div class="px-2 mb-1 mt-2">
+                <div class="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider" style="color: var(--note-ink-3);">插件</div>
+                <!-- 浏览插件市场 -->
+                <div class="flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-colors hover:opacity-90">
+                  <i data-lucide="puzzle" class="w-4 h-4 shrink-0" style="color: var(--note-ink-2);"></i>
+                  <span class="flex-1 text-[14px]" style="color: var(--note-ink);">浏览插件市场</span>
+                </div>
+                <!-- 切换主题 -->
+                <div class="flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-colors hover:opacity-90">
+                  <i data-lucide="moon" class="w-4 h-4 shrink-0" style="color: var(--note-ink-2);"></i>
+                  <span class="flex-1 text-[14px]" style="color: var(--note-ink);">切换主题</span>
+                </div>
+                <!-- 同步设置 -->
+                <div class="flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-colors hover:opacity-90">
+                  <i data-lucide="cloud" class="w-4 h-4 shrink-0" style="color: var(--note-ink-2);"></i>
+                  <span class="flex-1 text-[14px]" style="color: var(--note-ink);">同步设置</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 底部状态栏 -->
+            <div class="flex items-center justify-between px-4 py-2.5 border-t text-[12px]"
+                 style="border-color: var(--note-border); background: var(--note-surface);">
+              <div class="flex items-center gap-3" style="color: var(--note-ink-3);">
+                <span class="flex items-center gap-1">
+                  <kbd class="px-1 py-0.5 rounded font-mono text-[10px]" style="background: var(--note-surface-2); color: var(--note-ink-2);">↑↓</kbd>
+                  导航
+                </span>
+                <span class="flex items-center gap-1">
+                  <kbd class="px-1 py-0.5 rounded font-mono text-[10px]" style="background: var(--note-surface-2); color: var(--note-ink-2);">↵</kbd>
+                  选择
+                </span>
+                <span class="flex items-center gap-1">
+                  <kbd class="px-1 py-0.5 rounded font-mono text-[10px]" style="background: var(--note-surface-2); color: var(--note-ink-2);">esc</kbd>
+                  关闭
+                </span>
+              </div>
+              <span class="nums" style="color: var(--note-ink-3);">8 个结果</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

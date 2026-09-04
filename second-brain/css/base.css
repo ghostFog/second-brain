@@ -1,0 +1,161 @@
+/* ============================================
+ * 第二脑 设计令牌与基础样式
+ * 品牌前缀: note —— 单一品牌色: Violet (#7C3AED)
+ * 作者: 火 冰
+ * ============================================ */
+
+/* === 设计令牌（共享） === */
+:root {
+  /* 品牌主色相 —— Violet（Obsidian 风格） */
+  --note-brand-50: #F5F3FF;
+  --note-brand-100: #EDE9FE;
+  --note-brand-200: #DDD6FE;
+  --note-brand-300: #C4B5FD;
+  --note-brand-400: #A78BFA;
+  --note-brand-500: #8B5CF6;
+  --note-brand-600: #7C3AED;
+  --note-brand-700: #6D28D9;
+  --note-brand-800: #5B21B6;
+  --note-brand-900: #4C1D95;
+  --note-brand-950: #2E1065;
+
+  /* 中性色阶 —— 冷灰 */
+  --note-neutral-0: #FFFFFF;
+  --note-neutral-50: #F7F7FA;
+  --note-neutral-100: #ECECF2;
+  --note-neutral-200: #D9D9E3;
+  --note-neutral-300: #B8B8C8;
+  --note-neutral-400: #9494A8;
+  --note-neutral-500: #6B6B7B;
+  --note-neutral-600: #525262;
+  --note-neutral-700: #3F3F50;
+  --note-neutral-800: #2D2D3F;
+  --note-neutral-900: #1E1E2E;
+  --note-neutral-950: #141419;
+
+  /* 语义状态色 */
+  --state-success: #22C55E;
+  --state-warning: #F59E0B;
+  --state-error: #EF4444;
+  --state-info: #3B82F6;
+
+  /* 圆角 */
+  --note-radius-sm: 4px;
+  --note-radius-md: 8px;
+  --note-radius-lg: 12px;
+  --note-radius-full: 9999px;
+
+  /* 字体 */
+  --note-font-sans: 'Inter', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --note-font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+
+  /* 字号阶梯 */
+  --note-text-display: clamp(32px, 4vw, 48px);
+  --note-text-h1: clamp(24px, 2.5vw, 36px);
+  --note-text-h2: clamp(20px, 2vw, 28px);
+  --note-text-h3: 18px;
+  --note-text-body-l: 17px;
+  --note-text-body: 15px;
+  --note-text-caption: 13px;
+  --note-text-mono: 13px;
+}
+
+/* === 深色模式（默认） === */
+:root {
+  --note-background: var(--note-neutral-900);
+  --note-foreground: #DCDCE4;
+  --note-card: var(--note-neutral-800);
+  --note-card-foreground: #DCDCE4;
+  --note-popover: var(--note-neutral-800);
+  --note-popover-foreground: #DCDCE4;
+  --note-primary: var(--note-brand-600);
+  --note-primary-foreground: #FFFFFF;
+  --note-muted: var(--note-neutral-800);
+  --note-muted-foreground: #9B9BA8;
+  --note-border: var(--note-neutral-700);
+  --note-input: var(--note-neutral-700);
+  --note-ring: var(--note-brand-600);
+
+  /* 扩展语义令牌 */
+  --note-surface: var(--note-neutral-800);
+  --note-surface-2: #333346;
+  --note-gutter-bg: #262637;                 /* 行号列背景：仅比 --note-background 微亮，肉眼可辨即可 */
+  --note-line-active: rgba(255,255,255,0.045); /* 源码模式当前行高亮（半透明白，铺在编辑区上） */
+  --note-ink: #DCDCE4;
+  --note-ink-2: #9B9BA8;
+  --note-ink-3: #6B6B7B;
+  --note-line: var(--note-neutral-700);
+  --note-brand: var(--note-brand-600);
+  --note-brand-ink: #FFFFFF;
+
+  /* 阴影（深色） */
+  --note-shadow-1: 0 1px 2px rgba(0,0,0,0.2), 0 1px 1px rgba(0,0,0,0.1);
+  --note-shadow-2: 0 8px 24px -8px rgba(0,0,0,0.5);
+  --note-shadow-3: 0 24px 60px -20px rgba(0,0,0,0.6);
+}
+
+/* === 浅色模式 === */
+html.light {
+  --note-background: var(--note-neutral-0);
+  --note-foreground: var(--note-neutral-900);
+  --note-card: var(--note-neutral-50);
+  --note-card-foreground: var(--note-neutral-900);
+  --note-popover: var(--note-neutral-0);
+  --note-popover-foreground: var(--note-neutral-900);
+  --note-primary: var(--note-brand-600);
+  --note-primary-foreground: #FFFFFF;
+  --note-muted: var(--note-neutral-100);
+  --note-muted-foreground: var(--note-neutral-500);
+  --note-border: var(--note-neutral-200);
+  --note-input: var(--note-neutral-200);
+  --note-ring: var(--note-brand-600);
+
+  --note-surface: var(--note-neutral-50);
+  --note-surface-2: var(--note-neutral-100);
+  --note-gutter-bg: var(--note-neutral-50);   /* 行号列背景：仅比 --note-background 微灰，肉眼可辨即可 */
+  --note-line-active: rgba(0,0,0,0.045);      /* 源码模式当前行高亮（半透明黑，铺在编辑区上） */
+  --note-ink: var(--note-neutral-900);
+  --note-ink-2: var(--note-neutral-500);
+  --note-ink-3: var(--note-neutral-400);
+  --note-line: var(--note-neutral-200);
+
+  /* 阴影（浅色） */
+  --note-shadow-1: 0 1px 2px rgba(15,23,42,0.05), 0 1px 1px rgba(15,23,42,0.03);
+  --note-shadow-2: 0 8px 24px -8px rgba(15,23,42,0.18);
+  --note-shadow-3: 0 24px 60px -20px rgba(15,23,42,0.30);
+}
+
+/* === 基础排版系列 === */
+.font-sans { font-family: var(--note-font-sans); }
+.font-mono { font-family: var(--note-font-mono); }
+.text-display { font-size: var(--note-text-display); line-height: 1.1; font-weight: 600; letter-spacing: -0.02em; }
+.text-h1 { font-size: var(--note-text-h1); line-height: 1.2; font-weight: 600; letter-spacing: -0.015em; }
+.text-h2 { font-size: var(--note-text-h2); line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; }
+.text-h3 { font-size: var(--note-text-h3); line-height: 1.3; font-weight: 600; }
+.text-body-l { font-size: var(--note-text-body-l); line-height: 1.6; font-weight: 400; }
+.text-body { font-size: var(--note-text-body); line-height: 1.6; font-weight: 400; }
+.text-caption { font-size: var(--note-text-caption); line-height: 1.5; font-weight: 400; }
+.text-mono { font-family: var(--note-font-mono); font-size: var(--note-text-mono); line-height: 1.5; font-weight: 500; }
+.nums { font-variant-numeric: tabular-nums; }
+
+/* === 全局基础 === */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { font-family: var(--note-font-sans); -webkit-font-smoothing: antialiased; background: var(--note-background); color: var(--note-foreground); }
+button { font-family: inherit; cursor: pointer; background: none; border: none; color: inherit; }
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+[data-icon] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  background-color: currentColor;
+}

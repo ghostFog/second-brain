@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NoteApp — 插件市场</title>
+    <style id="theme-vars">
+/* ============================================
+ * NoteApp Brand CSS — Obsidian-Inspired Theme
+ * Brand prefix: note
+ * Single brand hue: Violet (#7C3AED)
+ * ============================================ */
+
+/* === Design Tokens (shared) === */
+:root {
+  /* Brand primary hue — Violet (Obsidian-inspired) */
+  --note-brand-50: #F5F3FF;
+  --note-brand-100: #EDE9FE;
+  --note-brand-200: #DDD6FE;
+  --note-brand-300: #C4B5FD;
+  --note-brand-400: #A78BFA;
+  --note-brand-500: #8B5CF6;
+  --note-brand-600: #7C3AED;
+  --note-brand-700: #6D28D9;
+  --note-brand-800: #5B21B6;
+  --note-brand-900: #4C1D95;
+  --note-brand-950: #2E1065;
+
+  /* Neutral scale — cool dark gray */
+  --note-neutral-0: #FFFFFF;
+  --note-neutral-50: #F7F7FA;
+  --note-neutral-100: #ECECF2;
+  --note-neutral-200: #D9D9E3;
+  --note-neutral-300: #B8B8C8;
+  --note-neutral-400: #9494A8;
+  --note-neutral-500: #6B6B7B;
+  --note-neutral-600: #525262;
+  --note-neutral-700: #3F3F50;
+  --note-neutral-800: #2D2D3F;
+  --note-neutral-900: #1E1E2E;
+  --note-neutral-950: #141419;
+
+  /* State colors — semantic only */
+  --state-success: #22C55E;
+  --state-warning: #F59E0B;
+  --state-error: #EF4444;
+  --state-info: #3B82F6;
+
+  /* Radius scale — restrained */
+  --note-radius-sm: 4px;
+  --note-radius-md: 8px;
+  --note-radius-lg: 12px;
+  --note-radius-full: 9999px;
+
+  /* Typography */
+  --note-font-sans: 'Inter', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --note-font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+
+  /* Type scale */
+  --note-text-display: clamp(32px, 4vw, 48px);
+  --note-text-h1: clamp(24px, 2.5vw, 36px);
+  --note-text-h2: clamp(20px, 2vw, 28px);
+  --note-text-h3: 18px;
+  --note-text-body-l: 17px;
+  --note-text-body: 15px;
+  --note-text-caption: 13px;
+  --note-text-mono: 13px;
+}
+
+/* === Dark Mode (default) === */
+:root {
+  --note-background: var(--note-neutral-900);
+  --note-foreground: #DCDCE4;
+  --note-card: var(--note-neutral-800);
+  --note-card-foreground: #DCDCE4;
+  --note-popover: var(--note-neutral-800);
+  --note-popover-foreground: #DCDCE4;
+  --note-primary: var(--note-brand-600);
+  --note-primary-foreground: #FFFFFF;
+  --note-muted: var(--note-neutral-800);
+  --note-muted-foreground: #9B9BA8;
+  --note-border: var(--note-neutral-700);
+  --note-input: var(--note-neutral-700);
+  --note-ring: var(--note-brand-600);
+
+  /* Extended semantic tokens */
+  --note-surface: var(--note-neutral-800);
+  --note-surface-2: #333346;
+  --note-ink: #DCDCE4;
+  --note-ink-2: #9B9BA8;
+  --note-ink-3: #6B6B7B;
+  --note-line: var(--note-neutral-700);
+  --note-brand: var(--note-brand-600);
+  --note-brand-ink: #FFFFFF;
+
+  /* Shadows — dark mode */
+  --note-shadow-1: 0 1px 2px rgba(0,0,0,0.2), 0 1px 1px rgba(0,0,0,0.1);
+  --note-shadow-2: 0 8px 24px -8px rgba(0,0,0,0.5);
+  --note-shadow-3: 0 24px 60px -20px rgba(0,0,0,0.6);
+}
+
+/* === Light Mode === */
+html.light {
+  --note-background: var(--note-neutral-0);
+  --note-foreground: var(--note-neutral-900);
+  --note-card: var(--note-neutral-50);
+  --note-card-foreground: var(--note-neutral-900);
+  --note-popover: var(--note-neutral-0);
+  --note-popover-foreground: var(--note-neutral-900);
+  --note-primary: var(--note-brand-600);
+  --note-primary-foreground: #FFFFFF;
+  --note-muted: var(--note-neutral-100);
+  --note-muted-foreground: var(--note-neutral-500);
+  --note-border: var(--note-neutral-200);
+  --note-input: var(--note-neutral-200);
+  --note-ring: var(--note-brand-600);
+
+  --note-surface: var(--note-neutral-50);
+  --note-surface-2: var(--note-neutral-100);
+  --note-ink: var(--note-neutral-900);
+  --note-ink-2: var(--note-neutral-500);
+  --note-ink-3: var(--note-neutral-400);
+  --note-line: var(--note-neutral-200);
+
+  /* Shadows — light mode */
+  --note-shadow-1: 0 1px 2px rgba(15,23,42,0.05), 0 1px 1px rgba(15,23,42,0.03);
+  --note-shadow-2: 0 8px 24px -8px rgba(15,23,42,0.18);
+  --note-shadow-3: 0 24px 60px -20px rgba(15,23,42,0.30);
+}
+
+/* === Typography utility classes === */
+.font-sans { font-family: var(--note-font-sans); }
+.font-mono { font-family: var(--note-font-mono); }
+
+.text-display { font-size: var(--note-text-display); line-height: 1.1; font-weight: 600; letter-spacing: -0.02em; }
+.text-h1 { font-size: var(--note-text-h1); line-height: 1.2; font-weight: 600; letter-spacing: -0.015em; }
+.text-h2 { font-size: var(--note-text-h2); line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; }
+.text-h3 { font-size: var(--note-text-h3); line-height: 1.3; font-weight: 600; }
+.text-body-l { font-size: var(--note-text-body-l); line-height: 1.6; font-weight: 400; }
+.text-body { font-size: var(--note-text-body); line-height: 1.6; font-weight: 400; }
+.text-caption { font-size: var(--note-text-caption); line-height: 1.5; font-weight: 400; }
+.text-mono { font-family: var(--note-font-mono); font-size: var(--note-text-mono); line-height: 1.5; font-weight: 500; }
+
+.nums { font-variant-numeric: tabular-nums; }
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--note-background);
+    --color-foreground: var(--note-foreground);
+    --color-card: var(--note-card);
+    --color-card-foreground: var(--note-card-foreground);
+    --color-popover: var(--note-popover);
+    --color-popover-foreground: var(--note-popover-foreground);
+    --color-primary: var(--note-primary);
+    --color-primary-foreground: var(--note-primary-foreground);
+    --color-muted: var(--note-muted);
+    --color-muted-foreground: var(--note-muted-foreground);
+    --color-border: var(--note-border);
+    --color-input: var(--note-input);
+    --color-ring: var(--note-ring);
+    --radius-sm: var(--note-radius-sm);
+    --radius-md: var(--note-radius-md);
+    --radius-lg: var(--note-radius-lg);
+  }
+  @layer base {
+    body { background: var(--note-background); color: var(--note-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--note-background); }
+      .text-background { color: var(--note-background); }
+      .border-background { border-color: var(--note-background); }
+      .ring-background { --tw-ring-color: var(--note-background); }
+      .bg-foreground { background-color: var(--note-foreground); }
+      .text-foreground { color: var(--note-foreground); }
+      .border-foreground { border-color: var(--note-foreground); }
+      .ring-foreground { --tw-ring-color: var(--note-foreground); }
+      .bg-card { background-color: var(--note-card); }
+      .text-card { color: var(--note-card); }
+      .border-card { border-color: var(--note-card); }
+      .ring-card { --tw-ring-color: var(--note-card); }
+      .bg-card-foreground { background-color: var(--note-card-foreground); }
+      .text-card-foreground { color: var(--note-card-foreground); }
+      .border-card-foreground { border-color: var(--note-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--note-card-foreground); }
+      .bg-popover { background-color: var(--note-popover); }
+      .text-popover { color: var(--note-popover); }
+      .border-popover { border-color: var(--note-popover); }
+      .ring-popover { --tw-ring-color: var(--note-popover); }
+      .bg-popover-foreground { background-color: var(--note-popover-foreground); }
+      .text-popover-foreground { color: var(--note-popover-foreground); }
+      .border-popover-foreground { border-color: var(--note-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--note-popover-foreground); }
+      .bg-primary { background-color: var(--note-primary); }
+      .text-primary { color: var(--note-primary); }
+      .border-primary { border-color: var(--note-primary); }
+      .ring-primary { --tw-ring-color: var(--note-primary); }
+      .bg-primary-foreground { background-color: var(--note-primary-foreground); }
+      .text-primary-foreground { color: var(--note-primary-foreground); }
+      .border-primary-foreground { border-color: var(--note-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--note-primary-foreground); }
+      .bg-muted { background-color: var(--note-muted); }
+      .text-muted { color: var(--note-muted); }
+      .border-muted { border-color: var(--note-muted); }
+      .ring-muted { --tw-ring-color: var(--note-muted); }
+      .bg-muted-foreground { background-color: var(--note-muted-foreground); }
+      .text-muted-foreground { color: var(--note-muted-foreground); }
+      .border-muted-foreground { border-color: var(--note-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--note-muted-foreground); }
+      .bg-border { background-color: var(--note-border); }
+      .text-border { color: var(--note-border); }
+      .border-border { border-color: var(--note-border); }
+      .ring-border { --tw-ring-color: var(--note-border); }
+      .bg-input { background-color: var(--note-input); }
+      .text-input { color: var(--note-input); }
+      .border-input { border-color: var(--note-input); }
+      .ring-input { --tw-ring-color: var(--note-input); }
+      .bg-ring { background-color: var(--note-ring); }
+      .text-ring { color: var(--note-ring); }
+      .border-ring { border-color: var(--note-ring); }
+      .ring-ring { --tw-ring-color: var(--note-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+      /* Plugin market specific styles */
+      .plugin-card {
+        transition: border-color 0.15s ease, background-color 0.15s ease;
+      }
+      .plugin-card:hover {
+        border-color: var(--note-brand-500);
+        background-color: var(--note-surface-2);
+      }
+      .chip-btn {
+        transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+      }
+      .chip-btn:hover {
+        opacity: 0.85;
+      }
+      .install-btn {
+        transition: opacity 0.15s ease;
+      }
+      .install-btn:hover {
+        opacity: 0.9;
+      }
+      /* Custom scrollbar */
+      .pm-scroll::-webkit-scrollbar { width: 8px; }
+      .pm-scroll::-webkit-scrollbar-track { background: transparent; }
+      .pm-scroll::-webkit-scrollbar-thumb { background: var(--note-border); border-radius: 4px; }
+      .pm-scroll::-webkit-scrollbar-thumb:hover { background: var(--note-ink-3); }
+    </style>
+</head>
+<body class="h-screen overflow-hidden font-sans antialiased" style="background: var(--note-background); color: var(--note-foreground);">
+    <main class="h-screen flex flex-col">
+      <!-- ===== Title Bar (36px) ===== -->
+      <header class="h-9 flex items-center justify-between px-3 border-b" style="border-color: var(--note-border); background: var(--note-surface);">
+        <!-- Left: traffic lights + vault name -->
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full" style="background:#FF5F57;"></span>
+            <span class="w-3 h-3 rounded-full" style="background:#FEBC2E;"></span>
+            <span class="w-3 h-3 rounded-full" style="background:#28C840;"></span>
+          </div>
+          <div class="flex items-center gap-1.5 text-[13px]" style="color: var(--note-ink-2);">
+            <i data-lucide="book" class="w-3.5 h-3.5"></i>
+            <span style="color: var(--note-ink);">我的笔记库</span>
+          </div>
+        </div>
+        <!-- Center: breadcrumb -->
+        <div class="flex items-center gap-1 text-[12px]" style="color: var(--note-ink-3);">
+          <span>日记</span>
+          <i data-lucide="chevron-right" class="w-3 h-3"></i>
+          <span>2024年</span>
+          <i data-lucide="chevron-right" class="w-3 h-3"></i>
+          <span style="color: var(--note-ink-2);">09月</span>
+        </div>
+        <!-- Right: command palette trigger + window actions -->
+        <div class="flex items-center gap-2">
+          <button data-dom-id="open-command-palette" class="flex items-center gap-1.5 px-2 py-1 rounded text-[12px] border transition-colors hover:opacity-80" style="border-color: var(--note-border); color: var(--note-ink-3); background: var(--note-surface-2);">
+            <i data-lucide="search" class="w-3 h-3"></i>
+            <span>搜索</span>
+            <kbd class="text-[10px] px-1 rounded" style="background: var(--note-surface); color: var(--note-ink-3);">⌘P</kbd>
+          </button>
+        </div>
+      </header>
+
+      <!-- ===== Main Row: Ribbon + Content ===== -->
+      <div class="flex-1 flex overflow-hidden">
+        <!-- ===== Ribbon (48px) ===== -->
+        <nav class="w-12 flex flex-col items-center py-3 gap-1 border-r" style="border-color: var(--note-border); background: var(--note-surface);">
+          <!-- File / Editor -->
+          <button data-nav-key="file" data-dom-id="nav-editor" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="编辑器">
+            <i data-lucide="file-text" class="w-5 h-5"></i>
+          </button>
+          <!-- Search -->
+          <button data-nav-key="search" data-dom-id="open-command-palette-ribbon" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="搜索">
+            <i data-lucide="search" class="w-5 h-5"></i>
+          </button>
+          <!-- Graph -->
+          <button data-nav-key="graph" data-dom-id="nav-graph" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="图谱视图">
+            <i data-lucide="git-fork" class="w-5 h-5"></i>
+          </button>
+          <!-- Plugins (ACTIVE) -->
+          <button data-nav-key="plugins" data-dom-id="nav-plugins" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors" style="color: #FFFFFF; background: var(--note-brand-600);" title="插件市场">
+            <i data-lucide="puzzle" class="w-5 h-5"></i>
+          </button>
+          <!-- Settings -->
+          <button data-nav-key="settings" data-dom-id="nav-settings" class="w-9 h-9 flex items-center justify-center rounded-md transition-colors hover:opacity-80" style="color: var(--note-ink-2);" title="设置">
+            <i data-lucide="settings" class="w-5 h-5"></i>
+          </button>
+          <!-- Spacer -->
+          <div class="flex-1"></div>
+          <!-- Bottom: sync status -->
+          <div class="w-2 h-2 rounded-full" style="background: var(--state-success);" title="已同步"></div>
+        </nav>
+
+        <!-- ===== Content Area: Plugin Market ===== -->
+        <div class="flex-1 flex overflow-hidden" style="background: var(--note-background);">
+
+          <!-- Main content column -->
+          <div class="flex-1 flex flex-col overflow-hidden">
+
+            <!-- ===== Top: Header + Search + Category Filter ===== -->
+            <div class="px-6 py-4 border-b" style="border-color: var(--note-border); background: var(--note-surface);">
+              <!-- Header row -->
+              <div class="flex items-end justify-between mb-4">
+                <div>
+                  <h1 class="text-h1" style="color: var(--note-ink);">插件市场</h1>
+                  <p class="text-caption mt-1" style="color: var(--note-ink-2);">发现扩展你的笔记工作流</p>
+                </div>
+                <button data-dom-id="link-settings" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-caption transition-colors hover:opacity-80" style="color: var(--note-ink-2); background: var(--note-surface-2); border: 1px solid var(--note-border);">
+                  <i data-lucide="package-check" class="w-4 h-4"></i>
+                  管理已安装插件
+                </button>
+              </div>
+
+              <!-- Search + Sort row -->
+              <div class="flex items-center gap-3">
+                <!-- Search input -->
+                <div class="flex-1 relative">
+                  <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" style="color: var(--note-ink-3);"></i>
+                  <input type="text" placeholder="搜索插件..." class="w-full pl-9 pr-3 py-2 rounded-lg text-body border outline-none focus:border-[var(--note-brand-500)]" style="border-color: var(--note-border); background: var(--note-background); color: var(--note-ink);">
+                </div>
+                <!-- Sort dropdown -->
+                <div class="relative">
+                  <select class="appearance-none pl-3 pr-9 py-2 rounded-lg text-caption border cursor-pointer outline-none focus:border-[var(--note-brand-500)]" style="border-color: var(--note-border); background: var(--note-background); color: var(--note-ink);">
+                    <option>最热门</option>
+                    <option>最新</option>
+                    <option>评分最高</option>
+                  </select>
+                  <i data-lucide="chevron-down" class="w-4 h-4 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style="color: var(--note-ink-3);"></i>
+                </div>
+              </div>
+
+              <!-- Category filter chips -->
+              <div class="flex items-center gap-2 mt-4 flex-wrap">
+                <!-- 全部 (active) -->
+                <button class="chip-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-caption font-medium" style="background: var(--note-brand-600); color: #FFFFFF; border: 1px solid var(--note-brand-600);">
+                  <i data-lucide="layers" class="w-3.5 h-3.5"></i>
+                  全部
+                </button>
+                <!-- 编辑器增强 -->
+                <button class="chip-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-caption" style="background: var(--note-background); color: var(--note-ink-2); border: 1px solid var(--note-border);">
+                  <i data-lucide="edit-3" class="w-3.5 h-3.5"></i>
+                  编辑器增强
+                </button>
+                <!-- 主题外观 -->
+                <button class="chip-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-caption" style="background: var(--note-background); color: var(--note-ink-2); border: 1px solid var(--note-border);">
+                  <i data-lucide="palette" class="w-3.5 h-3.5"></i>
+                  主题外观
+                </button>
+                <!-- 数据同步 -->
+                <button class="chip-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-caption" style="background: var(--note-background); color: var(--note-ink-2); border: 1px solid var(--note-border);">
+                  <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                  数据同步
+                </button>
+                <!-- 生产力工具 -->
+                <button class="chip-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-caption" style="background: var(--note-background); color: var(--note-ink-2); border: 1px solid var(--note-border);">
+                  <i data-lucide="zap" class="w-3.5 h-3.5"></i>
+                  生产力工具
+                </button>
+                <!-- 集成服务 -->
+                <button class="chip-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-caption" style="background: var(--note-background); color: var(--note-ink-2); border: 1px solid var(--note-border);">
+                  <i data-lucide="link" class="w-3.5 h-3.5"></i>
+                  集成服务
+                </button>
+              </div>
+            </div>
+
+            <!-- ===== Plugin Card Grid (scrollable) ===== -->
+            <div class="flex-1 overflow-y-auto pm-scroll px-6 py-4">
+              <div class="grid grid-cols-3 gap-4">
+
+                <!-- Card 1: Calendar (已安装) -->
+                <div class="plugin-card rounded-lg border p-4 flex flex-col" style="background: var(--note-surface); border-color: var(--note-border); border-radius: var(--note-radius-lg);">
+                  <div class="flex items-start gap-3 mb-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background: #8B5CF6; border-radius: var(--note-radius-md);">
+                      <i data-lucide="calendar" class="w-5 h-5" style="color: #FFFFFF;"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h3 class="text-body font-semibold leading-tight" style="color: var(--note-ink);">Calendar</h3>
+                      <p class="text-caption mt-0.5" style="color: var(--note-ink-3);">by NoteApp Team</p>
+                    </div>
+                  </div>
+                  <p class="text-caption mb-4 leading-relaxed" style="color: var(--note-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">日历视图和日记管理，将你的笔记按日期组织，轻松回溯每日记录。</p>
+                  <div class="flex items-center justify-between mt-auto">
+                    <div class="flex items-center gap-3 text-caption nums" style="color: var(--note-ink-3);">
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        12.5k
+                      </span>
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="star" class="w-3.5 h-3.5" style="color: var(--state-warning);"></i>
+                        4.8
+                      </span>
+                    </div>
+                    <button class="install-btn flex items-center gap-1 px-3 py-1.5 rounded-md text-caption font-medium" style="background: var(--note-surface-2); color: var(--note-ink-3); border: 1px solid var(--note-border); border-radius: var(--note-radius-sm);">
+                      <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                      已安装
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Card 2: Kanban -->
+                <div class="plugin-card rounded-lg border p-4 flex flex-col" style="background: var(--note-surface); border-color: var(--note-border); border-radius: var(--note-radius-lg);">
+                  <div class="flex items-start gap-3 mb-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background: #3B82F6; border-radius: var(--note-radius-md);">
+                      <i data-lucide="kanban" class="w-5 h-5" style="color: #FFFFFF;"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h3 class="text-body font-semibold leading-tight" style="color: var(--note-ink);">Kanban</h3>
+                      <p class="text-caption mt-0.5" style="color: var(--note-ink-3);">by ProductivityLabs</p>
+                    </div>
+                  </div>
+                  <p class="text-caption mb-4 leading-relaxed" style="color: var(--note-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">看板式任务管理，将笔记转化为可拖拽的看板卡片，高效追踪进度。</p>
+                  <div class="flex items-center justify-between mt-auto">
+                    <div class="flex items-center gap-3 text-caption nums" style="color: var(--note-ink-3);">
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        8.3k
+                      </span>
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="star" class="w-3.5 h-3.5" style="color: var(--state-warning);"></i>
+                        4.6
+                      </span>
+                    </div>
+                    <button class="install-btn px-3 py-1.5 rounded-md text-caption font-medium" style="background: var(--note-brand-600); color: #FFFFFF; border-radius: var(--note-radius-sm);">
+                      安装
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Card 3: Excalidraw -->
+                <div class="plugin-card rounded-lg border p-4 flex flex-col" style="background: var(--note-surface); border-color: var(--note-border); border-radius: var(--note-radius-lg);">
+                  <div class="flex items-start gap-3 mb-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background: #F59E0B; border-radius: var(--note-radius-md);">
+                      <i data-lucide="pen-tool" class="w-5 h-5" style="color: #FFFFFF;"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h3 class="text-body font-semibold leading-tight" style="color: var(--note-ink);">Excalidraw</h3>
+                      <p class="text-caption mt-0.5" style="color: var(--note-ink-3);">by Zsolt Viczián</p>
+                    </div>
+                  </div>
+                  <p class="text-caption mb-4 leading-relaxed" style="color: var(--note-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">手绘白板嵌入，在笔记中创建无限画布的示意图与流程图。</p>
+                  <div class="flex items-center justify-between mt-auto">
+                    <div class="flex items-center gap-3 text-caption nums" style="color: var(--note-ink-3);">
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        15.2k
+                      </span>
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="star" class="w-3.5 h-3.5" style="color: var(--state-warning);"></i>
+                        4.9
+                      </span>
+                    </div>
+                    <button class="install-btn px-3 py-1.5 rounded-md text-caption font-medium" style="background: var(--note-brand-600); color: #FFFFFF; border-radius: var(--note-radius-sm);">
+                      安装
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Card 4: Git Sync -->
+                <div class="plugin-card rounded-lg border p-4 flex flex-col" style="background: var(--note-surface); border-color: var(--note-border); border-radius: var(--note-radius-lg);">
+                  <div class="flex items-start gap-3 mb-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background: #22C55E; border-radius: var(--note-radius-md);">
+                      <i data-lucide="git-branch" class="w-5 h-5" style="color: #FFFFFF;"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h3 class="text-body font-semibold leading-tight" style="color: var(--note-ink);">Git Sync</h3>
+                      <p class="text-caption mt-0.5" style="color: var(--note-ink-3);">by Vinadon</p>
+                    </div>
+                  </div>
+                  <p class="text-caption mb-4 leading-relaxed" style="color: var(--note-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">Git版本控制同步，为笔记库提供完整的版本历史与分支管理。</p>
+                  <div class="flex items-center justify-between mt-auto">
+                    <div class="flex items-center gap-3 text-caption nums" style="color: var(--note-ink-3);">
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        6.7k
+                      </span>
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="star" class="w-3.5 h-3.5" style="color: var(--state-warning);"></i>
+                        4.5
+                      </span>
+                    </div>
+                    <button class="install-btn px-3 py-1.5 rounded-md text-caption font-medium" style="background: var(--note-brand-600); color: #FFFFFF; border-radius: var(--note-radius-sm);">
+                      安装
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Card 5: Minimal Theme (已安装) -->
+                <div class="plugin-card rounded-lg border p-4 flex flex-col" style="background: var(--note-surface); border-color: var(--note-border); border-radius: var(--note-radius-lg);">
+                  <div class="flex items-start gap-3 mb-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background: #EC4899; border-radius: var(--note-radius-md);">
+                      <i data-lucide="palette" class="w-5 h-5" style="color: #FFFFFF;"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h3 class="text-body font-semibold leading-tight" style="color: var(--note-ink);">Minimal Theme</h3>
+                      <p class="text-caption mt-0.5" style="color: var(--note-ink-3);">by Stephan Ango</p>
+                    </div>
+                  </div>
+                  <p class="text-caption mb-4 leading-relaxed" style="color: var(--note-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">极简主题包，专注内容阅读的克制设计，支持多种配色方案切换。</p>
+                  <div class="flex items-center justify-between mt-auto">
+                    <div class="flex items-center gap-3 text-caption nums" style="color: var(--note-ink-3);">
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        20.1k
+                      </span>
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="star" class="w-3.5 h-3.5" style="color: var(--state-warning);"></i>
+                        4.7
+                      </span>
+                    </div>
+                    <button class="install-btn flex items-center gap-1 px-3 py-1.5 rounded-md text-caption font-medium" style="background: var(--note-surface-2); color: var(--note-ink-3); border: 1px solid var(--note-border); border-radius: var(--note-radius-sm);">
+                      <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                      已安装
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Card 6: Mind Map -->
+                <div class="plugin-card rounded-lg border p-4 flex flex-col" style="background: var(--note-surface); border-color: var(--note-border); border-radius: var(--note-radius-lg);">
+                  <div class="flex items-start gap-3 mb-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background: #06B6D4; border-radius: var(--note-radius-md);">
+                      <i data-lucide="network" class="w-5 h-5" style="color: #FFFFFF;"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h3 class="text-body font-semibold leading-tight" style="color: var(--note-ink);">Mind Map</h3>
+                      <p class="text-caption mt-0.5" style="color: var(--note-ink-3);">by Vincent Le</p>
+                    </div>
+                  </div>
+                  <p class="text-caption mb-4 leading-relaxed" style="color: var(--note-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">思维导图编辑，将笔记结构可视化为节点树，支持拖拽与折叠展开。</p>
+                  <div class="flex items-center justify-between mt-auto">
+                    <div class="flex items-center gap-3 text-caption nums" style="color: var(--note-ink-3);">
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        9.4k
+                      </span>
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="star" class="w-3.5 h-3.5" style="color: var(--state-warning);"></i>
+                        4.4
+                      </span>
+                    </div>
+                    <button class="install-btn px-3 py-1.5 rounded-md text-caption font-medium" style="background: var(--note-brand-600); color: #FFFFFF; border-radius: var(--note-radius-sm);">
+                      安装
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Card 7: Notion Sync -->
+                <div class="plugin-card rounded-lg border p-4 flex flex-col" style="background: var(--note-surface); border-color: var(--note-border); border-radius: var(--note-radius-lg);">
+                  <div class="flex items-start gap-3 mb-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background: #64748B; border-radius: var(--note-radius-md);">
+                      <i data-lucide="cloud" class="w-5 h-5" style="color: #FFFFFF;"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h3 class="text-body font-semibold leading-tight" style="color: var(--note-ink);">Notion Sync</h3>
+                      <p class="text-caption mt-0.5" style="color: var(--note-ink-3);">by Cloud Studio</p>
+                    </div>
+                  </div>
+                  <p class="text-caption mb-4 leading-relaxed" style="color: var(--note-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">Notion双向同步，在本地笔记库与 Notion 工作区之间保持数据一致。</p>
+                  <div class="flex items-center justify-between mt-auto">
+                    <div class="flex items-center gap-3 text-caption nums" style="color: var(--note-ink-3);">
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        5.2k
+                      </span>
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="star" class="w-3.5 h-3.5" style="color: var(--state-warning);"></i>
+                        4.3
+                      </span>
+                    </div>
+                    <button class="install-btn px-3 py-1.5 rounded-md text-caption font-medium" style="background: var(--note-brand-600); color: #FFFFFF; border-radius: var(--note-radius-sm);">
+                      安装
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Card 8: Code Highlight -->
+                <div class="plugin-card rounded-lg border p-4 flex flex-col" style="background: var(--note-surface); border-color: var(--note-border); border-radius: var(--note-radius-lg);">
+                  <div class="flex items-start gap-3 mb-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background: #EF4444; border-radius: var(--note-radius-md);">
+                      <i data-lucide="code-2" class="w-5 h-5" style="color: #FFFFFF;"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h3 class="text-body font-semibold leading-tight" style="color: var(--note-ink);">Code Highlight</h3>
+                      <p class="text-caption mt-0.5" style="color: var(--note-ink-3);">by Daniel W. P.</p>
+                    </div>
+                  </div>
+                  <p class="text-caption mb-4 leading-relaxed" style="color: var(--note-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">代码语法高亮增强，支持 180+ 编程语言，行号显示与主题配色。</p>
+                  <div class="flex items-center justify-between mt-auto">
+                    <div class="flex items-center gap-3 text-caption nums" style="color: var(--note-ink-3);">
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        18.6k
+                      </span>
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="star" class="w-3.5 h-3.5" style="color: var(--state-warning);"></i>
+                        4.8
+                      </span>
+                    </div>
+                    <button class="install-btn px-3 py-1.5 rounded-md text-caption font-medium" style="background: var(--note-brand-600); color: #FFFFFF; border-radius: var(--note-radius-sm);">
+                      安装
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Card 9: Dark Mode Pro -->
+                <div class="plugin-card rounded-lg border p-4 flex flex-col" style="background: var(--note-surface); border-color: var(--note-border); border-radius: var(--note-radius-lg);">
+                  <div class="flex items-start gap-3 mb-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background: #6366F1; border-radius: var(--note-radius-md);">
+                      <i data-lucide="moon" class="w-5 h-5" style="color: #FFFFFF;"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <h3 class="text-body font-semibold leading-tight" style="color: var(--note-ink);">Dark Mode Pro</h3>
+                      <p class="text-caption mt-0.5" style="color: var(--note-ink-3);">by hasegawa</p>
+                    </div>
+                  </div>
+                  <p class="text-caption mb-4 leading-relaxed" style="color: var(--note-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">高级暗色主题，深度优化的 OLED 友好配色，支持自动日夜间切换。</p>
+                  <div class="flex items-center justify-between mt-auto">
+                    <div class="flex items-center gap-3 text-caption nums" style="color: var(--note-ink-3);">
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        11.3k
+                      </span>
+                      <span class="flex items-center gap-1">
+                        <i data-lucide="star" class="w-3.5 h-3.5" style="color: var(--state-warning);"></i>
+                        4.6
+                      </span>
+                    </div>
+                    <button class="install-btn px-3 py-1.5 rounded-md text-caption font-medium" style="background: var(--note-brand-600); color: #FFFFFF; border-radius: var(--note-radius-sm);">
+                      安装
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+          </div>
+
+          <!-- ===== Right Detail Drawer (collapsed by default) ===== -->
+          <aside class="w-0 overflow-hidden border-l transition-all duration-200" style="border-color: var(--note-border); background: var(--note-surface);" data-drawer="plugin-detail">
+            <!-- Drawer content placeholder (kept empty for default collapsed state) -->
+          </aside>
+
+        </div>
+      </div>
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>
