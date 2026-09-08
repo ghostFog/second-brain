@@ -4,10 +4,12 @@
  * 功能: 创建主窗口、注册自定义协议 note:// 以支持
  *       在 file 环境通过 fetch 加载本地视图文件
  * ============================================ */
-const { app, BrowserWindow, protocol, ipcMain, dialog, shell, Menu, session } = require('electron');
+const { app, BrowserWindow, protocol, ipcMain, dialog, shell, Menu, session, Tray, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { AiEngine } = require('./ai-engine');
+const grayMatter = require('gray-matter'); // 解析笔记 frontmatter（获取 id / tags 元数据）
+const { default: SnowflakeId } = require('snowflake-id'); // 雪花算法：生成全局唯一文档 id，方便索引/元数据稳定定位
+const { AiEngine, chunkConfigured } = require('./ai-engine');
 
 /* 项目根目录（即本文件所在目录） */
 const ROOT = __dirname;
@@ -27,6 +29,13 @@ const MIME = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.json': 'application/json; charset=utf-8',
+  // vditor 依赖的字体与 sourcemap 资源：避免 note:// 协议下返回 octet-stream / 控制台告警
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.eot': 'application/vnd.ms-fontobject',
+  '.map': 'application/json; charset=utf-8',
 };
 
 /* ---------- 自定义协议：note:// ---------- */
@@ -72,6 +81,10 @@ function createWindow() {
     backgroundColor: '#1E1E2E',
     frame: false,            // 移除系统标题栏，由前端自绘 Windows 风格标题栏
     titleBarStyle: 'hidden',
+    // 统一应用图标：窗口/托盘同源脑图标（assets/icon | tray.png），大小不同而已
+    // 窗口打开时照常显示在任务栏；仅当最小化/缩小到托盘时才移出任务栏（见 hideToTray）
+    skipTaskbar: false,
+    icon: path.join(ROOT, 'assets', 'icon.png'),
     webPreferences: {
       // 安全默认：隔离上下文、禁用 Node 集成，仅通过 preload 暴露窗口控制
       contextIsolation: true,
@@ -83,17 +96,153 @@ function createWindow() {
   // 通过自定义协议加载首页，相对 fetch 自动沿用 note:// 协议
   mainWin.loadURL('note://local/index.html');
 
+  // 快捷键打开/关闭开发者工具：F12 或 Ctrl+Shift+I。
+  // 应用已 setApplicationMenu(null) 移除默认菜单，故需在前端按键捕获前手动监听。
+  // 作者: 火 冰
+  mainWin.webContents.on('before-input-event', function (event, input) {
+    if (input.type !== 'keyDown') return;
+    const f12 = (input.key === 'F12');
+    const ctrlShiftI = input.control && input.shift && (input.key === 'I' || input.key === 'i');
+    if (f12 || ctrlShiftI) {
+      mainWin.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
+
+  // 渲染端 console 全量转发落盘：把渲染进程的 console.log/warn/error（含 window.onerror 之外、
+  // vditor 等第三方库的日志）桥接到 userData/logs/app.log，便于排查界面空白/编辑区异常。
+  // 作者: 火 冰
+  mainWin.webContents.on('console-message', function (_e, level, message, line, sourceId) {
+    const lv = { 0: 'log', 1: 'warn', 2: 'error', 3: 'debug' }[level] || 'log';
+    appendLog({ level: lv, msg: '[console] ' + String(message),
+      detail: 'at ' + String(sourceId || '') + ':' + String(line || '') });
+  });
+
   mainWin.on('closed', () => { mainWin = null; });
   return mainWin;
 }
 
 /* ---------- 窗口控制 IPC（供前端标题栏按钮调用） ---------- */
-ipcMain.on('win:minimize', () => { if (mainWin) mainWin.minimize(); });
+ipcMain.on('win:minimize', () => { if (mainWin) hideToTray(); });
 ipcMain.on('win:maximize', () => {
   if (!mainWin) return;
   if (mainWin.isMaximized()) mainWin.unmaximize(); else mainWin.maximize();
 });
-ipcMain.on('win:close', () => { if (mainWin) mainWin.close(); });
+
+/* 关闭按钮(×)行为分派：按用户设置的 closeAction 决定是退出、缩小到托盘，还是弹三选确认框。
+ * quit=直接退出；tray=缩小到托盘；confirm=弹出「退出/缩小到托盘/取消」对话框，由用户每次选择。
+ * 作者: 火 冰 */
+ipcMain.on('win:close', () => {
+  if (!mainWin) return;
+  if (closeAction === 'quit') { app.quit(); return; }
+  if (closeAction === 'tray') { hideToTray(); return; }
+  // confirm：弹三选确认框
+  for (const w of BrowserWindow.getAllWindows()) w.setEnabled(false); // 禁用窗口防重复弹框
+  dialog.showMessageBox(mainWin, {
+    type: 'question',
+    title: '关闭第二脑',
+    message: '关闭后希望执行什么操作？',
+    buttons: ['退出程序', '缩小到托盘', '取消'],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
+  }).then(function (r) {
+    for (const w of BrowserWindow.getAllWindows()) { if (!w.isDestroyed()) w.setEnabled(true); }
+    if (r.response === 0) app.quit();                 // 退出程序
+    else if (r.response === 1) hideToTray(); // 缩小到托盘
+    // response === 2：取消，保持窗口打开
+  }).catch(function () {
+    for (const w of BrowserWindow.getAllWindows()) { if (!w.isDestroyed()) w.setEnabled(true); }
+  });
+});
+
+/* 读取/设置关闭按钮行为（供设置页「编辑器 → 关闭按钮行为」调整并持久化到 settings.json） */
+ipcMain.handle('win:getCloseAction', () => closeAction);
+ipcMain.handle('win:setCloseAction', (_e, val) => {
+  if (['confirm', 'quit', 'tray'].indexOf(val) === -1) return false;
+  closeAction = val;
+  saveConfig();
+  return true;
+});
+
+/* ---------- 系统托盘（G-12） ----------
+ * 窗口开启 skipTaskbar 不占用任务栏，仅保留系统托盘图标。
+ * 最小化 = 隐藏窗口；单击/双击托盘图标恢复窗口；右键菜单：显示主窗口 / 退出。
+ * 作者: 火 冰 */
+let tray = null;
+
+/** 隐藏窗口到托盘：先移出任务栏（skipTaskbar=true）再隐藏。不弹托盘气泡，避免每次最小化打扰。
+ * 作者: 火 冰 */
+function hideToTray() {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  try { mainWin.setSkipTaskbar(true); } catch (_) { /* 个别平台该方法不可用则忽略 */ }
+  mainWin.hide();
+}
+
+/** 恢复并聚焦主窗口（从托盘点击时调用） */
+function showMainWindow() {
+  if (!mainWin) { createWindow(); return; }
+  if (mainWin.isDestroyed()) { mainWin = null; createWindow(); return; }
+  try { mainWin.setSkipTaskbar(false); } catch (_) { /* 忽略 */ } // 恢复窗口时回到任务栏显示
+  if (mainWin.isMinimized()) mainWin.restore();
+  mainWin.show();
+  mainWin.focus();
+}
+
+/** 创建系统托盘图标与菜单 */
+function createTray() {
+  if (tray) return;
+  const icon = nativeImage.createFromPath(path.join(ROOT, 'assets', 'tray.png'));
+  tray = new Tray(icon.resize({ width: 16, height: 16 }));
+  tray.setToolTip('第二脑');
+  // 托盘右键菜单：显示主窗口 / 退出
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '显示主窗口', click: showMainWindow },
+    { type: 'separator' },
+    { label: '退出', click: () => { app.quit(); } },
+  ]));
+  // 单击/双击恢复主窗口（Windows 托盘单击通常恢复窗口）
+  tray.on('click', showMainWindow);
+  tray.on('double-click', showMainWindow);
+}
+
+/* ---------- 运行日志落盘 ---------- */
+/* 前端 window.onerror / unhandledrejection 以及主动日志统一经 IPC 落到
+ * userData/logs/app.log，便于排查界面空白、按钮失效等运行时问题。
+ * 作者: 火 冰 */
+const LOG_MAX_BYTES = 5 * 1024 * 1024; // 单日志文件上限 5MB，超出轮换为 .1
+function logFile() { return path.join(app.getPath('userData'), 'logs', 'app.log'); }
+function appendLog(payload) {
+  try {
+    const t = new Date();
+    const p2 = n => String(n).padStart(2, '0');
+    const ts = t.getFullYear() + '-' + p2(t.getMonth() + 1) + '-' + p2(t.getDate()) + ' '
+      + p2(t.getHours()) + ':' + p2(t.getMinutes()) + ':' + p2(t.getSeconds()) + '.' + String(t.getMilliseconds()).padStart(3, '0');
+    const level = (payload && payload.level) || 'info';
+    const line = '[' + ts + '] [' + level + '] ' + ((payload && payload.msg) || '')
+      + ((payload && payload.detail) ? ('\n  detail: ' + payload.detail) : '') + '\n';
+    const f = logFile();
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    if (fs.existsSync(f) && fs.statSync(f).size > LOG_MAX_BYTES) {
+      try { fs.renameSync(f, f + '.1'); } catch (_) { /* 轮换冲突时忽略，继续追加 */ }
+    }
+    fs.appendFileSync(f, line, 'utf8');
+  } catch (_) { /* 日志落盘失败不阻断主进程 */ }
+}
+ipcMain.on('app:log', (_e, p) => { appendLog(p || {}); });
+
+/* 同步确认对话框（confirm）：
+ * 渲染进程的 window.confirm 在 Electron 中不支持且返回 false，会让删除等确认静默失效。
+ * 这里用原生对话框同步返回选择结果。作者: 火 冰 */
+ipcMain.on('dialog:confirm', (e, msg) => {
+  try {
+    const idx = dialog.showMessageBoxSync(mainWin, {
+      type: 'question', buttons: ['确定', '取消'], defaultId: 0, cancelId: 1,
+      message: String(msg || '确定吗？'), noLink: true,
+    });
+    e.returnValue = idx === 0;
+  } catch (_) { e.returnValue = false; }
+});
 
 /* ============================================
  * 笔记库（真实文件系统）IPC
@@ -112,8 +261,10 @@ let currentVault = null;
 /* 打开过的笔记库历史（最近在前），用于下拉列表展示与快速切换 */
 let vaultHistory = [];
 
-/* 用户配置文件：持久化当前笔记库 + 默认库路径 + 历史库列表，重启后保持 */
+/* 用户配置文件：持久化当前笔记库 + 默认库路径 + 历史库列表 + 关闭按钮行为，重启后保持 */
 function configFile() { return path.join(app.getPath('userData'), 'settings.json'); }
+/* 关闭按钮(×)行为：confirm=弹三选确认框 / quit=直接退出 / tray=缩小到托盘 */
+let closeAction = 'confirm';
 function loadConfig() {
   try {
     const j = JSON.parse(fs.readFileSync(configFile(), 'utf8'));
@@ -122,12 +273,13 @@ function loadConfig() {
     if (Array.isArray(j && j.vaultHistory)) vaultHistory = j.vaultHistory
       .filter(function (h) { return h && typeof h.path === 'string'; })
       .slice(0, 12);
+    if (j && typeof j.closeAction === 'string' && ['confirm', 'quit', 'tray'].indexOf(j.closeAction) !== -1) closeAction = j.closeAction;
   } catch (e) { /* 配置不存在或损坏时回退默认库 */ }
 }
 function saveConfig() {
   try {
     fs.writeFileSync(configFile(), JSON.stringify(
-      { defaultVaultPath: defaultVaultPath, vaultPath: currentVault || null, vaultHistory: vaultHistory },
+      { defaultVaultPath: defaultVaultPath, vaultPath: currentVault || null, vaultHistory: vaultHistory, closeAction: closeAction },
       null, 2), 'utf8');
   } catch (e) { /* 写入失败不阻塞 */ }
 }
@@ -302,6 +454,7 @@ async function walkNotes(dir, base, out) {
   catch { return 0; }
   let count = 0;
   for (const it of items) {
+    if (it.name === META_DIR) continue; // 跳过内部元数据目录 .second-brain（及其镜像子树），不进入笔记列表
     const abs = path.join(dir, it.name);
     const rel = base ? base + '/' + it.name : it.name;
     if (it.isDirectory()) {
@@ -317,6 +470,316 @@ async function walkNotes(dir, base, out) {
   }
   return count;
 }
+
+/* ============================================
+ * 知识库元数据（.second-brain）
+ * 在知识库目录下维护一个隐藏的 .second-brain 目录，
+ * 每个目录一个 _meta.json 记录：笔记个数 / 占用大小 / 每篇笔记属性（id、字数、标签、大小、mtime）。
+ * 在新建/保存/删除/移动目录或笔记时同步重建（scheduleMetaRefresh）。
+ * 作者: 火 冰
+ * ============================================ */
+
+/** 知识库存放元数据的隐藏目录名 */
+const META_DIR = '.second-brain';
+
+/** 雪花 id 生成器：为新建笔记分配全局唯一文档 id（mid 取 1，进程内单例保证递增唯一）。 */
+const snowflake = new SnowflakeId({ mid: 1 });
+
+/** 从笔记 frontmatter 提取属性：id / tags / 字数（去空白）。
+ * @param {string} text 笔记全文
+ * @param {string} name 笔记文件名（无 id 时的回退）
+ * @returns {{noteId:string, tags:string[], wordCount:number}}
+ * @author 火 冰 */
+function parseNoteMeta(text, name) {
+  let d = {};
+  try { d = grayMatter(String(text || '')).data || {}; } catch (e) { /* frontmatter 解析失败按空处理 */ }
+  const idAttr = (typeof d.id === 'string' && d.id.trim()) ? d.id.trim() : '';
+  const rawTags = Array.isArray(d.tags) ? d.tags : [];
+  const wordCount = String(text || '').replace(/\s+/g, '').length;
+  return { noteId: idAttr, tags: rawTags.map(String).filter(Boolean), wordCount };
+}
+
+/** 从笔记 frontmatter 中移除 `id:` 字段，使 md 文件保持干净（id 改由 .second-brain 元数据追踪）。
+ * 仅按行精确剔除 id 键，其它 frontmatter 与正文内容原样保留。
+ * @param {string} src 笔记全文
+ * @returns {{text:string, removed:boolean}} 处理后的全文 + 是否移除了 id
+ * @author 火 冰 */
+function stripMetaId(src) {
+  const s = String(src || '').replace(/^\uFEFF/, '');
+  // 匹配首个 frontmatter 块：开标签 --- / 块体 / 闭标签 --- / 之后全部正文内容
+  const m = s.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*---[ \t]*(?:\r?\n)?([\s\S]*)$/);
+  if (!m) return { text: s, removed: false };
+  const body = m[1];
+  const content = m[2]; // 闭标签后剩余全部（正文等）
+  const filtered = [];
+  let removed = false;
+  // 按行切分 frontmatter，剔除孤立的 id 键行（可带缩进）
+  const lines = body.split(/\r\n|\r|\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!removed && /^\s*id\s*:/.test(lines[i])) { removed = true; continue; }
+    filtered.push(lines[i]);
+  }
+  if (!removed) return { text: s, removed: false };
+  // 剔除 id 行后，收发端多余空行作轻量收敛
+  while (filtered.length > 0 && filtered[0] === '') filtered.shift();
+  while (filtered.length > 0 && filtered[filtered.length - 1] === '') filtered.pop();
+  // id 是 frontmatter 唯一字段时，整块删空、直接保留正文，使 md 完全干净
+  if (!filtered.some(function (l) { return l.trim() !== ''; })) return { text: content, removed: true };
+  const text = '---\n' + filtered.join('\n') + '\n---' + (content ? '\n' + content : '\n');
+  return { text, removed: true };
+}
+
+/** 确保笔记拥有唯一稳定雪花 id，但**不写入 md frontmatter**（md 保持干净）。
+ * id 由 .second-brain/_meta.json 的 noteId 追踪；新笔记在首次元数据扫描时生成一次，之后复用。
+ * @param {string} text 笔记全文（用于提取已存在的 frontmatter id 作为迁移回退）
+ * @param {object} gen 雪花 id 生成器（单例）
+ * @param {string} prevId 元数据中已有的稳定 id（优先复用）
+ * @returns {string} 唯一雪花 id
+ * @author 火 冰 */
+function ensureNoteId(text, gen, prevId) {
+  if (prevId) return prevId;
+  try { const d = grayMatter(String(text || '')).data || {}; return (typeof d.id === 'string' && d.id.trim()) ? d.id.trim() : gen.generate(); }
+  catch (e) { return gen.generate(); }
+}
+
+/** 递归扫描 vault（跳过 .second-brain），逐目录生成元数据记录。
+ * 每条记录：dir / noteCount(直接 .md 数) / dirCount(直接子目录数) / size(递归占用字节) / totalNotes(递归笔记数)
+ *          / notes[](直接笔记属性) / children[](文件列表：子目录 type:'dir' + 文件 type:'file'，各带 size、mtime) / updatedAt。
+ * @returns {Promise<Map<string, object>>} 目录相对路径('' 表示根) -> 记录
+ * @author 火 冰 */
+async function scanVaultMeta() {
+  const root = vaultRoot();
+  const records = new Map();
+  const walk = async (dirRel) => {
+    const abs = dirRel ? path.join(root, dirRel) : root;
+    let items = [];
+    try { items = await fs.promises.readdir(abs, { withFileTypes: true }); } catch (e) { return { bytes: 0, notes: 0 }; }
+    const rec = { dir: dirRel, noteCount: 0, dirCount: 0, size: 0, totalNotes: 0, totalSize: 0, notes: [], children: [], updatedAt: Date.now() };
+    records.set(dirRel, rec);
+    // 读取本目录旧记录中每篇笔记的「索引分块覆盖配置」(chunk) 与「稳定雪花 id」(noteId)，重建时保留
+    const prevOverrides = {};
+    const prevNoteIds = {};
+    try {
+      const prev = JSON.parse(await fs.promises.readFile(path.join(root, META_DIR, ...(dirRel ? dirRel.split('/') : []), '_meta.json'), 'utf8'));
+      if (prev && Array.isArray(prev.notes)) prev.notes.forEach(function (n) { if (n && n.chunk) prevOverrides[n.name] = n.chunk; if (n && n.noteId) prevNoteIds[n.name] = n.noteId; });
+    } catch (e) { /* 无旧记录 */ }
+    let subBytes = 0, subNotes = 0;
+    const dirKids = [], fileKids = [];   // 目录属性：文件列表（子目录 + 文件）
+    for (const it of items) {
+      if (it.name === META_DIR) continue;                      // 跳过元数据目录自身
+      const childAbs = path.join(abs, it.name);
+      const childRel = (dirRel ? dirRel + '/' : '') + it.name;
+      if (it.isDirectory()) {
+        rec.dirCount++;
+        const r = await walk(childRel);
+        subBytes += r.bytes;
+        subNotes += r.notes;
+        let st = null; try { st = await fs.promises.stat(childAbs); } catch (e) { /* 忽略 */ }
+        dirKids.push({ name: it.name, type: 'dir', size: (records.get(childRel) || {}).totalSize || 0, mtime: st ? st.mtimeMs : 0 });
+      } else if (it.isFile() && it.name.toLowerCase().endsWith('.md')) {
+        let st = null;
+        try { st = await fs.promises.stat(childAbs); } catch (e) { continue; }
+        let text = '';
+        try { text = await fs.promises.readFile(childAbs, 'utf8'); } catch (e) { /* 读失败仅记录元信息 */ }
+        // 唯一稳定雪花 id：复用元数据 noteId → 否则复用既有 frontmatter id（迁移）→ 否则新生成；均不写入 md
+        const noteId = ensureNoteId(text, snowflake, prevNoteIds[it.name]);
+        // 从 md frontmatter 清除历史补齐写入的 id，保持 md 干净
+        const clean = stripMetaId(text);
+        if (clean.removed) { try { await fs.promises.writeFile(childAbs, clean.text, 'utf8'); } catch (e) { /* 清理失败不阻断 */ } text = clean.text; }
+        const pm = parseNoteMeta(text, it.name);
+        rec.notes.push({ name: it.name, path: childRel, noteId: noteId, wordCount: pm.wordCount, tags: pm.tags, size: st.size, created: st.birthtimeMs, mtime: st.mtimeMs, chunk: prevOverrides[it.name] || undefined });
+        fileKids.push({ name: it.name, type: 'file', size: st.size, created: st.birthtimeMs, mtime: st.mtimeMs });
+        rec.noteCount++;
+        rec.size += st.size;
+      }
+    }
+    rec.size += subBytes;         // 占用大小 = 目录下全部文件递归合计
+    rec.totalNotes = rec.noteCount + subNotes;   // 笔记个数 = 直接 + 子孙
+    rec.totalSize = rec.size;
+    // 文件列表排序：目录在前、文件在后，各自按中文名称排序
+    dirKids.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); });
+    fileKids.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); });
+    rec.children = dirKids.concat(fileKids);
+    return { bytes: rec.size, notes: rec.totalNotes };
+  };
+  await walk('');
+  return records;
+}
+
+/** 将元数据记录逐目录写入 .second-brain/<dir>/_meta.json，并清理不对应现存目录的镜像残留。
+ * @param {Map<string, object>} records scanVaultMeta 的产物
+ * @returns {Promise<void>}
+ * @author 火 冰 */
+async function writeVaultMeta(records) {
+  const root = vaultRoot();
+  const metaRoot = path.join(root, META_DIR);
+  for (const [dir, rec] of records) {
+    const trim = dir ? (dir.split('/').map(function (s) { return s.trim(); }).filter(Boolean).join('/')) : '';
+    const mirrorAbs = path.join(metaRoot, ...(trim ? trim.split('/') : []));
+    await fs.promises.mkdir(mirrorAbs, { recursive: true });
+    await fs.promises.writeFile(path.join(mirrorAbs, '_meta.json'), JSON.stringify(rec, null, 2), 'utf8');
+  }
+  await pruneMeta(metaRoot, records, '');
+}
+
+/** 清理 .second-brain 中不对应现存目录的镜像（目录被改名/删除/移动后同步移除残留记录文件）。
+ * @author 火 冰 */
+async function pruneMeta(metaRoot, records, baseRel) {
+  let items = [];
+  try { items = await fs.promises.readdir(metaRoot, { withFileTypes: true }); } catch (e) { return; }
+  for (const it of items) {
+    const abs = path.join(metaRoot, it.name);
+    const rel = baseRel ? baseRel + '/' + it.name : it.name;
+    if (it.isDirectory()) {
+      if (records.has(rel)) await pruneMeta(abs, records, rel);   // 目录仍存在 → 递归清理其子树
+      else await fs.promises.rm(abs, { recursive: true, force: true });  // 目录已不存在 → 删除整个镜像
+    } else if (it.isFile() && it.name === '_meta.json') {
+      if (!records.has(baseRel)) await fs.promises.rm(abs, { force: true }); // 根/子目录镜像多余 → 删除
+    }
+  }
+}
+
+/** 后台重建 .second-brain 元数据（异步、失败不阻塞主流程）。 */
+function scheduleMetaRefresh() {
+  scanVaultMeta().then(writeVaultMeta).catch(function () { /* 元数据刷新失败不阻塞 */ });
+}
+
+/* 手动重建元数据（返回概览） */
+ipcMain.handle('notes:refreshMeta', async () => {
+  await ensureVault();
+  const records = await scanVaultMeta();
+  await writeVaultMeta(records);
+  return { dirs: records.size, updatedAt: Date.now() };
+});
+
+/* 读取某篇笔记所在目录的元数据记录 + 该笔记自身属性；缺失时自动重建后重读。
+ * 返回 { dir, noteName, meta, note }。 */
+ipcMain.handle('notes:fileMeta', async (_e, rel) => {
+  await ensureVault();
+  const r = String(rel || '').replace(/^\/+/, '');
+  const i = r.lastIndexOf('/');
+  const dir = i > 0 ? r.slice(0, i) : '';
+  const name = i > 0 ? r.slice(i + 1) : r;
+  const metaAbs = path.join(vaultRoot(), META_DIR, ...(dir ? dir.split('/') : []), '_meta.json');
+  const readRecord = async () => { try { return JSON.parse(await fs.promises.readFile(metaAbs, 'utf8')); } catch (e) { return null; } };
+  let rec = await readRecord();
+  if (!rec) { // 记录缺失（首次进入或目录操作后）：同步重建后重读
+    const records = await scanVaultMeta();
+    await writeVaultMeta(records);
+    rec = await readRecord();
+  }
+  const note = rec && Array.isArray(rec.notes) ? (rec.notes.find(function (n) { return n.name === name; }) || null) : null;
+  return { dir, noteName: name, meta: rec, note };
+});
+
+/* 读取某目录的元数据记录（目录属性：文件列表 children + 总大小等）；缺失时自动重建后重读。
+ * dir 为目录相对路径，'' 表示根目录。返回该目录记录对象。 */
+ipcMain.handle('notes:dirMeta', async (_e, dir) => {
+  await ensureVault();
+  const clean = String(dir || '').trim().replace(/^[\\/]+|[\\/]+$/g, '').replace(/\\/g, '/');
+  const metaAbs = path.join(vaultRoot(), META_DIR, ...(clean ? clean.split('/') : []), '_meta.json');
+  const readRecord = async () => { try { return JSON.parse(await fs.promises.readFile(metaAbs, 'utf8')); } catch (e) { return null; } };
+  let rec = await readRecord();
+  if (!rec) { // 记录缺失（首次进入或变更后）：同步重建后重读
+    const records = await scanVaultMeta();
+    await writeVaultMeta(records);
+    rec = await readRecord();
+  }
+  // 附加目录实体在磁盘上的创建/修改时间（'' 为根目录→对库根 stat）
+  try {
+    const dirAbs = clean ? resolveVaultPath(clean) : vaultRoot();
+    const st = await fs.promises.stat(dirAbs);
+    rec = Object.assign({}, rec, { created: st.birthtimeMs || Date.now(), mtime: st.mtimeMs || Date.now() });
+  } catch (e) { /* 目录已不存在时保持缺省时间 */ }
+  return rec || { dir: clean, noteCount: 0, dirCount: 0, size: 0, totalNotes: 0, totalSize: 0, notes: [], children: [], updatedAt: 0 };
+});
+
+/* 最近打开笔记的记录文件（存放于 .second-brain 根目录，多条路径按最近在前） */
+function recentMetaFile() { return path.join(vaultRoot(), META_DIR, 'recent.json'); }
+
+/* 读取最近打开的笔记路径列表（.second-brain/recent.json）；兼容旧版纯数组与新版 {tabs,pinned}。
+ * 过滤掉已不存在/非 .md 的项；锁定集合也仅保留仍存在且仍打开的项。
+ * @returns {Promise<{tabs:string[], pinned:string[]}>} 相对路径数组（最近在前） + 锁定 path 集合 */
+ipcMain.handle('notes:recentLoad', async () => {
+  try {
+    const raw = JSON.parse(await fs.promises.readFile(recentMetaFile(), 'utf8'));
+    let tabs = [], pinned = [];
+    if (Array.isArray(raw)) tabs = raw;                                            // 旧格式：纯路径数组
+    else if (raw && Array.isArray(raw.tabs)) { tabs = raw.tabs; pinned = Array.isArray(raw.pinned) ? raw.pinned : []; }
+    else return { tabs: [], pinned: [] };
+    const out = [];
+    for (const p of tabs) {
+      if (typeof p !== 'string' || !p.trim()) continue;
+      const rel = String(p).replace(/^[\\/]+/, '');
+      if (!rel.toLowerCase().endsWith('.md')) continue;
+      try {
+        const st = await fs.promises.stat(resolveVaultPath(rel));
+        if (st.isFile()) out.push(rel);
+      } catch (e) { /* 文件被删除则跳过 */ }
+    }
+    const pinOut = pinned.filter(function (p) { return typeof p === 'string' && out.indexOf(p) !== -1; });
+    return { tabs: out, pinned: pinOut };
+  } catch (e) { return { tabs: [], pinned: [] }; } // 无记录文件视为首次使用
+});
+
+/* 保存最近打开的笔记路径列表（.second-brain/recent.json），含锁定集合。
+ * @param {string[]|{tabs:string[], pinned:string[]}} paths 兼容旧版传入纯数组 */
+ipcMain.handle('notes:recentSave', async (_e, paths) => {
+  try {
+    let tabs = [], pinned = [];
+    if (Array.isArray(paths)) tabs = paths;                                        // 旧格式：纯数组
+    else if (paths && typeof paths === 'object') { tabs = Array.isArray(paths.tabs) ? paths.tabs : []; pinned = Array.isArray(paths.pinned) ? paths.pinned : []; }
+    tabs = tabs.filter(function (p) { return typeof p === 'string' && p.trim(); });
+    pinned = pinned.filter(function (p) { return typeof p === 'string' && p.trim(); });
+    await fs.promises.mkdir(path.dirname(recentMetaFile()), { recursive: true });
+    await fs.promises.writeFile(recentMetaFile(), JSON.stringify({ tabs, pinned }, null, 2), 'utf8');
+  } catch (e) { /* 记录保存失败不阻断 */ }
+});
+
+/* 保存某篇笔记的「索引分块」覆盖配置（块大小 / 相邻重叠 / 可选显式偏移值）。
+ * chunk = { blockSize, overlap, offsets? }；传入 chunk={reset:true} 清除覆盖、改按全局默认生成。
+ * 写入该笔记所在目录 .second-brain/_meta.json 的笔记记录 chunk 字段。
+ * @returns {Promise<{ok:boolean}>} */
+ipcMain.handle('notes:saveNoteChunk', async (_e, rel, chunk) => {
+  await ensureVault();
+  const r = String(rel || '').replace(/^\/+/, '');
+  const i = r.lastIndexOf('/');
+  const dir = i > 0 ? r.slice(0, i) : '';
+  const name = i > 0 ? r.slice(i + 1) : r;
+  const metaAbs = path.join(vaultRoot(), META_DIR, ...(dir ? dir.split('/') : []), '_meta.json');
+  try {
+    const rec = JSON.parse(await fs.promises.readFile(metaAbs, 'utf8'));
+    const note = rec && Array.isArray(rec.notes) ? rec.notes.find(function (n) { return n.name === name; }) : null;
+    if (!note) return { ok: false };
+    const c = chunk || {};
+    if (c.reset) { delete note.chunk; }
+    else {
+      const offs = Array.isArray(c.offsets) && c.offsets.length
+        ? c.offsets.map(Number).filter(function (v) { return isFinite(v) && v >= 0; }).sort(function (a, b) { return a - b; })
+        : null;
+      const val = {
+        blockSize: Math.max(1, Math.floor(Number(c.blockSize) || 200)),
+        overlap: Math.max(0, Math.floor(Number(c.overlap) || 0)),
+      };
+      if (offs) val.offsets = offs;
+      note.chunk = val;
+    }
+    await fs.promises.writeFile(metaAbs, JSON.stringify(rec, null, 2), 'utf8');
+    return { ok: true };
+  } catch (e) { return { ok: false }; }
+});
+
+/* 预览某篇笔记按给定分块配置生成的索引分块（供「属性 → 索引分块」面板编辑时实时展示）。
+ * size/overlap/offsets 为用户在面板填写/调整的值（maxChunkSize 为单块长度上限，0=不限制）；从磁盘读取笔记原文切分。
+ * @returns {Promise<{ok:boolean, textLen?:number, blocks?:Array<{text,start,end}>}>} */
+ipcMain.handle('ai:previewChunk', async (_e, rel, size, overlap, offsets, maxChunkSize) => {
+  await ensureVault();
+  const abs = path.join(vaultRoot(), String(rel || '').replace(/^\/+/, ''));
+  let text = '';
+  try { text = await fs.promises.readFile(abs, 'utf8'); } catch (e) { return { ok: false }; }
+  const blocks = chunkConfigured(text, size, overlap, (Array.isArray(offsets) && offsets.length) ? offsets.map(Number) : null, maxChunkSize);
+  return { ok: true, textLen: text.replace(/\r\n/g, '\n').length, blocks };
+});
 
 /* 列出笔记库全部笔记 */
 ipcMain.handle('notes:list', async () => {
@@ -338,6 +801,7 @@ ipcMain.handle('notes:save', async (_e, rel, content) => {
   await fs.promises.mkdir(path.dirname(abs), { recursive: true });
   await fs.promises.writeFile(abs, content || '', 'utf8');
   aiEngine.updateNote(rel).catch(function () { /* 单篇增量索引更新失败不阻塞保存 */ });
+  scheduleMetaRefresh();
   return true;
 });
 
@@ -350,8 +814,14 @@ ipcMain.handle('notes:create', async (_e, name, dir) => {
   const rel = (dir && dir.trim()) ? dir.replace(/[\\/]+$/, '') + '/' + fileName : fileName;
   const abs = resolveVaultPath(rel);
   await fs.promises.mkdir(path.dirname(abs), { recursive: true });
-  if (!fs.existsSync(abs)) await fs.promises.writeFile(abs, '# ' + path.basename(fileName, '.md') + '\n', 'utf8');
+  if (!fs.existsSync(abs)) {
+    // 新建笔记不写入任何内容（md 保持干净，不预置标题）。标题由编辑器顶部标题区
+    // 显示（默认取文件名），双击可改并同步文件名与正文。雪花 id 由 .second-brain/_meta.json
+    // 的 noteId 追踪：首次扫描时生成一次、之后复用，重命名不变更 id。已有文件不覆写。
+    await fs.promises.writeFile(abs, '', 'utf8');
+  }
   aiEngine.updateNote(rel).catch(function () { /* 新建笔记后续索引更新失败不阻塞 */ });
+  scheduleMetaRefresh();
   return rel;
 });
 
@@ -362,6 +832,7 @@ ipcMain.handle('notes:createDir', async (_e, dir) => {
   if (!clean) throw new Error('目录名不能为空');
   const rel = clean.replace(/\\/g, '/');
   await fs.promises.mkdir(resolveVaultPath(rel), { recursive: true });
+  scheduleMetaRefresh();
   return rel;
 });
 
@@ -370,6 +841,7 @@ ipcMain.handle('notes:delete', async (_e, rel) => {
   const abs = resolveVaultPath(rel);
   if (fs.existsSync(abs)) { await fs.promises.unlink(abs); }
   aiEngine.removeNote(rel).catch(function () { /* 移除索引失败不阻塞删除 */ });
+  scheduleMetaRefresh();
   return true;
 });
 
@@ -381,11 +853,78 @@ ipcMain.handle('notes:reveal', async (_e, rel) => {
   return true;
 });
 
+/* 移动目录：把 oldDir 整体搬到 newParent 下（保留内部相对结构 + 空目录）。
+ * 同卷用 fs.rename，跨卷失败则复制后删除源，确保源目录被彻底移除。
+ * 移动后为目录内全部 .md 重绑 AI 索引（旧路径清除 + 新路径重建）。
+ * 返回 { dir, moved }：dir 为移动后相对路径，moved 为移动的 .md 篇数。
+ * 作者: 火 冰 */
+ipcMain.handle('notes:moveDir', async (_e, oldDir, newParent) => {
+  const oldClean = String(oldDir || '').replace(/[\\/]+$/, '');
+  if (!oldClean) throw new Error('目录不能为空');
+  const srcAbs = resolveVaultPath(oldClean);
+  if (!fs.existsSync(srcAbs)) throw new Error('源目录不存在: ' + oldClean);
+
+  const name = oldClean.split('/').pop();
+  const newBase = String(newParent || '').replace(/[\\/]+$/, '');
+  const dstRel = newBase ? newBase + '/' + name : name;
+  // 禁止移动到自身子目录内
+  if (dstRel.startsWith(oldClean + '/')) {
+    throw new Error('不能把目录移动到它自己的子目录里');
+  }
+  const dstAbs = resolveVaultPath(dstRel);
+  if (dstAbs === srcAbs) {
+    // 原地：相对路径未变（如根级目录拖回根空白区），无实际移动，直接返回
+    const out0 = [];
+    await walkNotes(srcAbs, oldClean, out0);
+    return { dir: oldClean, moved: out0.filter(function (n) { return !n.isFolder; }).length };
+  }
+  if (fs.existsSync(dstAbs)) {
+    const exist = await fs.promises.readdir(dstAbs).catch(() => []);
+    if (exist.length > 0) throw new Error('目标目录已存在，无法移动');
+  }
+  await fs.promises.mkdir(path.dirname(dstAbs), { recursive: true });
+  try {
+    await fs.promises.rename(srcAbs, dstAbs);          // 同卷：秒级原子移动
+  } catch (e) {                                        // 跨卷：复制后删源，源目录被移除
+    await fs.promises.cp(srcAbs, dstAbs, { recursive: true });
+    await fs.promises.rm(srcAbs, { recursive: true, force: true });
+  }
+  // 重建目录内全部笔记的 AI 索引：旧相对路径清除、新相对路径重建
+  const out = [];
+  await walkNotes(dstAbs, dstRel, out);
+  const files = out.filter(function (n) { return !n.isFolder; });
+  for (const n of files) {
+    const oldRel = oldClean + n.path.slice(dstRel.length);
+    aiEngine.removeNote(oldRel).catch(function () {});
+    aiEngine.updateNote(n.path).catch(function () {});
+  }
+  scheduleMetaRefresh();
+  return { dir: dstRel, moved: files.length };
+});
+
+/* 删除目录：递归删除该目录（连同所有笔记、子目录与空目录本身），并清理目录内 .md 的 AI 索引。
+ * 返回删除的 .md 篇数。作者: 火 冰 */
+ipcMain.handle('notes:removeDir', async (_e, dir) => {
+  const clean = String(dir || '').replace(/[\\/]+$/, '');
+  if (!clean) throw new Error('目录不能为空');
+  const abs = resolveVaultPath(clean);
+  if (!fs.existsSync(abs)) return 0;
+  // 先清理目录内全部 .md 的 AI 索引，再删除目录实体
+  const out = [];
+  await walkNotes(abs, clean, out);
+  const files = out.filter(function (n) { return !n.isFolder; });
+  for (const n of files) aiEngine.removeNote(n.path).catch(function () {});
+  await fs.promises.rm(abs, { recursive: true, force: true });
+  scheduleMetaRefresh();
+  return files.length;
+});
+
 /* ---------- 笔记库选择 IPC（标题栏库选择器） ---------- */
 
 /* 获取当前笔记库信息：绝对路径 + 显示名（默认库显示「我的笔记库」）+ 默认库路径 */
 ipcMain.handle('vault:get', async () => {
   const p = vaultRoot();
+  scheduleMetaRefresh(); // 打开知识库时后台构建全库（当前目录及全部子目录）的属性数据
   return { path: p, name: currentVault ? path.basename(p) : '我的笔记库', defaultPath: defaultVaultRoot(), history: vaultHistory.slice() };
 });
 
@@ -402,6 +941,7 @@ ipcMain.handle('vault:choose', async () => {
   recordHistory(currentVault);
   saveConfig();
   aiEngine.activateVault(); // 切换后重载对应知识库的索引
+  scheduleMetaRefresh(); // 为新库生成/重建 .second-brain 元数据
   return { canceled: false, path: currentVault, name: path.basename(currentVault), history: vaultHistory.slice() };
 });
 
@@ -416,6 +956,7 @@ ipcMain.handle('vault:switch', async (_e, dir) => {
   recordHistory(currentVault);
   saveConfig();
   aiEngine.activateVault(); // 切换后重载对应知识库的索引
+  scheduleMetaRefresh(); // 为新库生成/重建 .second-brain 元数据
   return { canceled: false, path: vaultRoot(), name: currentVault ? path.basename(currentVault) : '我的笔记库', history: vaultHistory.slice() };
 });
 
@@ -434,6 +975,52 @@ ipcMain.handle('vault:reset', async () => {
   aiEngine.activateVault(); // 切换后重载对应知识库的索引
   const p = vaultRoot();
   return { path: p, name: '我的笔记库', history: vaultHistory.slice() };
+});
+
+/* ============================================
+ * 插件目录 IPC
+ * 每个插件是一个独立目录：plugins/<id>/manifest.json + main.js
+ * 主进程负责扫描目录清单（渲染进程通过 note:// fetch 加载插件代码）
+ * ============================================ */
+
+/* 插件根目录（应用根目录下的 plugins/） */
+function pluginsRoot() { return path.join(ROOT, 'plugins'); }
+
+/**
+ * 扫描插件目录：读取每个子目录的 manifest.json，返回插件清单
+ * @returns {Promise<{id:string, dir:string, manifest:Object, hasMain:boolean}[]>}
+ */
+async function scanPlugins() {
+  const root = pluginsRoot();
+  const out = [];
+  let entries = [];
+  try { entries = await fs.promises.readdir(root, { withFileTypes: true }); }
+  catch (e) { return out; } // 目录不存在视为无插件
+  for (const it of entries) {
+    if (!it.isDirectory()) continue;
+    const dir = path.join(root, it.name);
+    const mf = path.join(dir, 'manifest.json');
+    let manifest = null;
+    try { manifest = JSON.parse(await fs.promises.readFile(mf, 'utf8')); }
+    catch (e) { continue; } // manifest 缺失或损坏的目录跳过
+    if (!manifest || !manifest.id) continue;
+    out.push({ id: manifest.id, dir: dir, manifest: manifest, hasMain: fs.existsSync(path.join(dir, 'main.js')) });
+  }
+  return out;
+}
+
+/* 返回插件目录清单（供渲染进程启动时加载） */
+ipcMain.handle('plugins:list', async () => {
+  const plugins = await scanPlugins();
+  return { plugins: plugins, dir: pluginsRoot() };
+});
+
+/* 在系统文件管理器中打开插件目录（供用户查看/放置插件） */
+ipcMain.handle('plugins:reveal', async () => {
+  const root = pluginsRoot();
+  await fs.promises.mkdir(root, { recursive: true });
+  await shell.openPath(root);
+  return true;
 });
 
 /* 把默认知识库内容迁移到新目录（移动语义：复制成功后清空原默认库）。
@@ -535,6 +1122,7 @@ function initAiEngine() {
     getVaultRoot: vaultRoot,
     configFile: path.join(app.getPath('userData'), 'ai-config.json'),
     indexDir: path.join(app.getPath('userData'), 'ai-index'),
+    modelDir: path.join(app.getPath('userData'), 'models'),
   });
 }
 
@@ -543,6 +1131,32 @@ ipcMain.handle('ai:getConfig', () => aiEngine.getConfig());
 
 /* 保存 AI 配置（本地模型路径 + 远程大模型参数） */
 ipcMain.handle('ai:saveConfig', (_e, cfg) => aiEngine.saveConfig(cfg || {}));
+
+/* 获取模型库状态（下载目录 + 各嵌入模型是否已下载） */
+ipcMain.handle('ai:getModelLib', () => aiEngine.getModelLib());
+
+/* 设置模型下载目录 */
+ipcMain.handle('ai:setModelDir', (_e, dir) => aiEngine.setModelDir(dir));
+
+/* 下载嵌入模型（进度经 ai:modelProgress 推送） */
+ipcMain.handle('ai:downloadModel', async (e, repo, source) => {
+  return await aiEngine.downloadModel(repo, source, function (p) {
+    if (!e.sender.isDestroyed()) e.sender.send('ai:modelProgress', p);
+  });
+});
+
+/* 打开模型下载目录 */
+ipcMain.handle('ai:revealModelDir', () => aiEngine.revealModelDir());
+
+/* 弹出目录选择框，返回所选模型下载目录（取消返回 null） */
+ipcMain.handle('ai:pickModelDir', async () => {
+  const r = await dialog.showOpenDialog(mainWin, {
+    title: '选择模型下载目录',
+    properties: ['openDirectory', 'createDirectory'],
+    defaultPath: (aiEngine.getConfig() && aiEngine.getConfig().modelDir) || undefined,
+  });
+  return r.canceled ? null : r.filePaths[0];
+});
 
 /* 获取 AI 引擎状态（模型加载/当前库索引片段数） */
 ipcMain.handle('ai:getStatus', () => aiEngine.getStatus());
@@ -617,6 +1231,7 @@ app.whenReady().then(async () => {
   // 清除历史磁盘缓存，防止拆分/升级后残留旧 HTML/JS 脚本导致界面空白
   await session.defaultSession.clearCache();
   createWindow();
+  createTray(); // 创建系统托盘图标与菜单（G-12）
 
   // macOS：点击 Dock 图标时若无窗口则重建
   app.on('activate', () => {
@@ -629,7 +1244,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+// 退出前销毁托盘图标，避免系统栏残留无用图标
+app.on('before-quit', () => {
+  if (tray) { tray.destroy(); tray = null; }
+});
+
 /* 导出内部逻辑供单测（Electron 作为主入口加载时无副作用，不影响正常启动） */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { defaultVaultRoot, vaultRoot, loadConfig, saveConfig, recordHistory, migrateDefaultVault };
+  module.exports = { defaultVaultRoot, vaultRoot, loadConfig, saveConfig, recordHistory, migrateDefaultVault, pluginsRoot, scanPlugins };
 }
+

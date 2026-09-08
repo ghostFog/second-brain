@@ -1,0 +1,322 @@
+# 历史 Bug 记录（第二脑 / second-brain）
+
+> **本文档仅为历史 Bug 的实际记录落点。** 记录的规则、状态枚举、去重规则与模板定义见 `.hermes/bug-tracking.md`（唯一权威），此处不重复承载规则。
+
+---
+
+## Bug 记录
+
+- **ID**: Bug-001
+- **日期**: 2026-09-05
+- **现象**: Ribbon 切换到其它视图（搜索/图谱/设置等）再点回「编辑器」时，tab 页签栏与编辑区为空白，未恢复切换前已打开的标签与上一次正在编辑的笔记。
+- **复现地点**: 编辑器视图（editor）
+- **原因**: `initEditor` 仅在 `!edCurrent`（首次启动）时走恢复分支并调用 `renderTabs()/renderArticle()`；从其它视图切回时 `loadView` 会重建整个编辑器 DOM，但 `edCurrent` 非空会跳过恢复分支，导致重建后的 tab 栏/编辑区未被重新渲染而留白。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 在 `initEditor` 末尾补充「切回时若已打开笔记则补渲染」（`edCurrent` 存在时：若 `edOutdated` 缺内容则 `noteStore.read` 装载，随后 `renderTabs()/renderArticle()/renderFileTree(edNotes)`，索引面板若展开则刷新）。仅覆盖切回重建后的补渲染，不重复装载；恢复分支仅负责首次启动。
+- **验证结果**: jsdom 启动冒烟测试 PASS，脚本全部加载、无未捕获异常；改动点仅限切回编辑器时的补渲染逻辑。
+
+- <br />
+
+- **ID**: Bug-002
+- **日期**: 2026-09-05
+- **现象**: 调整窗口大小后，编辑器源码模式的行号（序号）错位，行号列与内容行不再对齐。
+- **复现地点**: 编辑器视图（editor，源码模式行号 gutter）
+- **原因**: 行号列 `#ed-gutter` 采用绝对定位，其 `left/top` 依赖 `getBoundingClientRect()` 计算；但 `renderGutter()` 仅在内容/模式/换行变化时调用，缺少窗口 `resize` 监听，窗口尺寸变化后 textarea 位置与布局改变，gutter 仍按旧坐标定位导致序号错位。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 在 `initEditor` 中增加一次性全局 `resize` 监听（`window.__sbEdResizeBound` 防重复绑定）：仅当编辑器视图可见时，用 `requestAnimationFrame` 触发 `renderGutter()` 重算位置。`renderGutter()` 内部会先调用 `updateCurrentLine()`，一并刷新当前行高亮。
+- **验证结果**: jsdom 启动冒烟测试 PASS，无语法/加载异常；改动仅限编辑区 resize 刷新行号逻辑。
+
+- <br />
+
+- **ID**: Bug-003
+- **日期**: 2026-09-05
+- **现象**: 所见即所得（WYSIWYG）编辑模式下，在编辑区右键不弹出上下文菜单。
+
+- **复现地点**: 编辑器视图 editor，所见即所得模式（`#ed-wysiwyg`）
+
+- **原因**: 编辑区右键委托 `bindEditorContextMenu`（app-editor-ctx.js）只匹配源码 textarea `#ed-edit`；所见即所得模式编辑的是 contenteditable `#ed-wysiwyg`，不在匹配范围，故不触发；且原菜单操作（mdWrap/mdBlockFormat/edClipboard/ta.select()）均基于 textarea API，无法直接复用。
+
+- **状态**: 已修复（测试完成）
+
+- **处理方法**: ①右键委托选择器扩展为 `#ed-edit, #ed-wysiwyg`，按 `edSource` 分支构建菜单：源码 → 原 markdown 语法菜单；所见即所得 → 新增 `buildEdWysiwygSchema`（富文本原生操作：新增链接/加粗/倾斜/删除线/高亮/清除格式、列表/引用/标题/正文、分隔线插入、剪切/复制/粘贴/纯文本/全选）。②新增 `execWys(cmd,value)`：`focus()→document.execCommand→派发 input`；复用 `#ed-wysiwyg` 既有 input 监听（`onEdInput(domToMd(wys))`）自动还原为 Markdown 并同步预览/保存，无需导出额外同步链路。
+
+- **验证结果**: jsdom 启动冒烟测试 PASS，无语法/加载异常；改动仅限编辑区右键菜单的匹配范围与富文本操作集。
+
+- <br />
+
+- **ID**: Bug-004
+- **日期**: 2026-09-05
+- **现象**: 桌面版点击页面角落红色错误徽标（查看运行日志）时报 `Error: prompt() is not supported. @ note://local/js/app-log.js:61`；日志中亦见 `app-editor.js` 新建目录/新建笔记处同类 `prompt()` 报错。
+- **复现地点**: `second-brain/js/app-log.js`（日志徽标点击弹窗）；同类于新建目录/新建笔记的名称输入场景
+- **原因**: Electron 渲染进程不支持原生 `window.prompt()`，仅在**调用时**抛错；代码 `(window.prompt || function(){})` 判空不生效（`prompt` 存在但调用即抛错）。
+- **状态**: 已修复（测试完成）
+- **处理方法**: ①`app-log.js` 徽标点击改为自绘浮层日志面板（新增 `showLogPanel()`，只读 textarea 展示本会话日志），完全移除 `window.prompt`；②新建目录/新建笔记的名称输入已在 `doNewNote`/`doNewFolder` 中改用 `window.inputModal`（DOM 输入框，见 app-input.js），无需再次改动。
+- **验证结果**: `node --check` 语法校验通过；改动仅限徽标点击弹窗。待桌面实测点击徽标查看日志。
+
+- <br />
+
+- **ID**: Bug-005
+- **日期**: 2026-09-05
+- **现象**: 启动时 `Uncaught TypeError: Cannot read properties of null (reading 'insertBefore') @ index.html:146`，来自 `code-highlight` 插件的 `processPre`（MutationObserver 回调内触发）。
+- **复现地点**: `second-brain/plugins/code-highlight/main.js` 的 `processPre`
+- **原因**: `processPre` 在 `pre.parentNode.insertBefore(wrapper, pre)` 处崩溃，因为 MutationObserver 捕获到的 `pre` 在回调执行前已被宿主重新渲染摘除（detached、`parentNode` 为 null），对其执行 `insertBefore` 抛空指针。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 在 `processPre` 入口加防御 `if (!pre || !pre.parentNode || pre.dataset.chProcessed) return;`，detached 的 `pre` 直接跳过，不再执行 `insertBefore`。
+- **验证结果**: `node --check` 语法校验通过；改动仅限一处防御判断。待桌面实测无报错。
+
+- <br />
+
+- **ID**: Bug-006
+- **日期**: 2026-09-05
+- **现象**: 所见即所得模式下表格块渲染为 `<div><table>…</table></div>` 或 `<table>` 被 `<div class="my-3">` 包裹，导致：① `topBlock`（选择器仅 `PRE, BLOCKQUOTE, TABLE, HR` 且要求为 `wys` 直接子节点）命中不了 `table`，单击无法整块选中；② 表格无法作为顶层块被拖拽排序；③ `domToMd` 还原时把表格当作普通 `div` 处理，内容拼成一行、表格结构失真。
+- **复现地点**: `second-brain/js/app-note.js`（renderMarkdown 的 mdTable）、`second-brain/js/app-editor-ctx.js`（insTable 右键插入）
+- **原因**: 表格渲染/插入时被 `<div class="my-3" style="overflow-x:auto;">` 包裹，脱离了「顶层块」的约束，块选中/拖拽/还原都按通用 div 处理而失效。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 移除 `mdTable` 与 `insTable` 中包裹表格的外层 div，让 `<table>` 成为 `wys` 的直接子节点，从而可被 `topBlock` 命中并支持单击选中/拖拽/正确还原。另优化 `topBlock`：单击代码块语言标签（`.code-lang`，为 `<pre>` 兄弟节点）时归并到其后的 `<pre>` 选中代码块。
+- **验证结果**: jsdom 往返测试 6/6 通过（含表格渲染还原）；`node --check` 语法校验通过。
+
+- <br />
+
+- **ID**: Bug-007
+- **日期**: 2026-09-05
+- **现象**: 所见即所得模式下右键菜单「插入」报错（无法插入代码块等块级内容）。代码块插入项点击后无响应/抛异常，无法正常新增代码块。
+- **复现地点**: `second-brain/js/app-editor-ctx.js` 的 `buildEdWysiwygSchema`（`insCode` 代码块、`新增链接`）
+- **原因**: `insCode` 与「新增链接」仍使用 Electron 渲染进程不支持的 `window.prompt()`（与 Bug-004 同根因），调用即抛错，导致「插入」子树的功能项报错。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 将两处 `prompt()` 替换为项目既有的异步输入框 `window.inputModal`（app-input.js，返回 Promise）：`insCode` 与「新增链接」action 改为 `async`，`await window.inputModal(...)` 获取语言/链接后执行插入；插入逻辑与 `renderMarkdown`/`domToMd` 结构保持一致。
+- **验证结果**: jsdom 验证 7/7 通过（无 prompt 残留、插入菜单完整性、代码块插入、语言标签、还原为 ```` ```python ````）；`node --check` 语法校验通过。
+
+- <br />
+
+- **ID**: Bug-008
+- **日期**: 2026-09-06
+- **现象**: ①右键菜单含二级子菜单时，鼠标移到子菜单上（父项与子菜单之间的空隙处）子菜单消失；②所见即所得「插入」菜单项仍报错，无法插入代码块等块级内容。
+- **复现地点**: `second-brain/js/app-editor-ctx.js` 的 `insertWysBlock` 与 `buildEdCtxItem`
+- **原因**: ①`.ctx-submenu` 使用 `left:100% + margin-left:3px`，父项与子菜单间存在 3px 空隙，且子菜单依赖纯 CSS `:hover` 显示，鼠标跨过该空隙时父项失去 `:hover`，子菜单立即隐藏。②`insertWysBlock` 用 `while (wrap.firstChild) nodes.push(wrap.firstChild)` 收集子节点，但未 `removeChild`，`firstChild` 恒存在导致死循环，数组无限增长触发 `RangeError: Invalid array length`。
+- **状态**: 已修复（测试完成）
+- **处理方法**: ①根因是 `.ctx-submenu` 的 `left:100% + margin-left:3px、top:-6px` 造成父项与子菜单之间存在空隙、`:hover` 一断子菜单即收。结构性修复：将空隙归零（`top:0; margin-left:0`）、子菜单贴齐父项右缘，鼠标移入即命中父项 `:hover`（子菜单是父项后代）不再消失；并保留 JS 悬停管理作双保险（`buildEdCtxItem` 挂 `mouseenter` 展开+互斥、`mouseleave` 延迟 250ms 收起、子菜单 `mouseenter` 清延迟），新增 `.edit-ctx-item > .ctx-submenu.show` 显式显示规则，`closeEditorContextMenu` 清定时器。②`insertWysBlock` 收集子节点改为边移边取：`while (wrap.firstChild) { nodes.push(wrap.firstChild); wrap.removeChild(wrap.firstChild); }`。
+- **验证结果**: 针对性 jsdom 诊断 0 报错（代码块插入成功、子菜单悬停展开/延迟收起）；冒烟测试新增 4 断言（Bug-008 相关）共 58 通过；`npm test` 回归 5 通过；`node --check` 通过。
+
+- <br />
+
+- **ID**: Bug-009
+- **日期**: 2026-09-06
+- **现象**: 所见即所得模式右键「插入 > 代码块」：插入一个区块（视觉上像一条分割线），切换源码模式时该代码块内容要么为空，要么把内容拼到 fence 行（如 `` ```text11 ``），无法还原成 ```` ``` ```` 围栏式代码块。
+- **复现地点**: `second-brain/js/app-editor-ctx.js` 的 `insertWysBlock`（右键菜单「插入>代码块/表格/标注/数学块」共用）
+- **原因**: 光标停留在段落 `<p>` 内时（右键最常见位置），`insertWysBlock` 用 `range.insertNode(frag)` 把 `<pre>` 作为 `<p>` 的子节点插入；而 `domToMd` 只遍历 `#ed-wysiwyg` 的顶层子节点，被嵌进 `<p>` 的 `<pre>` 被当行内内容处理，围栏丢失，内容错乱或丢失。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 新增顶层锚定助手 `topLevelWysBlock(node, root)`；`insertWysBlock` 改为：有选区时先求光标所在顶层块，块级 frag 一律插到该顶层块之后（兄弟关系），仅当锚点即 wys 或折叠在根时才 `appendChild/insertNode`。保证 `#ed-wysiwyg` 的块级元素恒为顶层子级，`domToMd` 能正确还原为 ```` ``` ```` 围栏。
+- **验证结果**: 针对性 jsdom 诊断：段落内插入后 `wys` 顶层子级=2（`<p>` 与 `<pre>` 平级），`domToMd` 往返为 `第一行\n```\n\n````、输入 11 后为 `第一行\n```\n11\n````；冒烟测试（用例 17 扩展为 4 断言：顶层兄弟 + 围栏往返 + 内容保留）共 58 通过；`npm test` 回归 5 通过；`node --check` 通过。
+
+- <br />
+
+- **ID**: Bug-010
+- **日期**: 2026-09-06
+- **现象**: 所见即所得模式新插入的「空代码块」（仅含一个 `<br>`，无内容、无语言）在编辑区渲染成一条很细的横向线，而不是一个可见的代码区块。
+- **复现地点**: `second-brain/css/app.css`（所见即所得块样式区）
+- **原因**: 空代码块 `<pre><br></pre>` 无高度内容，仅靠 `padding` 撑起极薄的一条，视觉上近似分割线；没有为其提供最小可见高度。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 双保险：①把 `min-height: 3rem` 直接写进插入代码块的内联样式（`insCode` 的 `<pre style="…min-height: 3rem…">`），内联样式必然生效、不依赖 `:has` 等选择器在运行 Chromium 中是否支持——这是新插入空代码块保证有高度的可靠手段；②保留 CSS `#ed-wysiwyg pre:has(> br:only-child) { min-height: 3rem }` 作为兜底（对任何空代码块同样生效，输入内容后自动失效）。
+- **验证结果**: `node --check` 通过；冒烟测试 59 通过；`npm test` 回归 5 通过（CSS 渲染为浏览器层，冒烟做的是插入 DOM 结构回归）。
+
+- <br />
+
+- **ID**: Bug-011
+- **日期**: 2026-09-06
+- **现象**: 点击代码块后，右下角不显示当前块的语言选择器（chip），显隐失控。
+- **复现地点**: `second-brain/css/app.css` 的 `.mde-code-lang`
+- **原因**: JS 用 `hidden` 属性控制 `.mde-code-lang` 显隐（`el.hidden = true/false`），但 CSS `.mde-code-lang { display: flex }` 会覆盖 UA 样式表中 `[hidden] { display: none }`（作者样式优先于 UA 样式），导致 `hidden` 切换不生效——选取代码块时 `hidden=false` 也不一定能按预期布局显示（且初始可能停靠在视口 0,0 处）。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 新增 `.mde-code-lang[hidden] { display: none !important; }`，让 `hidden=true` 时真正隐藏、`hidden=false` 时按 `.mde-code-lang` 的 `display:flex` 正常显示；配合 `showCodeLangPicker` 定位到代码块右下角。
+- **验证结果**: 冒烟测试用例 16 改为走真实点击路径（`selectWysBlock(PRE)` → 选择器显示态 + 文本 `text` → 应用语言 → 取消选中后隐藏），共 59 通过；`npm test` 回归 5 通过；`node --check` 通过。
+
+- <br />
+
+- **ID**: Bug-012
+- **日期**: 2026-09-06
+- **现象**: 打开含代码块的笔记时，代码块「打开的瞬间有高度，随后塌陷成一条扁横线」（仅剩单行文本高度）。
+- **复现地点**: `second-brain/js/app-note.js` 的 `renderMarkdown`（WYSIWYG 与预览共用）
+- **原因**: `renderMarkdown` 对代码块的 `<pre>` 高度/间距依赖 **Tailwind-browser 运行时（`js/vendor/tailwind-browser.js`）的类**（`p-4 text-[13px] leading-relaxed` 等），而内联 `style` 里没有 padding、没有 min-height。tailwind-browser 对页面加载后**动态注入的 innerHTML 类处理并不可靠**（尤其是重渲染场景），类一旦失效，代码块就只剩一行文本高度。插入的空代码块（Bug-010 已给它内联 `min-height:3rem`）没问题，但「打开已有代码块」走的渲染路径没有这个内联保障。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 把代码块的关键布局（`font-family: var(--note-font-mono); font-size:13px; line-height:1.65; padding:0.9rem 1.1rem; min-height:3rem`）直接写进 `<pre>` 的**内联 `style`**，与插入路径一致，不再依赖 tailwind 运行时的类处理；语言标签 `.code-lang` 保持原有内联样式。
+- **验证结果**: 隔离 jsdom 调用 `renderMarkdown('```text\nfoo\n```')` 断言内联含 `min-height:3rem`、`padding:0.9rem` 且输出 `code-lang` 标签；冒烟测试新增用例 19，共 **62 通过、0 失败**；`npm test` 回归 5 通过；`node --check` 通过。
+
+- <br />
+
+- **ID**: Bug-013
+- **日期**: 2026-09-06
+- **现象**: 代码块语言下拉框定位异常——点开下拉后向下溢出视口底部被裁切（锚定只在 chip 未展开时测高，未计入下拉展开后的真实高度）。
+- **复现地点**: `second-brain/js/app-editor.js` 的 `anchorCodeLangPicker` + chip 点击切换
+- **原因**: `anchorCodeLangPicker` 在 `showCodeLangPicker`（下拉未打开）时用 `mdeCodeEl.offsetHeight`（仅 chip 高度）判断「视口下方是否放得下」，此时通常判为充足，把容器放到 `pre` 底部；随后点开下拉，下拉约 250px 高度加入后向下溢出视口底部。
+- **状态**: 已修复（测试完成）
+- **处理方法**: chip 点击打开下拉后，重新调用 `anchorCodeLangPicker(mdeCodePre)`——此时 `offsetHeight` 含下拉真实高度，视口下方放不下时自动翻转到代码块上方。
+- **验证结果**: 冒烟测试用例 16 增加「点击 chip 展开/收起下拉 + 下拉渲染 ≥8 语言」，共 **65 通过、0 失败**；`npm test` 回归 5 通过；`node --check` 通过。
+
+- <br />
+
+- **ID**: Bug-014
+- **日期**: 2026-09-06
+- **现象**: 桌面「软件里」代码块显示与浏览器不一致：查看时是 `code-highlight` 插件的右上角静态语言标签 + 复制按钮 + hljs 高亮，而非新功能的右下角可交互语言选择器；且该插件会改造【所见即所得编辑区】的 `<pre>`（把可编辑内容替换成 hljs 高亮 `code`），污染块区编辑与 md 往返。
+- **复现地点**: `second-brain/plugins/code-highlight/main.js`（桌面版目录插件，web 版不加载故无此问题）
+- **原因**: 插件的 `MutationObserver` 监听 `document.body` 下所有 `<pre>`，连 `#ed-wysiwyg` 编辑区内的代码块也一并 `processPre` 改造成高亮结构，与宿主「可编辑原生 pre + 右下角语言选择器」功能冲突。
+- **状态**: 已修复（测试完成）
+- **处理方法**: ①`processPre` 增加守卫：向上查找找到 `#ed-wysiwyg` 时跳过，只增强预览/阅读视图的代码块，编辑区保持可编辑原生 pre（语言选择器/编辑/往返一致）；②`styles.css` 的 `.ch-code pre code` 增加 `min-height: 3rem`，空代码块也有可见最小高度。
+- **验证结果**: `node --check plugins/code-highlight/main.js` 通过；冒烟 65 通过；`npm test` 回归 5 通过。
+
+- <br />
+
+- **ID**: Bug-015
+- **日期**: 2026-09-06
+- **现象**: 点击代码块外部关闭语言下拉后，右下角的语言 chip 会跑到左边（左对齐），不再贴在代码块右下角。
+- **复现地点**: `second-brain/js/app-editor.js` 的 `anchorCodeLangPicker` + 下拉关闭路径（chip 点击/ESC/外部 mousedown）
+- **原因**: 下拉打开时（Bug-013 修复）按「含 210px 下拉的容器宽度」计算 `left = r.right - w - 4`；下拉关闭后容器缩回 chip 宽度（~80px），但 `left` 没有重算，导致 chip 视觉上左移（打开时的 left 仍按 210px 容器定位）。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 所有关闭下拉的路径（chip 再点、ESC、外部 mousedown）都追加 `anchorCodeLangPicker(mdeCodePre)`，用「仅 chip 的容器宽度」重算 left/top，使 chip 重新贴回代码块右下角；打开路径同样重锚（保持一致）。
+- **验证结果**: `node --check` 通过；冒烟 65 通过；`npm test` 回归 5 通过。
+
+- <br />
+
+- **ID**: Bug-016
+- **日期**: 2026-09-06
+- **现象**: 所见即所得模式下删除带语言标签的代码块后：①残留一个空的 `.code-lang` 语言标签；②光标被放到该空语言标签 div 内（而非相邻内容块），导致光标消失/乱跳；右键「删除本块」与选中态按 Backspace/Delete 均受影响。
+- **复现地点**: `second-brain/js/app-editor-ctx.js` 的 `deleteWysBlock`、`second-brain/js/app-editor.js` 的选中态 keydown 删除分支
+- **原因**: 删除后取相邻块用 `blk.previousElementSibling`，而 `.code-lang` 语言标签是 `<pre>` 的前置兄弟节点，删除代码块时 `prev` 取到的是空语言标签 div，`placeCaretAtEnd(prev)` 把光标塞进空标签；且只删 `<pre>` 不删语言标签，残留空标签参与 md 往返。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 新增相邻内容块助手 `wysAdjacentContent(blk,dir)`：取相邻兄弟时跳过 `.code-lang` 标签，返回真正的内容块；`deleteWysBlock` 删除代码块时视觉语言标签与 `<pre>` 一并删除；无相邻内容块时归一到容器开头 `placeCaretAtWysStart`；选中态 keydown 的 Backspace/Delete 分支改为复用 `deleteWysBlock`（消除重复实现，行为一致）。
+- **验证结果**: 冒烟测试新增用例 20b（4 断言：带标签代码块删除、语言标签随删、往返无残留、光标落相邻段落）共 **78 通过、0 失败**；`npm test` 回归 5 通过。
+
+- <br />
+
+- **ID**: Bug-017
+- **日期**: 2026-09-06
+- **现象**: 所见即所得编辑器中，在某个块上右键选择「插入→表格/代码块/标注」后，新块插入到了**文档首行**而非所点块之后。
+- **复现地点**: `second-brain/js/app-editor-ctx.js` 的 `insertWysBlock`
+- **原因**: 块插入锚点取自 `range.startContainer` 所在顶层块（光标位置）。右键时不会移动光标，光标仍停留在早期位置（常为首行），导致插入块落到首行而非右键命中的块之后。
+- **状态**: 已修复（测试完成）
+- **处理方法**: `insertWysBlock(html, anchor)` 新增可选 `anchor` 参数——调用方（`insCode/insQuote/insTable/insTask/insFoot/insMath`）统一传入右键命中的块 `edCtxHit.block`（`evHitAnchor()` 读取）；有可用 anchor 时插入到该块之后，anchor 为空回退原光标逻辑。
+- **验证结果**: 冒烟测试新增用例 22（2 断言：anchor 块之后插入、首行未被抢占）共 **86 通过、0 失败**；`npm test` 回归 5 通过。
+
+- <br />
+
+- **ID**: Bug-011
+- **日期**: 2026-09-06
+- **现象**: 编辑器「链接」相关操作（插入/编辑链接弹框）报错：`docButton is not defined`（ReferenceError），弹框按钮无法渲染。
+- **复现地点**: 所见即所得与源码模式的链接弹框（`window.inputLinkModal`）
+- **原因**: `docButton` 原是 `inputModal` 函数内的局部函数，`inputLinkModal` 在其函数作用域之外调用，导致访问不到 `docButton`。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 将 `docButton` 提升为 `app-input.js` IIFE 模块级公共函数，供 `inputModal` 与 `inputLinkModal` 共用；`app-input.js` 版本号由 `?v=1` 更新为 `?v=2` 强制缓存刷新。
+- **验证结果**: 链接弹框的 确定/取消 按钮正常渲染；`npm test` 回归 5 通过、冒烟 86 通过。
+
+- <br />
+
+- **ID**: Bug-018
+- **日期**: 2026-09-07
+- **现象**: 预览/所见即所得渲染代码块时，在 `<pre>` 前输出一个可见的幽灵语言标签 `.code-lang`（如左上角"CSS"）显示于代码块上方；该标签仅为展示、不承载语法信息（语言已存于 `<pre data-lang>`），与右下角可交互语言选择器（chip）重复，影响排版观感。
+- **复现地点**: `second-brain/js/app-note.js`（renderMarkdown）、`second-brain/js/editor/editor-md.js` 与 `second-brain/plugins/markdown-editor/common/md-helper.js`（applyCodeLang）、`second-brain/plugins/markdown-editor/common/md-render.js`（迁移后的渲染）
+- **原因**: 旧渲染在 `<pre>` 前另插一个可见的 `.code-lang` div 展示语言，语言信息重复（`data-lang` 已足够）；且按「Markdown 渲染迁入插件」的规划，桌面版渲染改由插件闭包内的 `renderMarkdown` 承担，需与宿主导出结构一致——两端都应去掉该可见幽灵标签。
+- **状态**: 已修复（测试完成）
+- **处理方法**: ①新增 `second-brain/plugins/markdown-editor/common/md-render.js`：把 `esc/inline/renderMarkdown` 迁入插件公共层（`manifest.scripts` 首项声明），渲染代码块不再输出 `.code-lang`，语言仅写 `<pre data-lang>`；插件 `main.js` 的 `renderWysiwyg` 经闭包直接引用该实现。②宿主 `app-note.js` 的 `renderMarkdown` 回退实现同步去掉 `.code-lang` 输出（web/AI 预览不再见幽灵标签；语言仍可经 `data-lang` 序列化回 markdown）。③`applyCodeLang`（宿主 `editor-md.js` 与插件 `common/md-helper.js`）不再创建 `.code-lang` 兄弟，仅保留清理历史残留。
+- **验证结果**: 新增回归 Bug-006 断言（代码块保留 `data-lang="css"`、不再输出 `class="code-lang"`），`npm test` 7 通过、0 失败；`node --check` 全部通过。
+
+- <br />
+
+- **ID**: Bug-019
+- **日期**: 2026-09-07
+- **现象**: 所见即所得「插入表格」后切源码模式，表格 markdown 中出现大量换行+空格的空单元格行（`| 空格 |` 跨多行），而非整洁的 `|  |  |` 空单元格。
+- **复现地点**: 表格序列化 `domToMd` 的 `table` 分支 —— 宿主 `second-brain/js/editor/editor-md.js` 与插件 `second-brain/plugins/markdown-editor/common/md-serialize.js`
+- **原因**: 新插入表格的空单元格用 `<td><br></td>` 占位（保证可见高度）；`domToMd` 序列化单元格时 `inlineToMd` 把 `<br>` 归一为 `'\n'`，于是空单元格输出为换行符，`vals.join(' | ')` 拼出 `| \n | \n |` 的多行空单元格。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 表格分支序列化单元格时归一换行：`inlineToMd(c).replace(/\n+/g, ' ').trim()`——Markdown 管道表格单元格本身不能含换行，空占位 `<br>` 归一为空字符串，含文本+换行的单元格则坍缩为单空格。宿主与插件两处 `domToMd` 同步修改。
+- **验证结果**: 新增回归 Bug-019 断言（构造 1 表头 + 1 空数据行的表格，`domToMd` 输出等于 `| 列1 | 列2 |\n| --- | --- |\n|  |  |`），`npm test` 8 通过、0 失败；`node --check` 通过。
+
+- <br />
+
+- **ID**: Bug-020
+- **日期**: 2026-09-07
+- **现象**: ①所见即所得末尾是块（表格等）时，从源码切回所见即所得后块后没有可回车新增的空行（该功能此前在 `renderArticle` 已实现，切模式路径却缺失）；②渲染的空表格数据单元格塌陷成细条无高度（图2）。
+- **复现地点**: `second-brain/js/editor/editor-host.js`（`toggleSource` 重渲染分支）、`second-brain/plugins/markdown-editor/common/md-render.js` 与 `second-brain/js/app-note.js`（`renderMarkdown` 表格分支）
+- **原因**: ①`toggleSource` 进入所见即所得时 `wys.innerHTML = rwRender(md)` 重建内容但未调用 `appendWysTrailingP(wys)`（`renderArticle` 有调用），导致结尾块后空段丢失；②渲染程序的表格分支对空单元格输出 `<td></td>`（无 `<br>` 占位），与插入路径（`<td><br></td>`）不一致，空行塌缩。
+- **状态**: 已修复（测试完成）
+- **处理方法**: ①`toggleSource` 进入所见即所得分支补 `appendWysTrailingP(wys)`；②`renderMarkdown`（插件 md-render + 宿主 app-note）表格单元格用 `(inline(c) || '<br>')` 为空补 `<br>` 占位，与插入路径一致；③CSS 增加 `#ed-wysiwyg td, th { height: 1.5rem; }` 兜底（table 内 td 的 height 呈最小高度语义，空格不塌缩）。
+- **验证结果**: 新增回归 Bug-020 断言（渲染空单元格输出 `<br>`、渲染→序列化往返后表格行内无残留换行），`npm test` 10 通过、0 失败。
+
+- <br />
+
+- **ID**: Bug-021
+- **日期**: 2026-09-07
+- **现象**: 所见即所得中点击表格某个 `td`，光标仅在格内闪一下就弹回块最前面，无法在单元格编辑内容；且新插入表格视为"空白"无法交互。
+- **复现地点**: `second-brain/js/editor/editor-host.js`（WYSIWYG 单击处理，`wysBlockTags` 含 `TABLE`）
+- **原因**: WYSIWYG 单击处理对 `wysBlockTags()` 返回的顶层特殊块一律执行 `selectWysBlock`（整块选中并 `contenteditable=false`、光标移到块前）。表格被归为此类后，单击格内任何位置都把整表锁定、光标被强制移到表前，导致无法输入。该"单击整块选中"的交互只适合代码块这种需按源码编辑的块，不适合表格。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 单击处理对 `TABLE` 特判——单击不整块选中，仅清除上一块的选中态后交由浏览器原生把光标落进所在单元格直接编辑；其余特殊块(PRE/BLOCKQUOTE/HR)仍保持单击整块选中。表格整表删除/拖拽仍经右键菜单与拖动（dragstart 用 `topBlock` 不受影响）。
+- **验证结果**: 手动验证单击表格格内可直接定位光标输入；`node --check` 通过、`npm test` 10 通过、0 失败。
+
+- <br />
+
+- **ID**: Bug-022
+- **日期**: 2026-09-07
+- **现象**: 光标位于表格之后的空占位段内按 Backspace，需按三次才删掉表格：第一次光标移到表格末，第二次选中表格内容，第三次才删除。
+- **复现地点**: `second-brain/js/editor/editor-host.js`（`#ed-wysiwyg` 的 keydown 退格处理）
+- **原因**: 退格删除整块的逻辑（L637）只在 `edBlockSel` 已选中块时才触发；而表格经 Bug-021 修复后单击不再整体选中（`edBlockSel` 常为空），于是退格落到浏览器原生行为：光标先在块边界移动、原生再选中表格、最后才删除，形成三连。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 在 keydown 里新增"光标位于空占位段（无文本）且其前一个兄弟是顶层特殊块(TABLE/PRE/BLOCKQUOTE/HR)"的预判：此时按 Backspace 直接 `deleteWysBlock` 前一块，一次删除，不再交给原生多击。
+- **验证结果**: `node --check` 通过、`npm test` 10 通过、0 失败（可视化按键行为需桌面版手工复核）。
+
+- <br />
+
+- **ID**: Bug-023
+- **日期**: 2026-09-07
+- **现象**: 所见即所得直接插入表格后整表"空白"（无格线，仅能点击进格），切换源码再切回（走渲染）才显示边框。已给插入路径 td 补行内 border，重启后仍不显示。
+- **复现地点**: `second-brain/plugins/markdown-editor/features/table.js`（插入路径）+ `second-brain/css/app.css`（缺兜底）
+- **原因**: 插入路径的表格是否显格线完全依赖生成时带不带行内 `style="border:..."`，一旦该路径取到的代码与内联样式不一致（拼接/加载差异），整表便无边框、白底一片；渲染路径有行内边框才正常。根因是"格线只靠内联样式承载、无 CSS 兜底"。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 给 `#ed-wysiwyg table` 统一加 CSS 兜底格线（`border-collapse:collapse` + `table`/`td`/`th` 各 `border:1px solid var(--note-border)`），不再依赖插入/渲染各自的行内样式，任何路径都保证显示格线。
+- **验证结果**: `node --check` 通过、`npm test` 10 通过、0 失败（可视化样式需重启桌面版复核）。
+
+- <br />
+
+- **ID**: Bug-024
+- **日期**: 2026-09-07
+- **现象**: 桌面版代码块**预览/阅读视图右上角的悬浮复制按钮（`ch-copy-btn`）失效**：点击后既没把代码复制进剪贴板，按钮也无任何"已复制"对勾反馈（静默失败）。仅桌面版有此问题（web 版不加载 code-highlight 插件）。
+- **复现地点**: `second-brain/plugins/code-highlight/main.js`（`processPre` 注入的复制按钮点击处理）
+- **原因**: 复制按钮点击只走 `navigator.clipboard.writeText(text).then(...)`，**没有 `.catch`/execCommand 回退**。在 Electron / `note://` 协议下 Clipboard API 的 `writeText` 常被拒绝（`NotAllowedError`），`.then` 不触发 → 内容未复制、按钮无反馈、无任何提示，与 Bug-021 同因（markdown-editor 的 `wysCopyBlock` 已修，此处漏修）。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 复制按钮点击处理重构为与 `wysCopyBlock` 一致的三段式：①Clipboard API 可用则 `writeText(...).then(flashCopied).catch(fallbackCopy)`；②被拒/不可用时回退 `document.execCommand('copy')` 选区复制（成功 `flashCopied` 亮对勾、失败 `showToast('复制失败')`）；③新增 `flashCopied`/`flashFail`/`fallbackCopy` 局部助手。修复后不扩散其余逻辑。
+- **验证结果**: jsdom 回归新增 Bug-024 断言（加载插件生成 `.ch-copy-btn`，Clipboard 被拒时回退 `execCommand('copy')` 并亮 `copied`），`npm test` **15 通过、0 失败**；真实 Electron CDP 实测：`writeRejected:true` → `execCalls:["copy"]` → `copied:true`，复制按钮回退生效。
+
+- <br />
+
+- **ID**: Bug-025
+- **日期**: 2026-09-07
+- **现象**: 所见即所得表格右键菜单「在左侧插入列」「在右侧插入列」无论右键哪个列，新列都固定插到最左列（`在左侧/右侧`行为一致且错误）。
+- **复现地点**: `second-brain/plugins/markdown-editor/features/table.js`（`wysTableOp` 列增删）、`second-brain/plugins/markdown-editor/features/context.js`（表格菜单项）、宿主 `second-brain/js/app-editor-ctx.js`（`wysTableOp` + 菜单项兜底）
+- **原因**: `wysTableOp` 列插入的目标列索引取自 `document.getSelection()`（`refTd.closest('td,th')`）。右键不会移动光标/选区，选区常早停在别处或空，导致 `refTd` 为 null 或不在当前表 → `idx=0` 固定插到最左列。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 从右键命中信息携带目标单元格：①`resolveWysHit`（宿主 app-editor-ctx.js 与插件 common/md-helper.js）在表格命中时新增 `hit.cell = target.closest('td,th')`；②菜单项把 `hit.cell` 作为第三参传入 `wysTableOp(table, op, refCell)`；③`wysTableOp` 列插入优先取传入 `refCell`（`closest('table')===table` 校验）→ 回退选区单元格 → 兜底 `idx=0`。宿主与插件两处同步修改。
+- **验证结果**: 新增回归 Bug-025 断言（jsdom 加载插件 table.js，构造 3 列表格，命中第 2 列 `col-before` 后新列在第 2 位、`col-after` 后新列在第 2 列右侧、列序正确），`npm test` **21 通过、0 失败**。
+
+- <br />
+
+- **ID**: Bug-026
+- **日期**: 2026-09-08
+- **现象**: 打开软件后目录区与页签正常，但编辑器正文区空白（vditor 工具栏渲染正常、内容不显示）；点击编辑/页签往返时同样出现正文空白。日志出现 `[vd-after] setValue error: TypeError: this.setValue is not a function`。
+- **复现地点**: `second-brain/js/editor/editor-vditor.js`（`buildVditor` 的 `options.after` 回调）
+- **原因**: vditor 实例化后首帧渲染是异步的（在 `options.after` 回调完成后才渲染正文）。启动/切换时宿主先 `vdInit` 建实例，随后 `vdSyncValue` 在实例未就绪（`vdReady=false`）时把内容暂存 `vdPending`，待 `after` 触发后补渲。但 `after` 回调在 vditor 源码中被平调用（`mergedOptions.after()`），回调内 `this` 不指向 vditor 实例（实际为 window），`this.setValue` 抛错 → 补渲失败 → 正文空白。
+- **状态**: 已修复（测试完成）
+- **处理方法**: ①弃用 `this`，改为闭包捕获构造后的实例 `inst`（`inst = new window.Vditor(...)`，并用 `inst || vdInst` 兜底，兼容回调在构造返回前触发的极端时序）；②`after` 内 `target.setValue(pending)` 补渲成功，并加日志 `[vditor] 首帧渲染完成，已补渲 N 字符` 便于落盘排查；③移除 `main.js` 中用于定位本问题的临时 DOM 轮询诊断代码。
+- **验证结果**: 重新 `npm start` 实测，日志出现 `[vditor] 首帧渲染完成，已补渲 51 字符`，且不再出现 `setValue error`，启动即自动恢复上次笔记正文，编辑区不再空白。
+- **防再犯要点**: vditor（及同类第三方编辑器）的 `after`/事件回调若需调用实例方法，必须用闭包捕获的实例引用（`inst || vdInst`），不能依赖回调内 `this`（平调用时指向非实例上下文）。
+
+- <br />
+
+- **ID**: Bug-027
+- **日期**: 2026-09-09
+- **现象**: 在「设置-外观」调整主题后切回编辑器，编辑区空白（`#ed-vditor` 元素存在但无 vditor 渲染，视图显隐全为 none）。
+- **复现地点**: 编辑器视图（editor）+ 视图切换 `loadView`（`second-brain/js/app-layout.js`）与 vditor 桥接（`second-brain/js/editor/editor-vditor.js`）
+- **原因**: `vdInst` 是模块级变量。从编辑器切到其它视图时，`loadView` 用 `viewRoot.innerHTML` 直接替换 DOM，旧 vditor 实例及其 DOM 一并被销毁，但 `vdInst` 仍持有已失效实例引用；切回编辑器时 `vdInit → ensureVd` 因 `if (!vdInst)` 为 false 而不重建新实例，新 DOM 上无 vditor 渲染 → 编辑区空白。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 在 `loadView` 离开编辑器视图（`activeView === 'editor'`）时，于替换 DOM 前显式调用 `window.vdDestroy()` 释放 `vdInst` 引用；返回编辑器时 `vdInit → ensureVd` 会在全新 DOM 上 `buildVditor` 重建实例。
+- **验证结果**: CDP（9223）实测：刷新加载 → `#ed-vditor` 呈 `ed-vditor vditor`、`.vditor-ir:block`（正常渲染）；切到设置（`#ed-vditor` 移除）→ 切回编辑器 `#ed-vditor` 恢复 `ed-vditor vditor`、`.vditor-ir:block`，编辑区不再空白。
+- **防再犯要点**: 视图重建（`loadView` 重入）时，若该视图承载拥有模块级实例/引用的第三方编辑器（vditor 等），切离该视图前必须显式销毁并清空模块级实例引用（`vdDestroy`），否则切回时 `ensureVd` 不会在新 DOM 上重建而留白。
+
+- <br />

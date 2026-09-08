@@ -13,6 +13,13 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   toggleMaximize: () => ipcRenderer.send('win:maximize'),
   /** 关闭窗口 */
   close: () => ipcRenderer.send('win:close'),
+  /** 关闭按钮行为：confirm/quit/tray（供设置页调整并持久化） */
+  getCloseAction: () => ipcRenderer.invoke('win:getCloseAction'),
+  setCloseAction: (val) => ipcRenderer.invoke('win:setCloseAction', val),
+  /** 写运行日志（落盘到 userData/logs/app.log） */
+  log: (level, msg, detail) => ipcRenderer.send('app:log', { level: level, msg: msg, detail: detail }),
+  /** 同步确认对话框（window.confirm 的 Electron 实现，返回是否确定） */
+  confirm: (msg) => ipcRenderer.sendSync('dialog:confirm', msg),
   /** 列出笔记库全部笔记：挂起返回 [{path,name,folder,mtime,size}] */
   listNotes: () => ipcRenderer.invoke('notes:list'),
   /** 读取单篇笔记原文 */
@@ -27,6 +34,22 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   deleteNote: (relPath) => ipcRenderer.invoke('notes:delete', relPath),
   /** 在系统文件管理器中显示该笔记 */
   revealNote: (relPath) => ipcRenderer.invoke('notes:reveal', relPath),
+  /** 移动整个目录到新父目录（保留内部结构 + 空目录；源目录被移除），返回 {dir, moved} */
+  moveDir: (oldDir, newParent) => ipcRenderer.invoke('notes:moveDir', oldDir, newParent),
+  /** 删除整个目录（含子目录与空目录本身），返回删除的 .md 篇数 */
+  removeDir: (dir) => ipcRenderer.invoke('notes:removeDir', dir),
+  /** 重建 .second-brain 元数据（每个目录一条 _meta.json 记录），返回 {dirs, updatedAt} */
+  refreshMeta: () => ipcRenderer.invoke('notes:refreshMeta'),
+  /** 读取某笔记所在目录的元数据记录 + 该笔记自身属性：返回 {dir, noteName, meta, note} */
+  fileMeta: (relPath) => ipcRenderer.invoke('notes:fileMeta', relPath),
+  /** 读取某目录的元数据记录（目录属性：文件列表 children + 总大小等）：'' 表示根目录 */
+  dirMeta: (dir) => ipcRenderer.invoke('notes:dirMeta', dir),
+  /** 读取最近打开的笔记路径列表（.second-brain/recent.json）：{tabs, pinned} */
+  recentLoad: () => ipcRenderer.invoke('notes:recentLoad'),
+  /** 保存最近打开的笔记路径列表 + 锁定集合（.second-brain/recent.json）：接收 {tabs, pinned} */
+  recentSave: (paths) => ipcRenderer.invoke('notes:recentSave', paths),
+  /** 保存单篇笔记的「索引分块」覆盖配置（块大小/相邻重叠/可选显式偏移值）；chunk={reset:true} 清除覆盖 */
+  saveNoteChunk: (relPath, chunk) => ipcRenderer.invoke('notes:saveNoteChunk', relPath, chunk),
   /** 获取当前笔记库信息：{path, name, history} */
   getVault: () => ipcRenderer.invoke('vault:get'),
   /** 打开目录选择器切换到（或新建）笔记库，返回 {canceled, path, name, history} */
@@ -37,6 +60,14 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   removeVault: (dir) => ipcRenderer.invoke('vault:remove', dir),
   /** 恢复默认笔记库（userData/vault 或已迁移后的新默认库），返回 {path, name, history} */
   resetVault: () => ipcRenderer.invoke('vault:reset'),
+
+  /* ---------- 插件目录桥接 ---------- */
+  plugins: {
+    /** 列出插件目录中的插件：{plugins:[{id,dir,manifest,hasMain}], dir} */
+    list: () => ipcRenderer.invoke('plugins:list'),
+    /** 在系统文件管理器中打开插件目录 */
+    reveal: () => ipcRenderer.invoke('plugins:reveal'),
+  },
   /** 迁移默认知识库到新目录（移动语义），返回 {canceled, path, name, history, error} */
   migrateVault: () => ipcRenderer.invoke('vault:migrate'),
 
@@ -46,6 +77,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     getConfig: () => ipcRenderer.invoke('ai:getConfig'),
     /** 保存 AI 配置 */
     saveConfig: (cfg) => ipcRenderer.invoke('ai:saveConfig', cfg),
+    /** 预览某篇笔记按给定分块配置生成的索引分块（属性-索引分块面板实时展示）；maxChunkSize 为单块长度上限，0=不限制 */
+    previewChunk: (rel, size, overlap, offsets, maxChunkSize) => ipcRenderer.invoke('ai:previewChunk', rel, size, overlap, offsets, maxChunkSize),
     /** 获取 AI 引擎状态 */
     getStatus: () => ipcRenderer.invoke('ai:getStatus'),
     /** 获取当前提供方可用的生成模型列表 */
@@ -85,6 +118,21 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     onProgress: (cb) => {
       ipcRenderer.removeAllListeners('ai:progress');
       ipcRenderer.on('ai:progress', (_e, p) => cb(p));
+    },
+    /** 获取模型库状态（下载目录 + 各嵌入模型是否已下载） */
+    getModelLib: () => ipcRenderer.invoke('ai:getModelLib'),
+    /** 设置模型下载目录（空串=恢复默认目录） */
+    setModelDir: (dir) => ipcRenderer.invoke('ai:setModelDir', dir),
+    /** 弹出目录选择框（返回所选路径或 null） */
+    pickModelDir: () => ipcRenderer.invoke('ai:pickModelDir'),
+    /** 从远端下载嵌入模型；进度经 onModelProgress 回调推送 */
+    downloadModel: (repo, source) => ipcRenderer.invoke('ai:downloadModel', repo, source),
+    /** 在系统文件管理器中打开模型下载目录 */
+    revealModelDir: () => ipcRenderer.invoke('ai:revealModelDir'),
+    /** 注册模型下载进度回调（自动替换旧监听） */
+    onModelProgress: (cb) => {
+      ipcRenderer.removeAllListeners('ai:modelProgress');
+      ipcRenderer.on('ai:modelProgress', (_e, p) => cb(p));
     },
   },
 });

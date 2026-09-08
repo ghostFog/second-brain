@@ -1,0 +1,109 @@
+/* ========================================================================
+ * Minimal Theme — 极简主题包
+ * 作者: 火 冰
+ * 通过 body class (.mt-theme-N) 覆盖宿主 CSS 变量实现主题切换
+ * 4 套配色方案：纸白 / 亚麻 / 冷灰 / 墨绿
+ * ======================================================================== */
+
+/* --- 主题 1: 纸白（米白基调，低对比纸张质感） --- */
+.mt-theme-1 {
+  --note-background: #FAF7F0;
+  --note-foreground: #3D3D3D;
+  --note-card: #F2EDE3;
+  --note-card-foreground: #3D3D3D;
+  --note-surface: #F2EDE3;
+  --note-surface-2: #E8E1D4;
+  --note-popover: #F2EDE3;
+  --note-popover-foreground: #3D3D3D;
+  --note-muted: #F2EDE3;
+  --note-muted-foreground: #8A8478;
+  --note-border: #E0DBD0;
+  --note-input: #E0DBD0;
+  --note-ring: #B8A890;
+  --note-gutter-bg: #F5F0E8;
+  --note-ink: #3D3D3D;
+  --note-ink-2: #6B6B5E;
+  --note-ink-3: #9A9488;
+  --note-line: #E0DBD0;
+  --note-shadow-1: 0 1px 2px rgba(120, 110, 90, 0.06);
+  --note-shadow-2: 0 8px 24px -8px rgba(120, 110, 90, 0.18);
+}
+
+/* --- 主题 2: 亚麻（偏暖黄，复古质感） --- */
+.mt-theme-2 {
+  --note-background: #F5F0E6;
+  --note-foreground: #4A4237;
+  --note-card: #EDE6D8;
+  --note-card-foreground: #4A4237;
+  --note-surface: #EDE6D8;
+  --note-surface-2: #E2D9C6;
+  --note-popover: #EDE6D8;
+  --note-popover-foreground: #4A4237;
+  --note-muted: #EDE6D8;
+  --note-muted-foreground: #857C6C;
+  --note-border: #D8CFBE;
+  --note-input: #D8CFBE;
+  --note-ring: #B5A88C;
+  --note-gutter-bg: #F0E9DD;
+  --note-ink: #4A4237;
+  --note-ink-2: #6F6655;
+  --note-ink-3: #9B927E;
+  --note-line: #D8CFBE;
+  --note-shadow-1: 0 1px 2px rgba(130, 115, 90, 0.06);
+  --note-shadow-2: 0 8px 24px -8px rgba(130, 115, 90, 0.18);
+}
+
+/* --- 主题 3: 冷灰（中性色，沉稳克制） --- */
+.mt-theme-3 {
+  --note-background: #F0F1F3;
+  --note-foreground: #3A3D42;
+  --note-card: #E4E6EA;
+  --note-card-foreground: #3A3D42;
+  --note-surface: #E4E6EA;
+  --note-surface-2: #D5D8DE;
+  --note-popover: #E4E6EA;
+  --note-popover-foreground: #3A3D42;
+  --note-muted: #E4E6EA;
+  --note-muted-foreground: #7F858F;
+  --note-border: #C8CBD1;
+  --note-input: #C8CBD1;
+  --note-ring: #9AA0A8;
+  --note-gutter-bg: #E8EAEF;
+  --note-ink: #3A3D42;
+  --note-ink-2: #6A7078;
+  --note-ink-3: #959BA4;
+  --note-line: #C8CBD1;
+  --note-shadow-1: 0 1px 2px rgba(60, 70, 90, 0.06);
+  --note-shadow-2: 0 8px 24px -8px rgba(60, 70, 90, 0.18);
+}
+
+/* --- 主题 4: 墨绿（低饱和绿，护眼沉静） --- */
+.mt-theme-4 {
+  --note-background: #E8ECE6;
+  --note-foreground: #2E3D2E;
+  --note-card: #DDE3D8;
+  --note-card-foreground: #2E3D2E;
+  --note-surface: #DDE3D8;
+  --note-surface-2: #CDD5C6;
+  --note-popover: #DDE3D8;
+  --note-popover-foreground: #2E3D2E;
+  --note-muted: #DDE3D8;
+  --note-muted-foreground: #6D7A65;
+  --note-border: #BEC9B6;
+  --note-input: #BEC9B6;
+  --note-ring: #8E9C83;
+  --note-gutter-bg: #E4E8E0;
+  --note-ink: #2E3D2E;
+  --note-ink-2: #55644E;
+  --note-ink-3: #85947D;
+  --note-line: #BEC9B6;
+  --note-shadow-1: 0 1px 2px rgba(50, 80, 55, 0.06);
+  --note-shadow-2: 0 8px 24px -8px rgba(50, 80, 55, 0.18);
+}
+
+/* --- Minimal Theme 额外微调：降低品牌色饱和度 --- */
+.mt-theme-1, .mt-theme-2, .mt-theme-3, .mt-theme-4 {
+  --note-brand: #7C6A52;
+  --note-brand-500: #7C6A52;
+  --note-brand-600: #6B5A44;
+}

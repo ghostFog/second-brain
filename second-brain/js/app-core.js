@@ -61,8 +61,14 @@
     refreshIcons();
   }
 
-  /* 更新 Ribbon 高亮态 */
+  /* 更新 Ribbon 高亮态 — 优先交给 RibbonManager，没有则降级处理 */
   function updateNav(key) {
+    // RibbonManager 存在时用它的统一更新（含插件按钮 + 排序后的按钮）
+    if (typeof RibbonManager !== 'undefined' && RibbonManager.updateActive) {
+      RibbonManager.updateActive(key);
+      return;
+    }
+    // 降级：遍历 navButtons 做高亮
     navButtons.forEach(btn => {
       const active = btn.dataset.navKey;
       if (active === 'search') return;
@@ -90,28 +96,34 @@
     '打开设置': function () { location.hash = '#/settings'; closePalette(); },
   };
 
-  /* 命令面板命令列表（含分组） */
+  /* 命令面板命令列表（含分组 + 插件命令动态追加） */
   function buildCommandList() {
-    return [
+    const groups = [
       { group: '最近使用', items: [
-        { icon: 'file-plus', label: '新建笔记', shortcut: '⌘N', action: COMMAND_ACTIONS['新建笔记'] },
-        { icon: 'folder-open', label: '打开笔记', shortcut: '⌘O', action: COMMAND_ACTIONS['打开笔记'], },
+        { icon: 'file-plus', label: '新建笔记', id: 'cmd:new', action: COMMAND_ACTIONS['新建笔记'] },
+        { icon: 'folder-open', label: '打开笔记', shortcut: 'Ctrl+O', action: COMMAND_ACTIONS['打开笔记'], },
       ] },
       { group: '文件操作', items: [
-        { icon: 'search', label: '搜索笔记', shortcut: '⌘F', action: COMMAND_ACTIONS['搜索笔记'] },
+        { icon: 'search', label: '搜索笔记', id: 'cmd:find', action: COMMAND_ACTIONS['搜索笔记'] },
         { icon: 'file-down', label: '导出为PDF', action: COMMAND_ACTIONS['导出为PDF'] },
       ] },
       { group: '导航', items: [
-        { icon: 'git-fork', label: '打开图谱视图', shortcut: '⌘G', action: COMMAND_ACTIONS['打开图谱视图'] },
-        { icon: 'brain', label: '打开AI问答', action: COMMAND_ACTIONS['打开AI问答'] },
-        { icon: 'settings', label: '打开设置', action: COMMAND_ACTIONS['打开设置'] },
+        { icon: 'git-fork', label: '打开图谱视图', id: 'cmd:graph', action: COMMAND_ACTIONS['打开图谱视图'] },
+        { icon: 'brain', label: '打开AI问答', id: 'cmd:ai', action: COMMAND_ACTIONS['打开AI问答'] },
+        { icon: 'settings', label: '打开设置', id: 'cmd:settings', action: COMMAND_ACTIONS['打开设置'] },
       ] },
       { group: '插件', items: [
-        { icon: 'puzzle', label: '浏览插件市场', action: COMMAND_ACTIONS['浏览插件市场'] },
-        { icon: 'moon', label: '切换主题', action: COMMAND_ACTIONS['切换主题'] },
+        { icon: 'puzzle', label: '浏览插件市场', id: 'cmd:plugins', action: COMMAND_ACTIONS['浏览插件市场'] },
+        { icon: 'moon', label: '切换主题', id: 'cmd:theme', action: COMMAND_ACTIONS['切换主题'] },
         { icon: 'cloud', label: '同步设置', action: COMMAND_ACTIONS['同步设置'] },
       ] },
     ];
+    // PL-12: 追加已安装插件声明的命令分组
+    if (typeof pluginManager !== 'undefined') {
+      const pluginGroups = pluginManager.getCommands();
+      pluginGroups.forEach(function (g) { groups.push(g); });
+    }
+    return groups;
   }
 
   /* 渲染命令面板列表 */
@@ -129,10 +141,13 @@
       items.forEach(it => {
         const idx = paletteItems.length;
         paletteItems.push(it);
+        // 快捷键优先取注册表生效键位（用户绑定 > 默认），无注册 id 时回退静态度
+        let sc = it.shortcut || '';
+        if (it.id && typeof kbResolveBind === 'function') { const r = kbResolveBind(it.id); if (r) sc = r; }
         html += '<div class="palette-item flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-colors" data-idx="' + idx + '">'
           + '<i data-lucide="' + it.icon + '" class="w-4 h-4 shrink-0" style="color: var(--note-brand);"></i>'
           + '<span class="flex-1 text-[14px]" style="color: var(--note-ink);">' + it.label + '</span>'
-          + (it.shortcut ? '<kbd class="text-[11px] px-1.5 py-0.5 rounded font-mono" style="background: var(--note-surface); color: var(--note-ink-3);">' + it.shortcut + '</kbd>' : '')
+          + (sc ? '<kbd class="text-[11px] px-1.5 py-0.5 rounded font-mono" style="background: var(--note-surface); color: var(--note-ink-3);">' + sc + '</kbd>' : '')
           + '</div>';
       });
       html += '</div>';
@@ -210,7 +225,7 @@
     document.querySelectorAll('.theme-card').forEach(c => {
       const active = c.dataset.themeMode === mode;
       c.classList.toggle('active', active);
-      const check = c.querySelector('i[data-lucide="check"]');
+      const check = c.querySelector('.theme-card-check');
       if (check) check.style.display = active ? 'block' : 'none';
     });
   }

@@ -1,0 +1,94 @@
+{
+  "name": "Minimal Theme",
+  "id": "minimal-theme",
+  "author": "Stephan Ango",
+  "icon": "palette",
+  "color": "#EC4899",
+  "cat": "theme",
+  "desc": "极简主题包，专注内容阅读的克制设计，支持多种配色方案切换。",
+  "version": "1.0.0",
+  "main": "main.js",
+  "styles": "styles.css",
+  "permissions": ["settings.theme"],
+  "toolbar": {
+    "icon": "palette",
+    "title": "Minimal 主题切换",
+    "actionKey": "cycle-theme"
+  },
+  "commands": [
+    { "icon": "palette", "label": "Minimal: 切换主题配色", "actionKey": "cycle-theme" }
+  ],
+  "settings": [
+    {
+      "key": "defaultTheme",
+      "label": "默认配色方案",
+      "type": "select",
+      "sub": "应用启动时自动套用的主题配色",
+      "options": ["停用", "纸白", "亚麻", "冷灰", "墨绿", "自定义配色"],
+      "default": "停用"
+    },
+    {
+      "key": "hoverToolbar",
+      "label": "顶栏按钮悬停展示主题列表",
+      "type": "toggle",
+      "sub": "鼠标悬停顶栏主题按钮时弹出可用主题列表；关闭后仅点击循环切换",
+      "default": true
+    },
+    {
+      "key": "cBg",
+      "label": "自定义·背景色",
+      "type": "color",
+      "sub": "整体底色（含文件树/编辑区）",
+      "default": "#FAF7F0"
+    },
+    {
+      "key": "cCard",
+      "label": "自定义·卡片背景",
+      "type": "color",
+      "sub": "表面/卡片/输入框底色，也是表面弹层的底色",
+      "default": "#F2EDE3"
+    },
+    {
+      "key": "cSurface",
+      "label": "自定义·表面/弹层",
+      "type": "color",
+      "sub": "弹层、面板的独立底色",
+      "default": "#F2EDE3"
+    },
+    {
+      "key": "cBorder",
+      "label": "自定义·边框/输入",
+      "type": "color",
+      "sub": "边框、输入框、分隔控件颜色",
+      "default": "#E0DBD0"
+    },
+    {
+      "key": "cInk",
+      "label": "自定义·主文字色",
+      "type": "color",
+      "sub": "正文、标题等主要文本颜色",
+      "default": "#3D3D3D"
+    },
+    {
+      "key": "cInk3",
+      "label": "自定义·次要文字",
+      "type": "color",
+      "sub": "提示、说明、徽标等次要文本颜色，也会推导出中等级文字",
+      "default": "#9A9488"
+    },
+    {
+      "key": "cLine",
+      "label": "自定义·分隔线",
+      "type": "color",
+      "sub": "水平/区块分隔线颜色",
+      "default": "#E0DBD0"
+    },
+    {
+      "key": "cBrand",
+      "label": "自定义·强调色",
+      "type": "color",
+      "sub": "品牌/强调色（按钮高亮、选中态、链接等）",
+      "default": "#7C6A52"
+    }
+  ]
+}

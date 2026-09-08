@@ -13,10 +13,10 @@ const _ort = require('onnxruntime-node');
 const ORT = (_ort && _ort.InferenceSession) ? _ort : (_ort && _ort.default);
 const grayMatter = require('gray-matter'); // 解析笔记 frontmatter（获取笔记 id 元数据）
 
-/* 默认 AI 配置：本地模型指向工作区 models 目录，生成模型为列表（可配置多个） */
+/* 默认 AI 配置：本地模型路径默认空，由设置页通过模型库「使用」选择；生成模型为列表（可配置多个） */
 const DEFAULT_CONFIG = {
-  embedModelPath: 'D:/BaiduSyncdisk/work/ai/ai-second-brain/models/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
-  rerankModelPath: 'D:/BaiduSyncdisk/work/ai/ai-second-brain/models/bge-reranker-v2-m3',
+  embedModelPath: '',
+  rerankModelPath: '',
   // 兼容字段（旧版单模型配置）：迁移到 models 列表后不再使用
   provider: 'ollama',          // 'ollama' | 'openai'
   baseUrl: 'http://127.0.0.1:11434',
@@ -25,7 +25,37 @@ const DEFAULT_CONFIG = {
   // 生成模型列表：{ id, provider:'ollama'|'openai', baseUrl, apiKey, model }
   models: [],
   currentModelId: '',
+  // 应用启动时是否自动加载嵌入模型
+  autoLoadEmbedding: false,
+  // 索引分块全局默认：块大小（字符）与相邻重叠（字符）；未单独设置的笔记按此生成
+  blockSize: 200,
+  overlap: 40,
+  // 单块长度上限（字符）：>0 时切分块宽度封顶，避免单块过长；0/未填=不限制（仅受块大小约束）。全局统一，不随单文件覆盖
+  maxChunkSize: 300,
+  // 嵌入模型下载目录（空=使用应用数据目录下的默认 models 目录）
+  modelDir: '',
 };
+
+/* 嵌入式模型库：可从 HuggingFace / ModelScope 下载。repo 为远程仓库 id（保留斜杠），
+ * 下载落盘到 <modelDir>/<repo>/...（transformers 缓存结构），embedModelPath 指向 <modelDir>/<repo>。
+ * 说明/阈值等展示文案由渲染进程 app-settings.js 维护。 */
+const EMBED_MODEL_LIB = [
+  { id: 'paraphrase-multilingual-MiniLM-L12-v2', repo: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2' },
+  { id: 'bge-small-zh-v1.5', repo: 'Xenova/bge-small-zh-v1.5' },
+  { id: 'bge-base-zh-v1.5', repo: 'Xenova/bge-base-zh-v1.5' },
+  { id: 'bge-large-zh-v1.5', repo: 'Xenova/bge-large-zh-v1.5' },
+  { id: 'all-MiniLM-L6-v2', repo: 'Xenova/all-MiniLM-L6-v2' },
+  { id: 'all-MiniLM-L12-v2', repo: 'Xenova/all-MiniLM-L12-v2' },
+];
+
+/* 重排序模型库：可从 HuggingFace / ModelScope 下载。
+ * - bge-reranker-base：Xenova 官方转换的多语种重排序（onnx，modelscope/hf 均可用）
+ * - bge-reranker-v2-m3-ONNX：BAAI 官方 v2-m3 无 onnx，用 BGLAW 转换的完整 onnx 仓库
+ *        （含 onnx/model.onnx + tokenizer.json，与本项目 ORT 加载器匹配） */
+const RERANK_MODEL_LIB = [
+  { id: 'bge-reranker-base', repo: 'Xenova/bge-reranker-base' },
+  { id: 'bge-reranker-v2-m3-ONNX', repo: 'BGLAW/bge-reranker-v2-m3-onnx' },
+];
 
 /* 系统提示词：约束模型只依据提供的笔记片段作答，避免幻觉 */
 const SYSTEM_PROMPT = [
@@ -60,6 +90,76 @@ function chunkText(text, size, overlap) {
     if (piece) chunks.push(piece);
     if (end >= len) break;
     start = end - overlap;
+  }
+  return chunks;
+}
+
+/**
+ * chunkText 的带偏移版本：返回值附带每块在原文中的字符起止区间（用于「文件属性」展示分块起止规则）。
+ * 切片完成后再 trim，起止区间记录的是未 trim 的原始切片边界（start..end），相邻块因重叠而区间交叠。
+ * @param {string} text 原文
+ * @param {number} size 片段目标长度（字符）
+ * @param {number} overlap 相邻片段重叠长度
+ * @returns {Array<{text:string, start:number, end:number}>} 非空片段（含起止）
+ * @author 火 冰
+ */
+function chunkTextDetailed(text, size, overlap) {
+  const clean = String(text || '').replace(/\r\n/g, '\n');
+  const chunks = [];
+  const len = clean.length;
+  if (!len) return chunks;
+  let start = 0;
+  while (start < len) {
+    let end = Math.min(start + size, len);
+    if (end < len) {
+      const nl = clean.lastIndexOf('\n', end);
+      if (nl > start + size * 0.5) end = nl;
+    }
+    const piece = clean.slice(start, end).trim();
+    if (piece) chunks.push({ text: piece, start: start, end: end });
+    if (end >= len) break;
+    start = end - overlap;
+  }
+  return chunks;
+}
+
+/**
+ * 按「块大小 + 相邻重叠值」的配置生成分块（支持单文件覆盖的显式偏移值）。
+ * 未提供 offsets 时按 (块大小 - 重叠) 的固定步长从 0 起生成；提供 offsets 时按给定起始偏移切片
+ * （每块宽度 = 块大小，末块裁剪到文末），用于「属性 → 索引分块」中编辑既有块的偏移后按原样生成。
+ * @param {string} text 原文
+ * @param {number} size 块大小（字符）
+ * @param {number} overlap 相邻重叠（字符）
+ * @param {number[]} [offsets] 每块起始偏移（显式覆盖）；缺省按步长推导
+ * @param {number} [maxChunkSize] 单块长度上限（字符），>0 时封顶，避免某块过长；缺省/0=不限制
+ * @returns {Array<{text:string, start:number, end:number}>} 非空片段（含起止）
+ * @author 火 冰
+ */
+function chunkConfigured(text, size, overlap, offsets, maxChunkSize) {
+  const clean = String(text || '').replace(/\r\n/g, '\n');
+  const len = clean.length;
+  if (!len) return [];
+  const sizeN = Math.max(1, Math.floor(Number(size) || 200));
+  const overlapN = Math.max(0, Math.floor(Number(overlap) || 0));
+  // 单块宽度封顶：<= 块大小；maxChunkSize>0 时再取二者较小值（0/缺省=不限制）
+  const rawCap = Math.floor(Number(maxChunkSize) || 0);
+  const widthN = rawCap > 0 ? Math.min(sizeN, Math.max(1, rawCap)) : sizeN;
+  let starts = [];
+  if (Array.isArray(offsets) && offsets.length) {
+    const seen = new Set();
+    for (const s of offsets) {
+      const v = Math.floor(Number(s) || 0);
+      if (v >= 0 && v < len && !seen.has(v)) { seen.add(v); starts.push(v); }
+    }
+  } else {
+    const stride = Math.max(1, sizeN - overlapN);
+    for (let s = 0; s < len; s += stride) starts.push(s);
+  }
+  const chunks = [];
+  for (const s of starts) {
+    const e = Math.min(s + widthN, len);
+    const piece = clean.slice(s, e).trim();
+    if (piece) chunks.push({ text: piece, start: s, end: e });
   }
   return chunks;
 }
@@ -109,6 +209,7 @@ class AiEngine {
     this.index = null;            // { vaultName, vaultPath, builtAt, files, chunks:[{id,noteId,path,block,text,vec}] }
     this.abort = null;            // 当前 LLM 流式请求的中止控制器
     this.indexDir = null;         // 索引持久化目录（按知识库分文件）
+    this._defaultModelDir = null; // 模型下载目录的默认值（userData/models），由 init 注入
     this._queue = Promise.resolve(); // 增量索引更新串行队列
     this._embedPromise = null;
     this._rerankPromise = null;
@@ -136,6 +237,7 @@ class AiEngine {
       if (opts.configFile) this.configFile = opts.configFile;
       if (opts.indexDir) this.indexDir = opts.indexDir;
       else if (opts.configFile) this.indexDir = path.join(path.dirname(opts.configFile), 'ai-index');
+      if (opts.modelDir) this._defaultModelDir = opts.modelDir;
     }
     this._loadConfig();
     this.activateVault();
@@ -212,7 +314,12 @@ class AiEngine {
     return this.cfg;
   }
 
-  getConfig() { return Object.assign({}, this.cfg); }
+  getConfig() {
+    const c = Object.assign({}, this.cfg);
+    // 未显式设置模型下载目录时，返回生效的默认目录，供前端默认显示（避免空串占位）
+    if (!c.modelDir) c.modelDir = this._resolveModelDir();
+    return c;
+  }
 
   /* ---------- 模型加载 ---------- */
 
@@ -226,7 +333,7 @@ class AiEngine {
       const { env, pipeline } = await this._tf();
       env.allowRemoteModels = false;
       env.allowLocalModels = true;
-      const dir = this.cfg.embedModelPath;
+      const dir = this._expandModelPath(this.cfg.embedModelPath);
       env.localModelPath = path.dirname(dir) + path.sep;
       this.embedder = await pipeline('feature-extraction', path.basename(dir), { quantized: false });
     }
@@ -243,7 +350,7 @@ class AiEngine {
       const { env, AutoTokenizer } = await this._tf();
       env.allowRemoteModels = false;
       env.allowLocalModels = true;
-      const dir = this.cfg.rerankModelPath;
+      const dir = this._expandModelPath(this.cfg.rerankModelPath);
       env.localModelPath = path.dirname(dir) + path.sep;
       this.rerankTokenizer = await AutoTokenizer.from_pretrained(path.basename(dir));
       this.rerankSession = await ORT.InferenceSession.create(path.join(dir, 'onnx', 'model.onnx'));
@@ -253,6 +360,242 @@ class AiEngine {
 
   /** 对外：仅加载嵌入模型（供设置页/索引使用） */
   async loadEmbedding() { await this._loadEmbedder(); return this.getStatus(); }
+
+  /* ---------- 嵌入模型库（下载目录 / 下载 / 本地检测） ---------- */
+
+  /**
+   * 展开路径中的 {modelDir} 变量：模型库「使用」会以 {modelDir}/<repo> 形式保存路径，
+   * 实际加载前替换为当前生效的模型下载目录（绝对路径）。
+   * @param {string} p 原始路径（可能含 {modelDir} 变量）
+   * @returns {string} 展开后的绝对路径（不含变量时原样返回）
+   * @author 火 冰
+   */
+  _expandModelPath(p) {
+    if (typeof p !== 'string' || !p) return p;
+    return p.replace(/\{modelDir\}(\/|\\)?/, function (m, sep) {
+      return this._resolveModelDir() + (sep || '/');
+    }.bind(this));
+  }
+
+  /** 解析当前生效的模型下载目录：优先用配置值，否则回落到应用数据目录下默认目录。 */
+  _resolveModelDir() {
+    return this.cfg.modelDir || this._defaultModelDir || path.join(process.env.APPDATA || '', 'second-brain', 'models');
+  }
+
+  /**
+   * 写一条 AI 引擎日志到 userData/logs/ai-engine.log（与主进程 app.log 同目录），
+   * 带时间戳；落盘失败不阻断主流程。
+   * @param {string} level 日志级别（info/warn/error）
+   * @param {string} msg 日志消息
+   * @param {string} [detail] 补充详情
+   * @author 火 冰
+   */
+  _log(level, msg, detail) {
+    try {
+      const p2 = function (n) { return String(n).padStart(2, '0'); };
+      const t = new Date();
+      const ts = t.getFullYear() + '-' + p2(t.getMonth() + 1) + '-' + p2(t.getDate()) + ' '
+        + p2(t.getHours()) + ':' + p2(t.getMinutes()) + ':' + p2(t.getSeconds()) + '.' + String(t.getMilliseconds()).padStart(3, '0');
+      const line = '[' + ts + '] [' + level + '] ' + msg + (detail ? ('  | ' + detail) : '') + '\n';
+      const dir = this.configFile ? path.join(path.dirname(this.configFile), 'logs') : path.join(process.env.APPDATA || '', 'second-brain', 'logs');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(path.join(dir, 'ai-engine.log'), line, 'utf8');
+    } catch (_) { /* 日志落盘失败不阻断 */ }
+  }
+
+  /** 判断某仓库是否已在目录下下载完成（onnx 权重存在即可用）。 */
+  _hasModel(dir, repo) {
+    return fs.existsSync(path.join(dir, repo, 'onnx', 'model.onnx'))
+      || fs.existsSync(path.join(dir, repo, 'onnx', 'model_quantized.onnx'));
+  }
+
+  /** 判断目录是否视为一个已下载的本地模型（含 onnx 权重或 config.json）。 */
+  _hasLocalDir(p) {
+    return fs.existsSync(path.join(p, 'onnx', 'model.onnx'))
+      || fs.existsSync(path.join(p, 'onnx', 'model_quantized.onnx'))
+      || fs.existsSync(path.join(p, 'onnx', 'model_q8.onnx'))
+      || fs.existsSync(path.join(p, 'config.json'));
+  }
+
+  /**
+   * 在模型下载目录下按「仓库尾名」查找实际存在的本地模型目录。
+   * 兼容 owner 前缀不一致的情况（如模型库用 Xenova/xxx，本地可能为
+   * sentence-transformers/xxx），命中即视为已下载并返回其真实绝对路径。
+   * @param {string} modelDir 模型下载目录
+   * @param {string} repo 远端仓库 id（如 Xenova/paraphrase-multilingual-MiniLM-L12-v2）
+   * @returns {string} 匹配到的本地目录绝对路径；未找到返回空串
+   * @author 火 冰
+   */
+  _findLocalModel(modelDir, repo) {
+    const tail = String(repo).split('/').pop();
+    if (!tail) return '';
+    // 直接位于 <modelDir>/<tail>
+    const direct = path.join(modelDir, tail);
+    if (this._hasLocalDir(direct)) return direct;
+    // 位于 <modelDir>/<owner>/<tail>：遍历第一层 owner 目录
+    let nodes = [];
+    try { nodes = fs.readdirSync(modelDir, { withFileTypes: true }); } catch (_) { return ''; }
+    for (let i = 0; i < nodes.length; i++) {
+      const ent = nodes[i];
+      if (!ent.isDirectory()) continue;
+      const p = path.join(modelDir, ent.name, tail);
+      if (this._hasLocalDir(p)) return p;
+    }
+    return '';
+  }
+
+  /** 获取模型库状态：下载目录 + 各嵌入/重排序模型是否已下载（含真实本地路径）。 */
+  getModelLib() {
+    const modelDir = this._resolveModelDir();
+    return {
+      modelDir,
+      defaultModelDir: this._defaultModelDir,
+      models: EMBED_MODEL_LIB.map(function (m) {
+        const localPath = this._findLocalModel(modelDir, m.repo);
+        return { id: m.id, repo: m.repo, localPath, local: !!localPath };
+      }, this),
+      rerankModels: RERANK_MODEL_LIB.map(function (m) {
+        const localPath = this._findLocalModel(modelDir, m.repo);
+        return { id: m.id, repo: m.repo, localPath, local: !!localPath };
+      }, this),
+    };
+  }
+
+  /** 设置模型下载目录：空串=恢复到默认目录；否则创建并持久化。 */
+  setModelDir(dir) {
+    const clean = String(dir || '').trim();
+    if (!clean) {
+      if (this.cfg.modelDir) delete this.cfg.modelDir;
+      this.saveConfig({ modelDir: '' });
+    } else {
+      fs.mkdirSync(clean, { recursive: true });
+      this.cfg.modelDir = clean;
+      this.saveConfig({ modelDir: clean });
+    }
+    return this.getModelLib();
+  }
+
+  /**
+   * 从远端（HuggingFace / ModelScope）下载嵌入模型到下载目录。
+   * 复用 @xenova/transformers 的自动下载（落到 env.cacheDir=modelDir，结构 <repo>/...），
+   * 源通过 env.remoteHost 切换；完成后由调用侧用 getModelLib 刷新本地状态。
+   * @param {string} repo 远端仓库 id（如 Xenova/bge-small-zh-v1.5）
+   * @param {string} source 'huggingface' | 'modelscope'
+   * @param {(p:object)=>void} onProgress 进度回调
+   * @returns {Promise<{ok:boolean, repo:string, modelDir:string, error?:string}>}
+   * @author 火 冰
+   */
+  /**
+   * 按序自动探测三个下载源（ModelScope → HF 镜像 → HuggingFace）的可达性，
+   * 返回第一个可用源名；全部不可用时返回 null。
+   * 探测使用与 transformers 下载相同的 <host>/<repo>/resolve/main/config.json 路径，
+   * 每源带 8 秒超时，避免被无法连通的源长时间挂起。
+   * @param {string} repo 远端仓库 id（如 Xenova/bge-small-zh-v1.5）
+   * @returns {Promise<string|null>} 'modelscope'|'huggingface-mirror'|'huggingface' 或 null
+   * @author 火 冰
+   */
+  async detectSource(repo) {
+    const ORDER = [
+      { name: 'modelscope', host: 'https://www.modelscope.cn/' },
+      { name: 'huggingface-mirror', host: 'https://hf-mirror.com/' },
+      { name: 'huggingface', host: 'https://huggingface.co/' },
+    ];
+    let picked = null;
+    for (let i = 0; i < ORDER.length; i++) {
+      const url = ORDER[i].host + repo + '/resolve/main/config.json';
+      const ok = await this._probeSource(url);
+      this._log(ok ? 'info' : 'warn', ok ? '下载源可用' : '下载源不可用', 'repo=' + repo + ' source=' + ORDER[i].name + ' url=' + url);
+      if (ok && picked === null) picked = ORDER[i].name;
+    }
+    return picked;
+  }
+
+  /**
+   * 探测单个 URL 是否可下载（HEAD、跟随重定向、8 秒超时）。
+   * @param {string} url 待探测的完整地址
+   * @returns {Promise<boolean>} 200-399 视为可用
+   * @author 火 冰
+   */
+  _probeSource(url) {
+    return new Promise(function (resolve) {
+      if (typeof fetch !== 'function') return resolve(false);
+      let ctrl = null, timer = null;
+      if (typeof AbortController === 'function') {
+        ctrl = new AbortController();
+        timer = setTimeout(function () { ctrl.abort(); }, 8000);
+      }
+      const req = { method: 'HEAD', redirect: 'follow' };
+      if (ctrl) req.signal = ctrl.signal;
+      fetch(url, req).then(function (r) {
+        if (timer) clearTimeout(timer);
+        resolve(!!r && r.status >= 200 && r.status < 400);
+      }).catch(function () {
+        if (timer) clearTimeout(timer);
+        resolve(false);
+      });
+    });
+  }
+
+  async downloadModel(repo, source, onProgress) {
+    // source 为空或 auto：先自动检测并按序选首个可用源
+    if (!source || source === 'auto') {
+      const picked = await this.detectSource(repo);
+      source = picked || 'huggingface';
+      this._log('info', '自动检测选用下载源', 'repo=' + repo + ' picked=' + source);
+    }
+    const modelDir = this._resolveModelDir();
+    fs.mkdirSync(modelDir, { recursive: true });
+    const mod = await this._tf();
+    const env = mod.env;
+    // 源 -> 远端 host（hf-mirror 是 HuggingFace 国内直连镜像，路径结构一致；modelscope 路径模板不兼容 HF 仓库，可能 404）
+    const HOST = {
+      'huggingface': 'https://huggingface.co/',
+      'huggingface-mirror': 'https://hf-mirror.com/',
+      'modelscope': 'https://www.modelscope.cn/',
+    };
+    const host = HOST[source] || HOST.huggingface;
+    this._log('info', '开始下载嵌入模型', 'repo=' + repo + ' source=' + (source || 'huggingface') + ' host=' + host + ' dir=' + modelDir);
+    // 暂存并临时改写 transformers 全局环境（下载后必须恢复，避免污染后续本地加载）
+    const prev = {
+      cacheDir: env.cacheDir,
+      allowRemoteModels: env.allowRemoteModels,
+      allowLocalModels: env.allowLocalModels,
+      remoteHost: env.remoteHost,
+    };
+    try {
+      env.cacheDir = modelDir;
+      env.allowRemoteModels = true;
+      env.allowLocalModels = false; // 强制从远端拉取（本次下载）
+      env.remoteHost = host;
+      await mod.pipeline('feature-extraction', repo, {
+        quantized: false,
+        progress_callback: function (p) {
+          if (typeof onProgress === 'function') {
+            onProgress({ repo, source, file: p.file, status: p.status, progress: p.progress, loaded: p.loaded, total: p.total });
+          }
+        },
+      });
+      const ok = this._hasModel(modelDir, repo);
+      this._log(ok ? 'info' : 'warn', ok ? '嵌入模型下载完成' : '嵌入模型未检测到权重文件', 'repo=' + repo + ' dir=' + modelDir);
+      return { ok, repo, source, modelDir };
+    } catch (err) {
+      this._log('error', '嵌入模型下载失败', 'repo=' + repo + ' host=' + host + ' err=' + ((err && err.message) || String(err))
+        + ((err && err.cause && err.cause.message) ? (' cause=' + err.cause.message) : ''));
+      return { ok: false, repo, source, modelDir, error: (err && err.message) || String(err) };
+    } finally {
+      Object.assign(env, prev);
+    }
+  }
+
+  /** 在系统文件管理器中打开模型下载目录。 */
+  revealModelDir() {
+    const modelDir = this._resolveModelDir();
+    fs.mkdirSync(modelDir, { recursive: true });
+    try {
+      const electron = require('electron');
+      if (electron && electron.shell) electron.shell.openPath(modelDir);
+    } catch (e) { /* 非 Electron 环境（如测试）忽略 */ }
+  }
 
   /**
    * 将文本编码为归一化向量（Float32Array）。
@@ -306,6 +649,7 @@ class AiEngine {
     let items = [];
     try { items = await fs.promises.readdir(dir, { withFileTypes: true }); } catch (e) { return out; }
     for (const it of items) {
+      if (it.name === '.second-brain') continue; // 跳过知识库元数据目录
       const abs = path.join(dir, it.name);
       const rel = base ? base + '/' + it.name : it.name;
       if (it.isDirectory()) out.push(...await this._scanMd(abs, rel));
@@ -382,7 +726,7 @@ class AiEngine {
           files: 0,
           chunks: j.chunks.map(function (c) {
             files.add(c.noteId || c.path);
-            return { id: c.id || c.noteId + '#b' + (c.block || 0), noteId: c.noteId || c.path, path: c.path, block: c.block || 0, text: c.text, vec: new Float32Array(Buffer.from(c.v, 'base64').buffer) };
+            return { id: c.id || c.noteId + '#b' + (c.block || 0), noteId: c.noteId || c.path, path: c.path, block: c.block || 0, text: c.text, start: c.start, end: c.end, vec: new Float32Array(Buffer.from(c.v, 'base64').buffer) };
           }),
         };
         this.index.files = files.size;
@@ -400,7 +744,7 @@ class AiEngine {
         vaultPath: this.index.vaultPath,
         builtAt: this.index.builtAt,
         chunks: this.index.chunks.map(function (c) {
-          return { id: c.id, noteId: c.noteId, path: c.path, block: c.block, text: c.text, v: Buffer.from(c.vec).toString('base64') };
+          return { id: c.id, noteId: c.noteId, path: c.path, block: c.block, text: c.text, start: c.start, end: c.end, v: Buffer.from(c.vec).toString('base64') };
         }),
       };
       fs.writeFileSync(file, JSON.stringify(payload), 'utf8');
@@ -441,17 +785,19 @@ class AiEngine {
     let done = 0;
     let total = 0;
     for (const f of files) {
-      total += chunkText(fs.readFileSync(path.join(root, f), 'utf8'), 200, 40).length;
+      const prm = await this._chunkParamsFor(f);
+      total += chunkConfigured(fs.readFileSync(path.join(root, f), 'utf8'), prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize).length;
     }
     for (const f of files) {
       let text = '';
       try { text = fs.readFileSync(path.join(root, f), 'utf8'); } catch (e) { continue; }
-      const noteId = extractNoteId(text, f);
-      const cs = chunkText(text, 200, 40);
+      const noteId = await this._metaNoteIdFor(f, text);
+      const prm = await this._chunkParamsFor(f);
+      const cs = chunkConfigured(text, prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize);
       for (let i = 0; i < cs.length; i++) {
         const c = cs[i];
-        const vec = await this.embed(c);
-        chunks.push({ id: noteId + '#b' + i, noteId, path: f, block: i, text: c, vec });
+        const vec = await this.embed(c.text);
+        chunks.push({ id: noteId + '#b' + i, noteId, path: f, block: i, text: c.text, start: c.start, end: c.end, vec });
         done++;
         if (onProgress) onProgress({ done, total, path: f });
       }
@@ -475,12 +821,13 @@ class AiEngine {
       if (!this.index) this.activateVault();
       let text = '';
       try { text = fs.readFileSync(path.join(root, rel), 'utf8'); } catch (e) { return this._removeNoteWork(rel); }
-      const noteId = extractNoteId(text, rel);
-      const cs = chunkText(text, 200, 40);
+      const noteId = await this._metaNoteIdFor(rel, text);
+      const prm = await this._chunkParamsFor(rel);
+      const cs = chunkConfigured(text, prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize);
       const fresh = [];
       for (let i = 0; i < cs.length; i++) {
-        const vec = await this.embed(cs[i]);
-        fresh.push({ id: noteId + '#b' + i, noteId, path: rel, block: i, text: cs[i], vec });
+        const vec = await this.embed(cs[i].text);
+        fresh.push({ id: noteId + '#b' + i, noteId, path: rel, block: i, text: cs[i].text, start: cs[i].start, end: cs[i].end, vec });
       }
       this.index.chunks = this.index.chunks.filter(function (c) { return c.path !== rel; }).concat(fresh);
       this.index.files = this._distinctNotes();
@@ -488,6 +835,67 @@ class AiEngine {
     };
     this._queue = this._queue.then(run).catch(function () { /* 单篇增量更新失败不阻塞 */ });
     return this._queue;
+  }
+
+  /**
+   * 解析某篇笔记的分块参数（块大小 / 相邻重叠 / 单块长度上限 / 显式偏移）。
+   * 优先取 `.second-brain` 元数据中该笔记的 `chunk` 覆盖配置；未单独设置时回退全局默认。
+   * @param {string} rel 笔记相对路径
+   * @returns {Promise<{blockSize:number, overlap:number, maxChunkSize:number, offsets:number[]|null}>}
+   * @author 火 冰
+   */
+  async _chunkParamsFor(rel) {
+    const base = this.cfg || DEFAULT_CONFIG;
+    const maxGlobal = Math.max(0, Math.floor(Number(base.maxChunkSize) || 0));
+    const empty = {
+      blockSize: Number(base.blockSize) || 200,
+      overlap: Number(base.overlap) || 40,
+      maxChunkSize: maxGlobal,
+      offsets: null,
+    };
+    const root = this.getVaultRoot ? this.getVaultRoot() : null;
+    if (!root || !rel) return empty;
+    try {
+      const r = String(rel).replace(/^\/+/, '');
+      const i = r.lastIndexOf('/');
+      const dir = i > 0 ? r.slice(0, i) : '';
+      const name = i > 0 ? r.slice(i + 1) : r;
+      const metaAbs = path.join(root, '.second-brain', ...(dir ? dir.split('/') : []), '_meta.json');
+      const rec = JSON.parse(fs.readFileSync(metaAbs, 'utf8'));
+      const note = (rec && rec.notes) ? rec.notes.find(function (n) { return n.name === name; }) : null;
+      const c = note && note.chunk;
+      if (c) return {
+        blockSize: Number(c.blockSize) || empty.blockSize,
+        overlap: Number(c.overlap) || empty.overlap,
+        maxChunkSize: empty.maxChunkSize,   // 单块上限为全局统一配置，不随单文件覆盖
+        offsets: (Array.isArray(c.offsets) && c.offsets.length) ? c.offsets.slice() : null,
+      };
+    } catch (e) { /* 无覆盖记录或读取失败 → 用全局默认 */ }
+    return empty;
+  }
+
+  /**
+   * 获取某篇笔记的稳定雪花 id：优先读 `.second-brain` 元数据 noteId（md 已不写 id），无则回退 frontmatter id/相对路径。
+   * @param {string} rel 笔记相对路径
+   * @param {string} [text] 笔记全文（回退时用 frontmatter id）
+   * @returns {Promise<string>} 稳定的笔记唯一 id
+   * @author 火 冰
+   */
+  async _metaNoteIdFor(rel, text) {
+    const root = this.getVaultRoot ? this.getVaultRoot() : null;
+    if (root && rel) {
+      try {
+        const r = String(rel).replace(/^\/+/, '');
+        const i = r.lastIndexOf('/');
+        const dir = i > 0 ? r.slice(0, i) : '';
+        const name = i > 0 ? r.slice(i + 1) : r;
+        const metaAbs = path.join(root, '.second-brain', ...(dir ? dir.split('/') : []), '_meta.json');
+        const rec = JSON.parse(fs.readFileSync(metaAbs, 'utf8'));
+        const note = (rec && rec.notes) ? rec.notes.find(function (n) { return n.name === name; }) : null;
+        if (note && note.noteId) return note.noteId;
+      } catch (e) { /* 无元数据 → 回退 */ }
+    }
+    return extractNoteId(text || '', rel);
   }
 
   /**
@@ -523,7 +931,7 @@ class AiEngine {
     const byPath = new Map();
     idx.chunks.forEach(function (c) {
       if (!byPath.has(c.path)) byPath.set(c.path, []);
-      byPath.get(c.path).push({ id: c.id, noteId: c.noteId, block: c.block, text: (c.text || '').slice(0, 160) });
+      byPath.get(c.path).push({ id: c.id, noteId: c.noteId, block: c.block, text: (c.text || '').slice(0, 160), start: c.start, end: c.end });
     });
     const groups = [];
     byPath.forEach(function (blocks, p) {
@@ -591,7 +999,7 @@ class AiEngine {
     for (const f of files) {
       let text = '';
       try { text = fs.readFileSync(path.join(root, f), 'utf8'); } catch (e) { continue; }
-      const noteId = extractNoteId(text, f);
+      const noteId = await this._metaNoteIdFor(f, text);
       const cs = chunkText(text, 200, 40);
       for (let i = 0; i < cs.length; i++) {
         const c = cs[i];
@@ -817,4 +1225,4 @@ class AiEngine {
   }
 }
 
-module.exports = { AiEngine, chunkText, cosine, extractNoteId, DEFAULT_CONFIG };
+module.exports = { AiEngine, chunkText, chunkConfigured, cosine, extractNoteId, DEFAULT_CONFIG };

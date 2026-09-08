@@ -10,9 +10,6 @@
           <i data-lucide="search" class="w-3.5 h-3.5 shrink-0" style="color: var(--note-ink-3);"></i>
           <input id="file-search" type="text" placeholder="搜索文件..." class="flex-1 bg-transparent text-[12px] outline-none" style="color: var(--note-ink-2);">
         </div>
-        <button data-action="new-note" class="w-7 h-7 flex items-center justify-center rounded-md border transition-colors hover:opacity-80 shrink-0" style="border-color: var(--note-border); background: var(--note-surface-2); color: var(--note-ink-2);" title="新建笔记">
-          <i data-lucide="plus" class="w-3.5 h-3.5"></i>
-        </button>
       </div>
     </div>
 
@@ -33,55 +30,49 @@
     <!-- Tab 栏 + 工具按钮 一体化（设计稿样式，单行节省垂直空间） -->
     <div id="editor-tabs-row" class="h-9 shrink-0 flex items-stretch border-b" style="border-color: var(--note-border); background: var(--note-surface);">
       <div id="editor-tabs" class="flex-1 flex items-center gap-1 px-2 overflow-x-auto no-scrollbar"></div>
+      <!-- Tab 溢出滚动按钮：内容超出显示区时显示，用于横向滑动查看被遮挡的页签 -->
+      <div id="tabs-scroll" class="flex items-center gap-0.5 px-1 shrink-0" style="display:none;">
+        <button data-action="tabs-scroll-left" title="向左滑动查看标签" class="w-6 h-6 flex items-center justify-center rounded hover:opacity-80" style="background:transparent; color:var(--note-ink-3);"><i data-lucide="chevron-left" class="w-3.5 h-3.5"></i></button>
+        <button data-action="tabs-scroll-right" title="向右滑动查看标签" class="w-6 h-6 flex items-center justify-center rounded hover:opacity-80" style="background:transparent; color:var(--note-ink-3);"><i data-lucide="chevron-right" class="w-3.5 h-3.5"></i></button>
+      </div>
       <div class="flex items-center gap-1 px-2 shrink-0">
         <span id="ed-mode-label" class="mr-1 text-[11px] shrink-0" style="color: var(--note-ink-3);">分屏</span>
-        <button data-mode="edit" title="仅编辑（源码）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>
-        <button data-mode="preview" title="仅预览（渲染）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="eye" class="w-3.5 h-3.5"></i></button>
-        <button data-mode="split" title="分屏（源码+预览左右并排）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="columns-2" class="w-3.5 h-3.5"></i></button>
+        <div class="relative shrink-0" id="ed-mode-edit-wrap">
+          <button data-mode="edit" id="ed-mode-edit" title="编辑：点击切回上次编辑节点；悬浮选择编辑节点（所见即所得 / 即时渲染）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>
+          <!-- 「编辑」按钮悬浮菜单：选择编辑节点（所见即所得 / 即时渲染），高亮当前使用的节点 -->
+          <div id="ed-mode-pop" hidden class="ed-mode-pop" role="menu" aria-label="选择编辑模式">
+            <div class="ed-mode-pop-title" style="color: var(--note-ink-3);">编辑节点</div>
+            <button data-mode-item="wysiwyg" role="menuitem" type="button">所见即所得 <i data-lucide="eye" class="w-3 h-3"></i></button>
+            <button data-mode-item="ir" role="menuitem" type="button">即时渲染 <i data-lucide="pen-tool" class="w-3 h-3"></i></button>
+          </div>
+        </div>
+        <button data-mode="preview" title="仅预览（渲染，不可编辑）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="eye" class="w-3.5 h-3.5"></i></button>
+        <div class="relative shrink-0" id="ed-split-wrap">
+          <button data-mode="split" title="点击循环切换（分屏→仅源码→仅预览）；悬浮直接选择布局" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="columns-2" class="w-3.5 h-3.5"></i></button>
+          <!-- 「分屏」按钮悬浮菜单：在 分屏（both）/ 仅源码（editor）/ 仅预览（preview） 三种 SV 布局间切换 -->
+          <div id="ed-split-pop" hidden class="ed-mode-pop" role="menu" aria-label="选择分屏布局">
+            <div class="ed-mode-pop-title" style="color: var(--note-ink-3);">分屏布局</div>
+            <button data-split-item="both" role="menuitem" type="button">分屏（源码+预览） <i data-lucide="columns-2" class="w-3 h-3"></i></button>
+            <button data-split-item="editor" role="menuitem" type="button">仅源码 <i data-lucide="pen-tool" class="w-3 h-3"></i></button>
+            <button data-split-item="preview" role="menuitem" type="button">仅预览（渲染） <i data-lucide="eye" class="w-3 h-3"></i></button>
+          </div>
+        </div>
         <button data-action="toggle-line-numbers" title="显示/隐藏行号" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="list-ordered" class="w-3.5 h-3.5"></i></button>
         <button data-action="toggle-wrap" title="自动换行（关闭则横向滚动）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="wrap-text" class="w-3.5 h-3.5"></i></button>
+        <button data-action="fullscreen" title="全屏 / 退出全屏（Esc）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="maximize" class="w-3.5 h-3.5"></i></button>
         <div class="w-px h-4 mx-1" style="background: var(--note-border);"></div>
         <button data-action="view-index" title="查看当前笔记索引" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="color: var(--note-ink-3);"><i data-lucide="database" class="w-3.5 h-3.5"></i></button>
         <button data-action="delete-note" title="删除笔记" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="color: var(--note-ink-3);"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
       </div>
     </div>
 
-    <!-- 查找/替换条：Ctrl+F 查找、Ctrl+R 替换 -->
-    <div id="ed-findbar" class="ed-findbar shrink-0" hidden>
-      <i data-lucide="search" class="w-3.5 h-3.5 shrink-0" style="color: var(--note-ink-3);"></i>
-      <input id="ed-find-input" type="text" placeholder="查找…" class="find-input" spellcheck="false">
-      <span id="ed-find-count" class="find-count">0 / 0</span>
-      <button data-find-action="prev" title="上一个 (Shift+Enter)" class="find-btn"><i data-lucide="chevron-up" class="w-3.5 h-3.5"></i></button>
-      <button data-find-action="next" title="下一个 (Enter)" class="find-btn"><i data-lucide="chevron-down" class="w-3.5 h-3.5"></i></button>
-      <div class="w-px h-4 mx-1 shrink-0" style="background: var(--note-border);"></div>
-      <span class="find-replace text-[11px] shrink-0" style="color: var(--note-ink-3);">替换为</span>
-      <input id="ed-replace-input" type="text" placeholder="替换…" class="find-input find-replace" spellcheck="false">
-      <button data-find-action="replace" title="替换当前 (Enter)" class="find-btn find-replace">替换</button>
-      <button data-find-action="replace-all" title="全部替换" class="find-btn find-replace">全部</button>
-      <button data-find-action="close" title="关闭 (Esc)" class="find-btn"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
-    </div>
+    <!-- 查找/替换已随自研编辑区退役，由 vditor 原生搜索（Ctrl+F/Ctrl+R）承接 -->
 
-    <!-- 编辑器内容：编辑（源码 | 所见即所得）| 预览，统一右缘滚动 -->
+    <!-- 编辑器内容：标题/元信息 → 单一 vditor 编辑区（接管源码/所见即所得/预览全部渲染） -->
     <div class="flex-1 min-h-0 flex flex-col">
-      <div id="editor-meta" class="max-w-3xl mx-auto px-8 pt-6 flex items-center gap-3 text-[12px]" style="color: var(--note-ink-3);"></div>
-      <!-- ed-split：唯一滚动容器，只有最右侧一条纵向滚动条；源码与预览同步滚动 -->
-      <div id="ed-split" class="ed-scroll flex-1 min-h-0">
-        <div class="ed-row">
-          <!-- 源码 / 所见即所得（二者按 edSource 状态显隐，绝不共存） -->
-          <div id="ed-pane-src" class="ed-pane">
-            <div id="ed-gutter" class="ed-gutter" hidden></div>
-            <div id="ed-current-line" class="ed-current-line" hidden></div>
-            <textarea id="ed-edit" spellcheck="false" placeholder="# 在此输入 Markdown..." class="block w-full h-auto resize-none max-w-3xl mx-auto px-8 mb-8 pt-4 outline-none overflow-hidden" style="background: var(--note-background); color: var(--note-ink); font-family: var(--note-font-mono); font-size: 14px; line-height: 1.7;"></textarea>
-            <div id="ed-wysiwyg" class="editor-article wysiwyg max-w-3xl mx-auto px-8 py-8" contenteditable="true" spellcheck="false" hidden></div>
-          </div>
-          <div id="ed-split-sep" class="ed-sep w-px shrink-0" style="background: var(--note-border);"></div>
-          <!-- 预览 -->
-          <div id="ed-pane-prev" class="ed-pane">
-            <article id="ed-preview" class="editor-article max-w-3xl mx-auto px-8 py-8 transition-all" style="color: var(--note-ink);"></article>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- 标题/时间/字数组件已移除：改名统一走文件树右键「重命名」/双击文件名，见 ED-44 -->
+      <!-- vditor 挂载区：mode(ir/sv/wysiwyg) 与宿主 编辑/分屏/预览 按钮映射驱动 -->
+      <div id="ed-vditor" class="ed-vditor"></div>
 
       <!-- 当前笔记索引（内联，点工具栏「查看索引」展开/收起） -->
       <div id="ed-index-panel" class="shrink-0 border-t app-scroll" hidden style="border-color: var(--note-border); background: var(--note-surface);">
@@ -122,6 +113,18 @@
     </div>
 
     <div class="app-scroll">
+      <!-- 文件属性 -->
+      <div class="border-b" style="border-color: var(--note-border);">
+        <div class="collapse-head flex items-center justify-between px-3 py-2 cursor-pointer hover:opacity-80">
+          <div class="flex items-center gap-2"><i data-lucide="info" class="w-4 h-4" style="color: var(--note-brand-400);"></i><span class="text-[12px] font-semibold" style="color: var(--note-ink);">属性</span></div>
+          <div class="flex items-center gap-1">
+            <i data-action="rebuild-fileprops" data-lucide="refresh-cw" class="w-4 h-4 cursor-pointer hover:opacity-80" title="重建元数据（当前目录及全部子目录的属性）" style="color: var(--note-ink-3);"></i>
+            <i data-lucide="chevron-down" class="w-4 h-4" style="color: var(--note-ink-3);"></i>
+          </div>
+        </div>
+        <div id="ed-fileprops" class="collapse-body pb-3 px-3"></div>
+      </div>
+
       <!-- 大纲 -->
       <div class="border-b" style="border-color: var(--note-border);">
         <div class="collapse-head flex items-center justify-between px-3 py-2 cursor-pointer hover:opacity-80">

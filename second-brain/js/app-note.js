@@ -81,7 +81,7 @@
         const clean = (name || '').trim();
         const fn = clean.toLowerCase().endsWith('.md') ? clean : clean + '.md';
         const rel = dir ? dir.replace(/[\\/]+$/, '') + '/' + fn : fn;
-        mockData[rel] = '# ' + fn.replace(/\.md$/, '') + '\n';
+        mockData[rel] = ''; // 网页 mock：与桌面端一致，新建笔记为空正文、不预置标题
         return rel;
       },
       /** 删除笔记；清理对应 AI 索引（若启用） */
@@ -95,9 +95,16 @@
         await removeIndex(path);        // 网页 mock 同样尝试清理（真实桌面端才生效）
         return true;
       },
-      /** 删除目录：递归删除该目录下所有笔记（含子目录），每删一篇同步清理索引
+      /** 删除目录：递归删除该目录（连同所有笔记、子目录与空目录本身），并同步清理索引。
+       * 桌面端走主进程 notes:removeDir（fs.rm 递归删除目录实体）；
+       * 网页 mock 降级为逐笔记删除（无法表达空目录实体删除，与桌面端尽力对齐）。
+       * 返回删除的 .md 篇数。
        * 作者: 火 冰 */
       async removeDir(dir) {
+        if (bridge && bridge.removeDir) {
+          const n = await bridge.removeDir(dir);
+          return typeof n === 'number' ? n : 0;
+        }
         const list = await this.list();
         const prefix = dir.replace(/[\\/]+$/, '') + '/';
         const targets = list.filter(n => n.path.startsWith(prefix));
@@ -128,14 +135,21 @@
         }
         return true;
       },
-      /** 移动目录：把一个目录整体搬到新父目录下（保留内部相对路径）。
-       * 内部递归调用 this.move 处理每篇笔记；索引随笔记移动自动重绑定。
+      /** 移动目录：把一个目录整体搬到新父目录下（保留内部结构 + 空目录；源目录被移除）。
+       * 桌面端走主进程 notes:moveDir（fs.rename 整目录移动），并自动重绑目录内笔记的 AI 索引；
+       * 网页 mock 降级为逐笔记移动（无法表达空目录实体移动，与桌面端行为尽力对齐）。
+       * 返回移动的 .md 篇数。
        * 作者: 火 冰 */
       async moveDir(oldDir, newParent) {
+        const oldClean = oldDir.replace(/[\\/]+$/, '');
+        if (bridge && bridge.moveDir) {
+          const r = await bridge.moveDir(oldClean, newParent || '');
+          return (r && typeof r.moved === 'number') ? r.moved : 0;
+        }
         const list = await this.list();
-        const oldPrefix = oldDir.replace(/[\\/]+$/, '') + '/';
-        const newPrefix = (newParent || '').replace(/[\\/]+$/, '') + '/' + oldDir.split('/').pop();
-        const targets = list.filter(n => n.path.startsWith(oldPrefix));
+        const oldPrefix = oldClean + '/';
+        const newPrefix = (newParent || '').replace(/[\\/]+$/, '') + '/' + oldClean.split('/').pop();
+        const targets = list.filter(n => n.path.startsWith(oldPrefix) && !n.isFolder);
         let moved = 0;
         for (const n of targets) {
           const rel = n.path.slice(oldPrefix.length);        // 目录内相对路径
@@ -182,33 +196,51 @@
   })();
 
   /* ============================
-   * Markdown 轻量渲染（预览模式用）
+   * Markdown 轻量渲染模块（独立处理，与编辑器编辑区、vditor 完全解耦）
+   *
+   * 服务对象：非编辑区的展示链路 —— AI 问答气泡（app-ai.js）、
+   * 插件 API 的 renderMarkdown（app-plugins.js）等。
+   *
+   * 编辑区说明：md 编辑区已由 vditor 引擎（editor/editor-vditor.js）全权接管渲染，
+   * 本模块不参与、也不应被编辑区调用。请勿在编辑区 Provider / 渲染链路中引用本模块。
+   * 作者: 火 冰
    * ============================ */
+  const SBMarkdown = (function () {
 
-  /* 转义 HTML 特殊字符，防注入 */
-  function esc(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
+    /* 转义 HTML 特殊字符，防注入 */
+    function esc(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
 
-  /* 行内语法：加粗/行内代码/内链/链接 */
-  function inline(md) {
-    return esc(md)
-      .replace(/\*\*(.+?)\*\*/g, '<strong style="color: var(--note-brand-300);">$1</strong>')
-      .replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 rounded font-mono text-[12.5px]" style="background: var(--note-surface-2); color: var(--note-brand-300);">$1</code>')
-      .replace(/\[\[([^\]]+)\]\]/g, '<a href="#" data-wikilink="$1" class="underline decoration-dotted underline-offset-2" style="color: var(--note-brand-400);">$1</a>')
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" class="underline decoration-dotted underline-offset-2" style="color: var(--note-brand-400);">$1</a>');
-  }
+    /* 行内语法：加粗/行内代码/内链/链接/数学行内块/白名单内联 HTML 透传
+     * 说明: 仅 font/u/span 三类白名单标签透传（字体/字号/颜色/背景色/下划线持久化），
+     * 其余任意 HTML 仍被 esc 转义防注入；数学 `$…$` 渲染为原子内联块 `.sb-math`。
+     * 作者: 火 冰 */
+    function inline(md) {
+      return esc(md)
+        .replace(/\*\*(.+?)\*\*/g, '<strong style="color: var(--note-brand-300);">$1</strong>')
+        .replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 rounded font-mono text-[12.5px]" style="background: var(--note-surface-2); color: var(--note-brand-300);">$1</code>')
+        .replace(/\[\[([^\]]+)\]\]/g, '<a href="#" data-wikilink="$1" class="underline decoration-dotted underline-offset-2" style="color: var(--note-brand-400);">$1</a>')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" class="underline decoration-dotted underline-offset-2" style="color: var(--note-brand-400);">$1</a>')
+        .replace(/&lt;\/?(?:font|u|span)\b[^&]*&gt;/g, function (match) {
+          return match.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+        })
+        .replace(/\$([^$]+)\$/g, '<span class="sb-math" contenteditable="false" data-math="1">$1</span>');
+    }
 
-  /* 由 Markdown 渲染为 HTML（预览与反链预览共用） */
-  function renderMarkdown(source) {
+    /* 由 Markdown 渲染为 HTML（AI 问答等非编辑区展示用） */
+    function renderMarkdown(source) {
     if (!source) return '<p class="text-caption" style="color: var(--note-ink-3);">（空笔记）</p>';
     const lines = String(source).split('\n');
     let html = '';
-    let inCode = false; let codeBuf = [];
+    let inCode = false; let codeBuf = []; let codeLang = '';
     const flushCode = () => {
       if (codeBuf.length) {
-        html += '<pre class="my-5 rounded-lg overflow-x-auto p-4 font-mono text-[13px] leading-relaxed" style="background: var(--note-surface-2); border: 1px solid var(--note-border); color: var(--note-ink); white-space: pre;">' + esc(codeBuf.join('\n')) + '</pre>';
-        codeBuf = [];
+        // 语言类型取自代码块首行 ``` 后面的第一词；不添加行号，保证整段文本无序号可贴回 markdown。
+        // 语言仅写入 <pre data-lang>，不再输出可见的 .code-lang 标签。
+        const lang = (codeLang || '').trim();
+        html += '<pre class="my-3 rounded-lg overflow-x-auto font-mono" data-lang="' + esc(lang) + '" style="background: var(--note-surface-2); border: 1px solid var(--note-border); color: var(--note-ink); white-space: pre; font-family: var(--note-font-mono); font-size: 13px; line-height: 1.65; padding: 0.9rem 1.1rem; min-height: 3rem;">' + esc(codeBuf.join('\n')) + '</pre>';
+        codeBuf = []; codeLang = '';
       }
     };
     const head = (txt) => {
@@ -218,9 +250,41 @@
       const size = level === 1 ? '26px' : (level === 2 ? '20px' : '16px');
       return '<h' + level + ' class="mt-6 mb-2 font-semibold" style="font-size: ' + size + '; color: var(--note-ink);">' + inline(m[2]) + '</h' + level + '>';
     };
-    for (const raw of lines) {
-      const line = raw;
-      if (line.startsWith('```')) { if (inCode) flushCode(); inCode = !inCode; continue; }
+    /* Markdown 管道表格 → <table>；第二行 `|---|` 视为表头分隔行 */
+    const mdTable = (rows) => {
+      const parse = (r) => r.trim().replace(/^\||\|\s*$/g, '').split('|').map(function (c) { return c.trim(); });
+      let thead = null; const body = [];
+      for (let k = 0; k < rows.length; k++) {
+        const cells = parse(rows[k]);
+        if (cells.length && cells.every(function (c) { return /^:?-{3,}:?$/.test(c); })) continue; // 分隔行：每格均为 ---
+        if (thead === null) thead = cells; else body.push(cells);
+      }
+      let h = '<table class="my-3 w-full border-collapse text-[13px]" style="border: 1px solid var(--note-border);"><thead><tr>';
+      // 空单元格补 `<br>` 占位：保证所见即所得/预览的空 td 有一致的可见高度（不塌陷、不畸形）
+      (thead || []).forEach(function (c) { h += '<th class="px-2 py-1 text-left font-semibold" style="border: 1px solid var(--note-border); background: var(--note-surface-2); color: var(--note-ink);">' + (inline(c) || '<br>') + '</th>'; });
+      h += '</tr></thead><tbody>';
+      body.forEach(function (r) {
+        h += '<tr>'; r.forEach(function (c) { h += '<td class="px-2 py-1" style="border: 1px solid var(--note-border); color: var(--note-ink);">' + (inline(c) || '<br>') + '</td>'; }); h += '</tr>';
+      });
+      return h + '</tbody></table>';
+    };
+    for (let i2 = 0; i2 < lines.length; i2++) {
+      const line = lines[i2];
+      // 管道表格：连续以 | 开头的行聚合成一个表格块
+      if (/^\s*\|.*\|/.test(line)) {
+        const tRows = [line];
+        let j = i2 + 1;
+        while (j < lines.length && /^\s*\|.*\|/.test(lines[j])) { tRows.push(lines[j]); j++; }
+        flushCode();
+        html += mdTable(tRows);
+        i2 = j - 1;   // 跳到表格块末尾，外层 i2++ 后指向其后第一行
+        continue;
+      }
+      if (line.startsWith('```')) {
+        if (!inCode) codeLang = line.slice(3).trim().split(/\s+/)[0] || '';  // 记录实际语言类型
+        if (inCode) flushCode();
+        inCode = !inCode; continue;
+      }
       if (inCode) { codeBuf.push(line); continue; }
       const h = head(line);
       if (h) { flushCode(); html += h; continue; }
@@ -247,4 +311,13 @@
     flushCode();
     return html;
   }
+
+    /* 仅导出非编辑区链路需要的函数 */
+    return { esc: esc, inline: inline, renderMarkdown: renderMarkdown };
+  })();
+
+  /* 保留全局旧函数名，供既有调用方（app-ai.js / app-plugins.js）继续使用 */
+  const esc = SBMarkdown.esc;
+  const inline = SBMarkdown.inline;
+  const renderMarkdown = SBMarkdown.renderMarkdown;
 

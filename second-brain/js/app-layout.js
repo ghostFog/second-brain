@@ -174,6 +174,12 @@
   async function loadView(key) {
     const route = ROUTES[key];
     if (!route) { activeView = 'editor'; location.hash = '#/editor'; return; }
+    // 离开编辑器视图前销毁 vditor 实例：切走时旧 DOM 被替换，但模块级 vdInst 仍持有
+    // 已失效实例引用，导致切回编辑器时 ensureVd 不重建新实例 → 编辑区空白。
+    // 此处显式 vdDestroy 释放引用，保证返回编辑器时 vdInit 在全新 DOM 上重建。作者: 火 冰
+    if (activeView === 'editor' && typeof window.vdDestroy === 'function') {
+      try { window.vdDestroy(); } catch (e) { if (window.SBLog) window.SBLog.warn('[loadView] vdDestroy: ' + e); }
+    }
     viewRoot.classList.add('view', 'active');
     updateNav(key);
     updateCrumb(key);
@@ -193,22 +199,46 @@
     bindViewInteractions(key);
   }
 
-  /** 绑定当前视图的交互 */
+  /** 绑定当前视图的交互
+   * 说明：对每个视图的初始化做 try/catch 隔离 —— 单个视图初始化异常只记录日志，
+   *       不再中断 loadView / 拖垮标题栏、Ribbon、命令面板等全局绑定的挂载（防整体空白）。作者: 火 冰 */
   function bindViewInteractions(key) {
     if (key === 'editor') {
-      initEditor();
+      safeInit('initEditor', function () { initEditor(); }, key);
     } else if (key === 'graph') {
-      initGraph();
+      safeInit('initGraph', function () { initGraph(); }, key);
     } else if (key === 'plugins') {
-      const dataEl = document.getElementById('plugin-data');
-      pluginData = JSON.parse(dataEl ? dataEl.textContent : '[]');
-      bindPlugins(); renderPlugins('all', '', '');
+      safeInit('bindPlugins', function () {
+        // DEFAULT_PLUGIN_DATA 为单一数据源（initPluginSystem 已填充 pluginData 并与本地目录插件合并）。
+        // 仅当视图内嵌 JSON 为非空数组时覆盖，避免用空数组清空市场、丢掉已装插件。作者: 火 冰
+        const dataEl = document.getElementById('plugin-data');
+        let parsed = [];
+        if (dataEl && dataEl.textContent) {
+          try { parsed = JSON.parse(dataEl.textContent); } catch (_) { parsed = []; }
+        }
+        if (Array.isArray(parsed) && parsed.length > 0) pluginData = parsed;
+        bindPlugins(); renderPlugins('all', '', '');
+      }, key);
     } else if (key === 'settings') {
-      bindSettings();
+      safeInit('bindSettings', function () { bindSettings(); }, key);
     } else if (key === 'ai') {
-      initAi();
+      safeInit('initAi', function () { initAi(); }, key);
     }
     bindResponsivePanels();
+  }
+
+  /** 安全执行某个视图的初始化：异常时写入日志而不外抛
+   * @param {string} name 初始化器名（用于日志）
+   * @param {Function} fn  要执行的初始化函数
+   * @param {string} key  当前视图 key
+   * 作者: 火 冰 */
+  function safeInit(name, fn, key) {
+    try { fn(); }
+    catch (e) {
+      const msg = '视图初始化失败 [' + key + ' · ' + name + ']: ' + (e && e.message || e);
+      if (window.SBLog) window.SBLog.error(msg, e && e.stack);
+      else console.error(msg, e);
+    }
   }
 
   /* ============================
@@ -233,8 +263,24 @@
     // 标题栏笔记库选择器
     initVaultPicker();
 
-    // 文件树笔记行右键菜单（在资源管理器显示）
-    bindNoteContextMenu();
+    // 插件系统：从 DEFAULT_PLUGIN_DATA 填充市场数据 + 注册已装插件的扩展点 + 加载本地目录插件。
+    // 必须先于 RibbonManager.init，让插件 Ribbon/顶栏按钮在整体渲染前注册。作者: 火 冰
+    if (typeof initPluginSystem === 'function') {
+      safeInit('initPluginSystem', function () { initPluginSystem(); }, 'plugins');
+    }
+
+    // 快捷键注册表：初始化内置命令 + 同步插件命令（放在插件系统就绪之后）
+    if (typeof kbInit === 'function') {
+      safeInit('kbInit', function () { kbInit(); }, 'keybinds');
+    }
+
+    // Ribbon 左侧导航：由 RibbonManager 统一渲染（此前的启动引导缺失了 RibbonManager.init 调用，
+    // 导致左侧按钮整列不渲染）；用 safeInit 隔离，失败只记日志不拖垮启动。作者: 火 冰
+    if (typeof RibbonManager !== 'undefined' && RibbonManager.init) {
+      safeInit('RibbonManager.init', function () { RibbonManager.init('file'); }, 'ribbon');
+    }
+
+    // 文件树右键菜单已由 js/file-tree-ctx.js 统一接管（目录/笔记/空白区三套，stopPropagation 阻断），此处不再绑定旧菜单
 
     // 编辑区右键菜单（仅当打开的是 .md 笔记）
     bindEditorContextMenu();
@@ -255,21 +301,29 @@
       if (item) { paletteIndex = +item.dataset.idx; highlightPaletteItem(); }
     });
 
-    // 全局快捷键
+    // 全局快捷键：命令面板/查找条 UI 键优先，其余命令统一走注册表 kbMatch（app-keybinds.js）
     document.addEventListener('keydown', function (e) {
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key.toLowerCase() === 'p') { e.preventDefault(); paletteOpen ? closePalette() : openPalette(); }
-      else if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); location.hash = '#/graph'; }
-      else if (mod && e.key.toLowerCase() === 'n') { e.preventDefault(); location.hash = '#/editor'; document.dispatchEvent(new CustomEvent('note:new')); }
-      else if (mod && e.key.toLowerCase() === 'f' && activeView === 'editor') { e.preventDefault(); openFindbar(false); }
-      else if (mod && e.key.toLowerCase() === 'r' && activeView === 'editor') { e.preventDefault(); openFindbar(true); }
       // Esc 关闭查找/替换条（焦点不在输入框内也生效，重复调用幂等）
       if (findOpen && !paletteOpen && e.key === 'Escape') { closeFindbar(); }
+      // 命令面板 UI 键（方向键/Enter/Esc）优先处理，避免被输入态防护拦截
       if (paletteOpen) {
-        if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
-        else if (e.key === 'ArrowDown') { e.preventDefault(); paletteIndex = Math.min(paletteIndex + 1, paletteItems.length - 1); highlightPaletteItem(); }
-        else if (e.key === 'ArrowUp') { e.preventDefault(); paletteIndex = Math.max(paletteIndex - 1, 0); highlightPaletteItem(); }
-        else if (e.key === 'Enter') { e.preventDefault(); if (paletteItems[paletteIndex]) runCommand(paletteItems[paletteIndex]); }
+        if (e.key === 'Escape') { e.preventDefault(); closePalette(); return; }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); paletteIndex = Math.min(paletteIndex + 1, paletteItems.length - 1); highlightPaletteItem(); return; }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); paletteIndex = Math.max(paletteIndex - 1, 0); highlightPaletteItem(); return; }
+        else if (e.key === 'Enter') { e.preventDefault(); if (paletteItems[paletteIndex]) runCommand(paletteItems[paletteIndex]); return; }
+      }
+      // 输入态防护：焦点在 input/textarea/[contenteditable] 且非命令面板时，仅放行带修饰键的命令，避免打字误触发
+      const el = e.target;
+      const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true);
+      const hasMod = e.ctrlKey || e.metaKey || e.altKey;
+      if (typing && !paletteOpen && !hasMod) return;
+      // 其余命令统一从注册表匹配并执行（命中即吞掉事件）
+      if (typeof kbMatch === 'function') {
+        const cmd = kbMatch(e);
+        if (cmd && typeof cmd.action === 'function') {
+          e.preventDefault();
+          try { cmd.action(); } catch (_) { }
+        }
       }
     });
 

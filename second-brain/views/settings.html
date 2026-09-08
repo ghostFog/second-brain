@@ -5,6 +5,7 @@
       <h2 class="text-h3" style="color: var(--note-ink);">设置</h2>
     </div>
     <nav class="flex-1 px-2 py-2 flex flex-col gap-0.5 overflow-y-auto no-scrollbar">
+      <div class="settings-cat" data-cat="常规"><i data-lucide="settings" class="w-4 h-4"></i><span>常规</span></div>
       <div class="settings-cat" data-cat="外观" data-active="1"><i data-lucide="palette" class="w-4 h-4"></i><span>外观</span></div>
       <div class="settings-cat" data-cat="编辑器"><i data-lucide="file-text" class="w-4 h-4"></i><span>编辑器</span></div>
       <div class="settings-cat" data-cat="快捷键"><i data-lucide="keyboard" class="w-4 h-4"></i><span>快捷键</span></div>
@@ -29,15 +30,15 @@
         <div class="grid grid-cols-3 gap-3">
           <div class="theme-card" data-theme-mode="dark">
             <div class="mb-3"><div class="w-full h-16 rounded-md overflow-hidden flex" style="border: 1px solid var(--note-border);"><div class="flex-1" style="background: #1E1E2E;"></div><div style="width: 30%; background: #2D2D3F;"></div></div></div>
-            <div class="flex items-center justify-between"><span class="text-[14px]" style="color: var(--note-ink);">深色</span><i data-lucide="check" class="w-4 h-4" style="color: var(--note-brand-600);"></i></div>
+            <div class="flex items-center justify-between"><span class="text-[14px]" style="color: var(--note-ink);">深色</span><i data-lucide="check" class="theme-card-check w-4 h-4" style="color: var(--note-brand-600);"></i></div>
           </div>
           <div class="theme-card" data-theme-mode="light">
             <div class="mb-3"><div class="w-full h-16 rounded-md overflow-hidden flex" style="border: 1px solid var(--note-border);"><div class="flex-1" style="background: #FFFFFF;"></div><div style="width: 30%; background: #F7F7FA;"></div></div></div>
-            <div class="flex items-center justify-between"><span class="text-[14px]" style="color: var(--note-ink-2);">浅色</span></div>
+            <div class="flex items-center justify-between"><span class="text-[14px]" style="color: var(--note-ink-2);">浅色</span><i data-lucide="check" class="theme-card-check w-4 h-4" style="color: var(--note-brand-600); display: none;"></i></div>
           </div>
           <div class="theme-card" data-theme-mode="auto">
             <div class="mb-3"><div class="w-full h-16 rounded-md overflow-hidden flex" style="border: 1px solid var(--note-border);"><div class="flex-1" style="background: linear-gradient(90deg, #1E1E2E 50%, #FFFFFF 50%);"></div><div style="width: 30%; background: linear-gradient(90deg, #2D2D3F 50%, #F7F7FA 50%);"></div></div></div>
-            <div class="flex items-center justify-between"><span class="text-[14px]" style="color: var(--note-ink-2);">跟随系统</span></div>
+            <div class="flex items-center justify-between"><span class="text-[14px]" style="color: var(--note-ink-2);">跟随系统</span><i data-lucide="check" class="theme-card-check w-4 h-4" style="color: var(--note-brand-600); display: none;"></i></div>
           </div>
         </div>
       </section>
@@ -108,12 +109,31 @@
       </section>
 
       <section class="settings-group">
+        <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">Ribbon 导航栏</h3>
+        <p class="text-caption mb-4" style="color: var(--note-ink-3);">
+          左侧导航按钮支持拖拽排序和置顶，设置按钮始终固定在最后。
+          超过最大数量的按钮会折叠到三点菜单中，点击可展开查看并切换。
+          排序和置顶会自动保存，下次启动保持不变。
+        </p>
+        <div class="mb-6">
+          <div class="flex items-center justify-between mb-3">
+            <div><div class="text-[14px]" style="color: var(--note-ink);">最大显示数量</div><div class="text-caption" style="color: var(--note-ink-3);">含设置按钮，范围 7-15</div></div>
+            <span id="ribbon-max-label" class="text-mono nums px-2 py-0.5 rounded" style="background: var(--note-surface-2); color: var(--note-ink);">7</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-caption" style="color: var(--note-ink-3);">7</span>
+            <input id="ribbon-max-slider" type="range" min="7" max="15" value="7" class="range-slider flex-1">
+            <span class="text-caption" style="color: var(--note-ink-3);">15</span>
+          </div>
+        </div>
+        <div class="text-caption" style="color: var(--note-ink-3);">
+          <strong style="color: var(--note-ink-2);">操作提示：</strong>拖拽按钮图标可重新排序，右键按钮可置顶 / 取消置顶，设置按钮不可移动。
+        </div>
+      </section>
+
+      <section class="settings-group">
         <h3 class="text-body font-semibold mb-4" style="color: var(--note-ink);">其他</h3>
         <div class="flex flex-col gap-1">
-          <div class="flex items-center justify-between py-3"><div class="flex-1 pr-4"><div class="text-[14px]" style="color: var(--note-ink);">显示行号</div><div class="text-caption" style="color: var(--note-ink-3);">在代码块和编辑区左侧显示行号</div></div><label class="toggle"><input type="checkbox" data-skey="lineNumbers" checked><span class="toggle-track"></span></label></div>
-          <div class="border-t" style="border-color: var(--note-border);"></div>
-          <div class="flex items-center justify-between py-3"><div class="flex-1 pr-4"><div class="text-[14px]" style="color: var(--note-ink);">自动换行</div><div class="text-caption" style="color: var(--note-ink-3);">长文本行自动折行显示，避免横向滚动</div></div><label class="toggle"><input type="checkbox" data-skey="wrap" checked><span class="toggle-track"></span></label></div>
-          <div class="border-t" style="border-color: var(--note-border);"></div>
           <div class="flex items-center justify-between py-3"><div class="flex-1 pr-4"><div class="text-[14px]" style="color: var(--note-ink);">减少动画</div><div class="text-caption" style="color: var(--note-ink-3);">降低界面过渡与动画强度</div></div><label class="toggle"><input type="checkbox" data-skey="reduceMotion"><span class="toggle-track"></span></label></div>
         </div>
       </section>

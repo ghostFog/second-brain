@@ -1,0 +1,39 @@
+{
+  "name": "Markdown Editor",
+  "id": "markdown-editor",
+  "author": "第二脑",
+  "icon": "file-text",
+  "color": "#7C3AED",
+  "cat": "editor",
+  "desc": "Markdown 编辑器能力（vditor 引擎）：注册 .md/.markdown 后缀，提供编辑/预览/分屏打开方式、工具按钮与右侧边面板（属性/大纲/反向链接/标签）。引擎由宿主 js/editor/editor-vditor.js 承载，桌面与网页双端一致。",
+  "version": "1.0.0",
+  "main": "main.js",
+  "permissions": ["ui.editor"],
+  "editor": {
+    "extensions": [".md", ".markdown"],
+    "openers": [
+      { "id": "edit", "label": "编辑", "icon": "pencil" },
+      { "id": "preview", "label": "预览", "icon": "eye" },
+      { "id": "split", "label": "分屏", "icon": "columns-2" }
+    ],
+    "toolbar": [
+      { "id": "mode-edit", "label": "编辑", "icon": "pencil", "mode": "edit" },
+      { "id": "mode-preview", "label": "预览", "icon": "eye", "mode": "preview" },
+      { "id": "mode-split", "label": "分屏", "icon": "columns-2", "mode": "split" },
+      { "id": "toggle-source", "label": "源码/所见即所得", "icon": "code", "actionKey": "mde-toggle-source" },
+      { "id": "toggle-lineno", "label": "行号", "icon": "list-ordered", "actionKey": "mde-toggle-lineno" },
+      { "id": "toggle-wrap", "label": "自动换行", "icon": "wrap-text", "actionKey": "mde-toggle-wrap" },
+      { "id": "view-index", "label": "索引面板", "icon": "database", "actionKey": "mde-view-index" },
+      { "id": "delete", "label": "删除笔记", "icon": "trash-2", "actionKey": "mde-delete" }
+    ],
+    "sidebar": [
+      { "id": "props", "label": "属性" },
+      { "id": "outline", "label": "大纲" },
+      { "id": "backlinks", "label": "反向链接" },
+      { "id": "tags", "label": "标签" }
+    ]
+  },
+  "commands": [
+    { "icon": "file-text", "label": "Markdown: 打开当前笔记", "actionKey": "mde-open" }
+  ]
+}

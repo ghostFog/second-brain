@@ -1,10 +1,11 @@
 {
   "name": "second-brain",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "第二脑 桌面版 — Obsidian 风格笔记应用 (Electron)",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node regression.test.js",
     "dist": "electron-builder --win"
   },
   "author": "火 冰",
@@ -20,6 +21,7 @@
     "directories": {
       "output": "dist"
     },
+    "icon": "assets/icon.ico",
     "files": [
       "main.js",
       "preload.js",
@@ -28,6 +30,8 @@
       "css/**/*",
       "js/**/*",
       "views/**/*",
+      "plugins/**/*",
+      "assets/**/*",
       "package.json",
       "!node_modules/onnxruntime-node/bin/napi-v3/darwin/**/*",
       "!node_modules/onnxruntime-node/bin/napi-v3/linux/**/*",
@@ -67,6 +71,10 @@
   "dependencies": {
     "@xenova/transformers": "^2.17.2",
     "gray-matter": "^4.0.3",
-    "onnxruntime-node": "^1.14.0"
+    "highlight.js": "^11.12.0",
+    "onnxruntime-node": "^1.14.0",
+    "snowflake-id": "^1.1.0",
+    "vditor": "^4.0.0",
+    "ws": "^8.21.3"
   }
 }

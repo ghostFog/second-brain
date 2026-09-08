@@ -1,8 +1,11 @@
 /* ============================================
- * 第二脑 — 文件树右键菜单
+ * 第二脑 — 文件树右键菜单（统一覆盖目录 / 笔记 / 空白区三种场景）
  * 作者: 火 冰
- * 功能: 文件树上右键时弹出菜单；支持删除（文档/目录）、移动到…（子菜单列目录）
- *       菜单项通过 data-path / data-folder 标识目标；删除时自动清理 AI 索引
+ * 功能:
+ *   - 目录右键：在资源管理器打开 / 新建目录(该目录下) / 新建笔记(该目录下) / 删除 / 移动
+ *   - 笔记右键：在资源管理器打开 / 新建笔记(同级目录下) / 删除 / 移动
+ *   - 空白区右键：新建目录(根目录下) / 新建笔记(根目录下) / 显示/隐藏隐藏目录
+ *   - 所有场景命中后 stopPropagation，阻断冒泡到 document，避免与 app-vault.js 旧菜单重复
  * ============================================ */
 
 'use strict';
@@ -20,7 +23,8 @@ function treeSpec(label, icon, action, disabled) {
   return { label: label, icon: icon, action: action, disabled: !!disabled };
 }
 
-/* 列出全部非空目录（不含 .md 文件），用于「移动到…」子菜单 */
+/* 列出全部非空目录（不含 .md 文件），用于「移动到…」子菜单 / 根目录下新建的父选择
+ * 作者: 火 冰 */
 async function listDirs() {
   try {
     const list = await noteStore.list();
@@ -34,60 +38,64 @@ async function listDirs() {
   } catch (_) { return []; }
 }
 
-/* 删除当前打开笔记的安全判定：若删的是 edCurrent，需先关闭标签页 */
-function handleDeleteOfCurrent(path, noteType) {
+/* 资源管理器定位桌面文件/目录；网页版提示仅桌面版可用。
+ * main.js 的 notes:reveal 底层用 shell.showItemInFolder，对文件/目录都支持，
+ * 所以统一调 revealNote 即可（参数路径若是目录，Electron 也能正确定位）。
+ * 作者: 火 冰 */
+function openInExplorer(path) {
+  const bridge = window.noteDesktop;
+  if (!bridge) { showToast('该功能仅桌面版可用'); return; }
+  if (bridge.revealNote) bridge.revealNote(path).catch(() => {});
+  else { showToast('资源管理器定位失败'); }
+}
+
+/* 删除笔记路径对应的标签页 + 缓存；若 edCurrent 正好被删 → 切换到下一个打开笔记
+ * 作者: 火 冰 */
+function handleDeleteOfCurrent(path) {
   if (path !== edCurrent) return;
-  // 从标签列表移除 + 关闭编辑器
   edOpenTabs = edOpenTabs.filter(p => p !== path);
   delete edOutdated[path];
   edCurrent = edOpenTabs[edOpenTabs.length - 1] || null;
   renderTabs();
   if (edCurrent) renderArticle();
-  else {
-    const ta = document.getElementById('ed-edit');
-    if (ta) ta.value = '';
-    const pv = document.getElementById('ed-preview');
-    if (pv) pv.innerHTML = '';
-  }
+  else if (typeof vdSetValue === 'function') vdSetValue('');
 }
 
-/* 文件树节点右键：删除笔记 / 删除目录 / 移动到… */
+/* 右键菜单 动作：删除笔记 */
 async function actDeleteNote(path) {
   if (!confirm('确定删除笔记「' + path.split('/').pop() + '」吗？\n（同时清理该笔记的 AI 索引）')) return;
   try {
     await noteStore.remove(path);
     showToast('已删除：' + path.split('/').pop());
   } catch (e) { showToast('删除失败：' + (e && e.message || e)); return; }
-  handleDeleteOfCurrent(path, 'note');
+  handleDeleteOfCurrent(path);
   await refreshTreeAfterChange();
 }
 
+/* 右键菜单 动作：删除目录（递归删所有下级笔记 + 索引） */
 async function actDeleteDir(dir) {
-  if (!confirm('确定删除目录「' + dir + '」及其下所有笔记吗？\n（目录下每篇笔记的 AI 索引将一并清理）')) return;
+  if (!confirm('确定删除目录「' + dir + '」及其下所有笔记吗？\n（每篇笔记的 AI 索引将一并清理）')) return;
   try {
     const removed = await noteStore.removeDir(dir);
     showToast('已删除目录下 ' + removed + ' 篇笔记');
   } catch (e) { showToast('删除失败：' + (e && e.message || e)); return; }
-  // 若当前打开的笔记在被删目录下，也要关闭
   if (edCurrent && edCurrent.startsWith(dir.replace(/[\\/]+$/, '') + '/')) {
-    handleDeleteOfCurrent(edCurrent, 'note');
+    handleDeleteOfCurrent(edCurrent);
   }
   await refreshTreeAfterChange();
 }
 
+/* 右键菜单 动作：移动笔记到新父目录（跨目录移动；若新父目录下已存在同名笔记则失败） */
 async function actMoveNote(oldPath, newPath) {
-  // 防移动到自身目录 + 同名覆盖风险
-  if (!newPath.endsWith('.md')) newPath += '/' + oldPath.split('/').pop();
+  if (oldPath === newPath) return;
   try {
     const ok = await noteStore.move(oldPath, newPath);
     if (!ok) { showToast('移动失败：目标可能已存在'); return; }
-    showToast('已移动：' + oldPath + ' → ' + newPath);
+    showToast('已移动：' + oldPath.split('/').pop());
   } catch (e) { showToast('移动失败：' + (e && e.message || e)); return; }
-  // 若移动的是当前打开的笔记 → 重新打开
   if (oldPath === edCurrent) {
     edCurrent = newPath;
     edOpenTabs = edOpenTabs.map(p => p === oldPath ? newPath : p);
-    // 迁移缓存
     if (edOutdated[oldPath] != null) { edOutdated[newPath] = edOutdated[oldPath]; delete edOutdated[oldPath]; }
     await openNote(newPath);
     renderTabs();
@@ -95,17 +103,17 @@ async function actMoveNote(oldPath, newPath) {
   await refreshTreeAfterChange();
 }
 
+/* 右键菜单 动作：移动目录（整体搬到新父目录下，保留内部相对路径；禁止拖入自身子目录） */
 async function actMoveDir(oldDir, newParent) {
-  // 防止把目录移动到自身内部
   if ((newParent + '/').startsWith(oldDir.replace(/[\\/]+$/, '') + '/')) {
     showToast('不能把目录移动到它自己的子目录里');
     return;
   }
   try {
     const moved = await noteStore.moveDir(oldDir, newParent);
-    showToast('已移动 ' + moved + ' 篇笔记');
+    showToast('已移动目录「' + oldDir.split('/').pop() + '」' + (moved ? '（含 ' + moved + ' 篇笔记）' : ''));
   } catch (e) { showToast('移动失败：' + (e && e.message || e)); return; }
-  // 若当前打开的笔记在被移动目录下 → 路径同步更新
+  // 同步当前打开笔记路径
   if (edCurrent && edCurrent.startsWith(oldDir.replace(/[\\/]+$/, '') + '/')) {
     const oldPrefix = oldDir.replace(/[\\/]+$/, '') + '/';
     const newDirName = oldDir.split('/').pop();
@@ -121,14 +129,15 @@ async function actMoveDir(oldDir, newParent) {
   await refreshTreeAfterChange();
 }
 
-/* 变更后统一刷新文件树 + 笔记列表缓存 */
+/* 变更后统一刷新文件树 + 笔记列表缓存
+ * 作者: 火 冰 */
 async function refreshTreeAfterChange() {
   edNotes = (await noteStore.list()).sort((a, b) => a.path.localeCompare(b.path, 'zh'));
   renderFileTree(edNotes);
   refreshIcons();
 }
 
-/* 构建右键菜单项；支持子菜单（移动到…列目录） */
+/* 构建单个菜单项（支持二级子菜单 / 分隔线 / 禁用态） */
 function buildTreeCtxItem(spec) {
   const el = document.createElement('div');
   if (spec === '-') { el.className = 'edit-ctx-sep'; return el; }
@@ -152,42 +161,14 @@ function buildTreeCtxItem(spec) {
   return el;
 }
 
-/* 显示文件树右键菜单（自动靠边翻转） */
-async function showFileTreeContextMenu(x, y, node) {
+/* 显示右键菜单（自动靠边翻转，避免溢出） */
+function showFileTreeContextMenu(x, y, schema) {
   closeFileTreeContextMenu();
-  const isFolder = !!node.dataset.folder;
-  const targetPath = node.dataset.path || node.dataset.folder || '';
   const menu = document.createElement('div');
   menu.id = 'tree-ctx-menu';
-  menu.className = 'edit-ctx';           /* 复用编辑区右键菜单样式 */
+  menu.className = 'edit-ctx';
   menu.style.minWidth = '180px';
-
-  const dirs = await listDirs();
-  const moveChildren = dirs
-    .filter(d => !isFolder || d !== targetPath)   /* 目录：过滤自身 */
-    .map(d => treeSpec(d || '根目录', 'folder', () => {
-      if (isFolder) actMoveDir(targetPath, d); else actMoveNote(targetPath, (d ? d + '/' : '') + targetPath.split('/').pop());
-    }));
-  moveChildren.unshift(treeSpec('根目录', 'folder', () => {
-    if (isFolder) actMoveDir(targetPath, ''); else actMoveNote(targetPath, targetPath.split('/').pop());
-  }));
-
-  const schema = isFolder ? [
-    treeSpec('新建笔记', 'file-plus', () => { closeFileTreeContextMenu(); doNewNote(); }),
-    treeSpec('新建子目录', 'folder-plus', () => { closeFileTreeContextMenu(); doNewFolder(); }),
-    '-',
-    { label: '移动到…', icon: 'move-right', children: moveChildren },
-    '-',
-    treeSpec('删除目录', 'trash-2', () => actDeleteDir(targetPath)),
-  ] : [
-    treeSpec('打开', 'file-text', () => openNote(targetPath)),
-    '-',
-    { label: '移动到…', icon: 'move-right', children: moveChildren },
-    '-',
-    treeSpec('删除笔记', 'trash-2', () => actDeleteNote(targetPath)),
-  ];
   schema.forEach(s => menu.appendChild(buildTreeCtxItem(s)));
-
   document.body.appendChild(menu);
   const r = menu.getBoundingClientRect();
   const vw = window.innerWidth, vh = window.innerHeight;
@@ -195,8 +176,7 @@ async function showFileTreeContextMenu(x, y, node) {
   let top = Math.min(Math.max(8, y), Math.max(8, vh - r.height));
   menu.style.left = left + 'px';
   menu.style.top = top + 'px';
-
-  // 遮罩：点击 / 右键 / 滚动 / Escape 关闭
+  // 遮罩：点击 / 右键 / 滚动 关闭
   const overlay = document.createElement('div');
   overlay.id = 'tree-ctx-backdrop';
   overlay.style.cssText = 'position:fixed;inset:0;z-index:122;';
@@ -207,22 +187,93 @@ async function showFileTreeContextMenu(x, y, node) {
   refreshIcons();
 }
 
-/* 绑定文件树右键：在 #file-tree 上做委托，命中 .tree-file / .tree-folder 时弹菜单并 stopPropagation
- * 阻断冒泡到 document，避免 app-vault.js 的 bindNoteContextMenu（旧的文件树菜单）再弹一份。
- * 命中空白区时不 stopPropagation，让事件继续冒泡给 document，app-vault.js 接手弹"新建笔记/目录"菜单。
+/* 笔记右键「打开」二级子菜单：在资源管理器打开 + 各 Provider 支持的打开方式
+ * 依据该文件后缀，取 pluginManager.getEditorProviders(ext) 命中的 Provider 的 openers；
+ * 无 Provider（仅兜底）时仍给出纯文本编辑；生成异常时仅保留资源管理器定位。
+ * 作者: 火 冰 */
+function buildOpenChildren(path) {
+  const children = [treeSpec('在资源管理器打开', 'folder-open', () => openInExplorer(path))];
+  try {
+    const ext = (typeof fileExtension === 'function') ? fileExtension(path) : '';
+    const pm = (typeof pluginManager !== 'undefined' && pluginManager && pluginManager.getEditorProviders) ? pluginManager : null;
+    const prov = (pm ? pm.getEditorProviders(ext) : [])[0];
+    if (prov && prov.openers) {
+      prov.openers.forEach(o => {
+        children.push(treeSpec(o.label, o.icon || 'file-type', () => openNote(path, { mode: o.id })));
+      });
+    }
+  } catch (_) { /* 忽略：失败时仅保留资源管理器打开 */ }
+  return children;
+}
+
+/* 绑定文件树右键：在 #file-tree 上做委托，统一处理目录 / 笔记 / 空白区三种场景
+ * 所有匹配场景命中后 stopPropagation，阻断冒泡到 document，确保只弹一份菜单。
  * 作者: 火 冰 */
 function bindFileTreeContextMenu() {
   const root = document.getElementById('file-tree');
   if (!root) return;
-  root.addEventListener('contextmenu', e => {
-    const node = e.target.closest('.tree-file, .tree-folder');
-    if (!node) return;                                // 空白区：不拦截，让 app-vault.js 处理
+
+  root.addEventListener('contextmenu', async e => {
     e.preventDefault();
-    e.stopPropagation();                              // 关键：阻断到 document，防止旧菜单再弹
-    closeFileTreeContextMenu();
-    showFileTreeContextMenu(e.clientX, e.clientY, node);
+    e.stopPropagation();                            // ★ 关键：阻断到 document，防止 app-vault.js 旧菜单再弹一份
+    const folderNode = e.target.closest('.tree-folder');
+    const noteNode = e.target.closest('.tree-file');
+
+    if (folderNode) {
+      // ===== 目录菜单 =====
+      const targetDir = folderNode.dataset.folder || '';
+      const dirs = await listDirs();
+      // 移动到… 子菜单：根目录 + 全部目录，过滤自身
+      const moveChildren = [
+        treeSpec('根目录', 'folder', () => actMoveDir(targetDir, '')),
+        ...dirs.filter(d => d !== targetDir).map(d => treeSpec(d, 'folder', () => actMoveDir(targetDir, d))),
+      ];
+      showFileTreeContextMenu(e.clientX, e.clientY, [
+        treeSpec('在资源管理器打开', 'folder-open', () => openInExplorer(targetDir)),
+        '-',
+        treeSpec('新建目录', 'folder-plus', () => doNewFolder(targetDir)),
+        treeSpec('新建笔记', 'file-plus', () => doNewNote(targetDir)),
+        '-',
+        { label: '移动到…', icon: 'move-right', children: moveChildren },
+        '-',
+        treeSpec('删除目录', 'trash-2', () => actDeleteDir(targetDir)),
+      ]);
+      return;
+    }
+
+    if (noteNode) {
+      // ===== 笔记菜单 =====
+      const targetPath = noteNode.dataset.path || '';
+      const siblingDir = targetPath.includes('/') ? targetPath.slice(0, targetPath.lastIndexOf('/')) : '';
+      const dirs = await listDirs();
+      const moveChildren = [
+        treeSpec('根目录', 'folder', () => actMoveNote(targetPath, targetPath.split('/').pop())),
+        ...dirs.map(d => treeSpec(d, 'folder', () => actMoveNote(targetPath, (d ? d + '/' : '') + targetPath.split('/').pop()))),
+      ];
+      showFileTreeContextMenu(e.clientX, e.clientY, [
+        { label: '打开', icon: 'folder-open', children: buildOpenChildren(targetPath) },
+        '-',
+        treeSpec('新建笔记', 'file-plus', () => doNewNote(siblingDir)),
+        '-',
+        { label: '移动到…', icon: 'move-right', children: moveChildren },
+        treeSpec('重命名', 'edit-3', () => renameNoteFile(targetPath)),
+        '-',
+        treeSpec('删除笔记', 'trash-2', () => actDeleteNote(targetPath)),
+      ]);
+      return;
+    }
+
+    // ===== 空白区菜单 =====
+    const showHidden = restoreS('showHidden', false);
+    showFileTreeContextMenu(e.clientX, e.clientY, [
+      treeSpec('新建目录', 'folder-plus', () => doNewFolder('')),
+      treeSpec('新建笔记', 'file-plus', () => doNewNote('')),
+      '-',
+      treeSpec((showHidden ? '隐藏隐藏目录' : '显示隐藏目录'), showHidden ? 'eye-off' : 'eye', () => toggleHiddenFiles()),
+    ]);
   });
-  // 全局 Escape 兜底关闭（edit-ctx.js 已有自己的全局监听，我们独立）
+
+  // 全局 Escape 兜底关闭（与 edit-ctx.js / vault 菜单各自独立）
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') closeFileTreeContextMenu();
   });
