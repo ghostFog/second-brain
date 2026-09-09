@@ -28,7 +28,7 @@
   let edClickPath = null;     // 文件树最近一次单击的文件路径（用于双击判定，renameNoteFile）
   let edClickTime = 0;        // 文件树最近一次单击的时间戳
   let edTextFallback = false; // 纯文本兜底：无 Provider 匹配时以 textarea 只读渲染（保证任意后缀可打开）
-  let edSaveTimer = null;
+  let edSaveTimers = {};       // path->autosave 去抖 timer：按文件独立，防止多笔记快速切换时去抖计时互相覆盖导致未保存内容丢失
   let edLineNum = true;       // 行号显示开关（initEditor 时从设置恢复）
   let findOpen = false;       // 查找/替换条是否打开
   let edFindQ = '';           // 当前查找关键词

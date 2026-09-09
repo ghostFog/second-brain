@@ -126,18 +126,23 @@
     opts = opts || {};
     edSel = null;             // 打开笔记后清除目录选中，右侧转笔记属性
     if (edOpenTabs.indexOf(path) === -1) edOpenTabs.push(path);
-    edCurrent = path;
     // 后缀路由：md → markdown-editor Provider；无 Provider 匹配 → 内置纯文本兜底
     edExt = (typeof fileExtension === 'function') ? fileExtension(path) : '';
     const provs = (typeof pluginManager !== 'undefined' && pluginManager && pluginManager.getEditorProviders)
       ? pluginManager.getEditorProviders(edExt) : [];
     edProvider = provs[0] || null;
     edTextFallback = !!(edProvider && edProvider.isFallback);
-    // 读取（有缓存则不重复）
+    // 内容装载：缓存命中则不重复读
     if (!(path in edOutdated)) {
       const c = await noteStore.read(path);
       edOutdated[path] = c;
     }
+    /* 关键时序：edCurrent 必须在「内容真正装载进编辑器」之前设置，而不是 openNote 开头。
+     * read 是异步的（await），若在开头就设 edCurrent=path，则从「点击新文件」到「新内容渲染进
+     * vditor」之间，编辑器仍显示旧文件，但 edCurrent 已指向新文件——此时 vditor 的 blur/input
+     * 事件会把「旧文件可见内容」以新文件路径保存，造成串文件/笔记丢失。故在内容就绪后、渲染前
+     * 再激活为当前文件，保证 edCurrent 恒等于「编辑器当前正显示的文件」。作者: 火 冰 */
+    edCurrent = path;
     // 打开方式：入参优先，否则按上次记忆的统一编辑模式（WYSIWYG/IR/SV/阅读）应用
     applyEditorMode(opts.mode || lastEditorMode());
     renderTabs();
@@ -223,15 +228,20 @@
    * vditor 在 input 事件把最新文本回调至此；预览联动由 vditor 自管。
    * 作者: 火 冰 */
   function onEdInput(mdText) {
-    if (!edCurrent) return;
-    edOutdated[edCurrent] = mdText;
-    edDirty.add(edCurrent); // 内容变化记为「有未保存更改」
+    // 内容归属在「产生这次输入」时即固定为该文件，后续一律用 p 而非 edCurrent。
+    // 原实现在 autosave 去抖 timer 触发时才读 edCurrent，快速切换笔记时会把 A 的内容写进 B
+    // （串文件/覆盖丢失），或 A 的去抖 timer 被 B 的输入 clearTimeout 清掉导致 A 的修改不保存。
+    const p = edCurrent;
+    if (!p) return;
+    edOutdated[p] = mdText;
+    edDirty.add(p); // 内容变化记为「有未保存更改」
     const cnt = $('ed-count'); if (cnt) cnt.textContent = countChars(mdText) + ' 字';
     const saved = $('ed-saved'); if (saved) saved.textContent = '编辑中…';
     if (!restoreS('edAutoSave', true)) { if (saved) saved.textContent = '自动保存已关闭'; return; }
-    if (edSaveTimer) clearTimeout(edSaveTimer);
-    edSaveTimer = setTimeout(async function () {
-      const p = edCurrent;
+    // 按文件独立去抖：仅重置本文件自己的 timer，不影响其它正在编辑的笔记（避免切换时丢保存）
+    if (edSaveTimers[p]) clearTimeout(edSaveTimers[p]);
+    edSaveTimers[p] = setTimeout(async function () {
+      delete edSaveTimers[p];
       try { await noteStore.save(p, mdText); edDirty.delete(p); const s = $('ed-saved'); if (s) s.textContent = '已自动保存'; }
       catch (err) { const s = $('ed-saved'); if (s) s.textContent = '保存失败'; }
     }, 800);
@@ -732,6 +742,9 @@
     document.addEventListener('note:new', doNewNote);
     // 侧边面板折叠
     bindCollapse();
+    // 侧边面板区块：恢复上次顺序 + 绑定拖拽调整顺序
+    if (typeof restoreSidePanelOrder === 'function') restoreSidePanelOrder();
+    if (typeof bindSidePanelDrag === 'function') bindSidePanelDrag();
     // 文件树：右键菜单 + 拖拽移动
     bindFileTreeContextMenu && bindFileTreeContextMenu();
     bindFileTreeDrag();

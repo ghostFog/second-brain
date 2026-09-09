@@ -129,14 +129,37 @@ ipcMain.on('win:maximize', () => {
   if (mainWin.isMaximized()) mainWin.unmaximize(); else mainWin.maximize();
 });
 
-/* 关闭按钮(×)行为分派：按用户设置的 closeAction 决定是退出、缩小到托盘，还是弹三选确认框。
- * quit=直接退出；tray=缩小到托盘；confirm=弹出「退出/缩小到托盘/取消」对话框，由用户每次选择。
+/* 关闭按钮(×)行为分派：
+ * 仅首次（closeAsked=false）弹一次「关闭后希望执行什么操作」并记住选择；之后一律按 closeAction 直接执行，
+ * 后续在设置「常规 → 关闭按钮行为」里维护，不再每次都弹。
+ * quit=直接退出；tray=缩小到托盘；confirm=用户手动在设置里选的「每次询问」，仍每次弹。
  * 作者: 火 冰 */
 ipcMain.on('win:close', () => {
   if (!mainWin) return;
+  if (!closeAsked) { // 首次询问一次并记住
+    for (const w of BrowserWindow.getAllWindows()) w.setEnabled(false); // 禁用窗口防重复弹框
+    dialog.showMessageBox(mainWin, {
+      type: 'question',
+      title: '关闭第二脑',
+      message: '关闭后希望执行什么操作？',
+      buttons: ['直接退出', '缩小到托盘', '取消'],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    }).then(function (r) {
+      for (const w of BrowserWindow.getAllWindows()) { if (!w.isDestroyed()) w.setEnabled(true); }
+      closeAsked = true; // 已询问过：之后从设置维护，不再弹首次询问
+      if (r.response === 0) { closeAction = 'quit'; saveConfig(); app.quit(); }
+      else if (r.response === 1) { closeAction = 'tray'; saveConfig(); hideToTray(); }
+      else { saveConfig(); } // response === 2：取消，保持窗口打开；仍记住已询问
+    }).catch(function () {
+      for (const w of BrowserWindow.getAllWindows()) { if (!w.isDestroyed()) w.setEnabled(true); }
+    });
+    return;
+  }
   if (closeAction === 'quit') { app.quit(); return; }
   if (closeAction === 'tray') { hideToTray(); return; }
-  // confirm：弹三选确认框
+  // confirm：用户在设置里手动选择「每次询问」
   for (const w of BrowserWindow.getAllWindows()) w.setEnabled(false); // 禁用窗口防重复弹框
   dialog.showMessageBox(mainWin, {
     type: 'question',
@@ -156,11 +179,12 @@ ipcMain.on('win:close', () => {
   });
 });
 
-/* 读取/设置关闭按钮行为（供设置页「编辑器 → 关闭按钮行为」调整并持久化到 settings.json） */
+/* 读取/设置关闭按钮行为（供设置页「常规 → 关闭按钮行为」调整并持久化到 settings.json） */
 ipcMain.handle('win:getCloseAction', () => closeAction);
 ipcMain.handle('win:setCloseAction', (_e, val) => {
   if (['confirm', 'quit', 'tray'].indexOf(val) === -1) return false;
   closeAction = val;
+  closeAsked = true; // 手动在设置里调整即视为已首次确认，不再弹首次询问
   saveConfig();
   return true;
 });
@@ -263,8 +287,10 @@ let vaultHistory = [];
 
 /* 用户配置文件：持久化当前笔记库 + 默认库路径 + 历史库列表 + 关闭按钮行为，重启后保持 */
 function configFile() { return path.join(app.getPath('userData'), 'settings.json'); }
-/* 关闭按钮(×)行为：confirm=弹三选确认框 / quit=直接退出 / tray=缩小到托盘 */
-let closeAction = 'confirm';
+/* 关闭按钮(×)行为：quit=直接退出 / tray=缩小到托盘 / confirm=设置里手动选的「每次询问」 */
+let closeAction = 'quit';
+/* 是否已向用户询问过「关闭后希望执行的操作」（只问一次，之后在设置「常规 → 关闭按钮行为」里维护） */
+let closeAsked = false;
 function loadConfig() {
   try {
     const j = JSON.parse(fs.readFileSync(configFile(), 'utf8'));
@@ -274,12 +300,13 @@ function loadConfig() {
       .filter(function (h) { return h && typeof h.path === 'string'; })
       .slice(0, 12);
     if (j && typeof j.closeAction === 'string' && ['confirm', 'quit', 'tray'].indexOf(j.closeAction) !== -1) closeAction = j.closeAction;
+    if (j && typeof j.closeAsked === 'boolean') closeAsked = j.closeAsked;
   } catch (e) { /* 配置不存在或损坏时回退默认库 */ }
 }
 function saveConfig() {
   try {
     fs.writeFileSync(configFile(), JSON.stringify(
-      { defaultVaultPath: defaultVaultPath, vaultPath: currentVault || null, vaultHistory: vaultHistory, closeAction: closeAction },
+      { defaultVaultPath: defaultVaultPath, vaultPath: currentVault || null, vaultHistory: vaultHistory, closeAction: closeAction, closeAsked: closeAsked },
       null, 2), 'utf8');
   } catch (e) { /* 写入失败不阻塞 */ }
 }

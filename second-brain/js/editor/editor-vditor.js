@@ -122,6 +122,9 @@
       mode: vdMode,
       value: value,
       cache: false,
+      // 资源全部走本地 vendor（dist 结构），避免从 unpkg.com 拉 i18n/lute/主题/icons 造成
+      // 弱网下编辑区十几秒才渲染（Bug-029）。js/vendor/vditor/dist 为静态复制目录，与官方 CDN 目录结构一致。
+      cdn: 'js/vendor/vditor',
       theme: isDarkTheme() ? 'dark' : 'light',
       lineNumber: !!(typeof restoreS === 'function' ? restoreS('lineNumbers', true) : true),
       toolbar: VDTOOLBAR,
@@ -298,12 +301,13 @@
   /** 是否处于宿主全屏态 */
   let vdHf = false;
 
-  /** 切换宿主全屏：给 #ed-vditor 加 fixed 全屏类，并显示/隐藏浮动「退出全屏」按钮
-   * 作者: 火 冰 */
+  /** 切换宿主全屏：给 body 加 ed-fs-active（隐藏外围 UI，编辑区独占撑满），并显示/隐藏浮动「退出全屏」按钮
+   * 说明: 不再依赖 fixed 铺满（transform 包裹元素会劫持 containing block 导致铺不满视口），
+   *      改为隐藏左文件树/右面板/顶栏/状态栏后由编辑区 flex 占满。作者: 火 冰 */
   function vdHostFullscreen(on) {
     vdHf = on;
-    const el = vdEl();
-    if (el) el.classList.toggle('vd-host-fullscreen', on);
+    document.body.classList.toggle('ed-fs-active', on);
+    document.documentElement.classList.toggle('ed-fs-active', on);
     let b = document.getElementById('vd-fs-exit');
     if (on) {
       if (!b) {

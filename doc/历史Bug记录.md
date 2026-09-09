@@ -320,3 +320,37 @@
 - **防再犯要点**: 视图重建（`loadView` 重入）时，若该视图承载拥有模块级实例/引用的第三方编辑器（vditor 等），切离该视图前必须显式销毁并清空模块级实例引用（`vdDestroy`），否则切回时 `ensureVd` 不会在新 DOM 上重建而留白。
 
 - <br />
+
+- **ID**: Bug-028
+- **日期**: 2026-09-09
+- **现象**: 「设置-外观」选择「跟随系统」后主题生效、切到编辑器正常；重新切回「设置」视图，主题又变回「深色」（深色卡片高亮，auto 失效）。
+- **复现地点**: `second-brain/js/app-layout.js`（`window.__savedTheme` 启动快照）、`second-brain/js/app-settings.js`（`bindSettings` 恢复主题）、`second-brain/js/app-core.js`（`setTheme` 未同步快照）
+- **原因**: `window.__savedTheme` 是应用启动时从 localStorage 读取的一次性快照（app-layout.js:351），之后点击主题卡片走 `setTheme(mode, true)` 只写 localStorage、**从不更新 `__savedTheme`**。每次进入设置视图，`bindSettings`（app-settings.js:1237）用旧快照执行 `setTheme(savedTheme, false)` 恢复，把 `auto` 覆盖回 `dark`。次要：设置内从「外观」切到其它分类再切回时，`switchSettings('外观')` 重渲染模板（深色卡片 check 默认可见），`bindAppearance()` 只绑事件不恢复卡片高亮。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 采用方案 A：`setTheme` 在 `persist=true` 时同步 `window.__savedTheme = mode`；同根因一并同步 `setAccent`（`__savedAccent`）与 `applyFontSize/applyFontFamily/applyFontMono`（`__savedFontSize/__savedFontFamily/__savedFontMono`），使设置视图重建 `bindSettings` 恢复路径与持久化共用最新快照，不再用启动旧值回退用户新选择。
+- **验证结果**: jsdom 注入 app-core.js 诊断脚本 8 项断言全通过（选 auto 后 `__savedTheme` 同步 auto；`bindSettings` 恢复路径不再回退深色且「跟随系统」卡片高亮；accent/字体 4 项快照同步）；`node --check` 通过；Bug-028 回归断言已加入 `regression.test.js`。注：该次提交时完整 `npm test` 被既有 code-highlight 插件缺失阻塞（Bug-005/024/025 依赖 `plugins/code-highlight/main.js`，该插件未在本地 `plugins/` 目录）；该阻塞已随 Bug-029 一并修复（插件未安装时跳过注入，`npm test` 全绿）。
+- **防再犯要点**: 持久化与恢复必须共用同一数据源：凡 `window.__saved*` 启动快照，任何设置变更写入 localStorage 时必须同步更新对应快照，否则视图重建用旧值回退用户新选择（CD-17）。
+
+- <br />
+
+- **ID**: Bug-029
+- **日期**: 2026-09-09
+- **现象**: 编辑器编辑区渲染很慢，打开笔记后十几秒才把编辑区内容渲染出来（弱网环境尤其明显）。
+- **复现地点**: `second-brain/js/editor/editor-vditor.js`（`buildVditor` 的 opts 未传 `cdn`）、`second-brain/js/vendor/vditor/index.min.js`（`Constants.CDN` 默认值与 `mergeOptions` 的 `{cdn}/dist/...` 拼接）
+- **原因**: vditor 初始化未指定 `cdn`，`mergeOptions` 回退默认 `Constants.CDN = "https://unpkg.com/vditor@4.0.0"`，运行期 `addScript`/`addStyle` 从外网拉取 4 个关键资源（`dist/js/i18n/zh_CN.js`、`dist/js/lute/lute.min.js`、`dist/css/content-theme/light.css`、`dist/js/icons/ant.js`），弱网下每个请求数秒，编辑区因此空白十几秒。
+- **状态**: 已修复（测试完成）
+- **处理方法**: ① `buildVditor` 的 opts 传 `cdn: 'js/vendor/vditor'`，使 `mergeOptions` 把全部 `{cdn}/dist/...` 拼接落到本地；② 按官方 CDN 目录结构在 `second-brain/js/vendor/vditor/dist/` 复制静态资源（`js/lute`、`js/i18n`、`js/icons`、`js/highlight.js`、`css/content-theme`、`images/emoji`）；③ 页面已本地引入 `index.css`/`index.min.js`（index.html），无需改动。
+- **验证结果**: CDP（9223）实测：`openNote('学习笔记/深度工作.md')` → 编辑区内容可见仅 5ms；`Network.requestWillBeSent` 抓包 0 个外网请求（此前 4 个 unpkg.com 请求）。新增回归断言 `testVditorLocalCdn`（检查 opts.cdn 指向本地、无 unpkg cdn 配置、dist 关键资源齐备）已加入 `regression.test.js`；顺带修复回归套件依赖缺失插件导致的 ENOENT 中断（Bug-005/024/025 在 `plugins/code-highlight` 未安装时跳过注入）与过时的 vdSetMode 断言，`npm test` 现为 36 通过 0 失败。
+- **防再犯要点**: 第三方编辑器（vditor 等）的资源必须全部本地化（vendor 目录 + 与官方一致的 dist 结构），并在初始化 opts 显式传 `cdn` 指向本地；禁止依赖 unpkg.com 等外网 CDN，否则弱网下编辑区渲染被网络拖慢（CD-18）。
+
+- <br />
+
+- **ID**: Bug-030
+- **日期**: 2026-09-09
+- **现象**: 编辑器偶发性「串文件内容 / 笔记丢失」：快速切换笔记时，A 的内容被写进 B（或覆盖），或某篇笔记的修改不保存、丢内容。
+- **复现地点**: `second-brain/js/editor/editor-host.js`（`onEdInput`、`openNote`）、`second-brain/js/editor/editor-vditor.js`（`blur: sync2Host(vdGetValue())`）
+- **原因**: 两处独立竞态导致「输入/保存的内容归属到错误的文件」：①**去抖定时器归属**：旧实现在 autosave 去抖 timer 触发时才读 `edCurrent`，且所有文件共用一个 timer——快速切换时 A 的内容被保存进 B，或 A 的 timer 被 B 的输入 `clearTimeout` 清掉而丢保存。②**openNote 异步装载间隙**：`edCurrent = path` 在 openNote 开头同步设置，而内容真正渲染进 vditor 在 `await noteStore.read` 之后——期间编辑器仍显示旧文件、`edCurrent` 已指向新文件，此时 vditor 的 `blur`（点击切换必触发）会把「旧文件可见内容」以新文件路径保存。
+- **状态**: 已修复（测试完成）
+- **处理方法**: ①`onEdInput` 在输入瞬间固定归属 `p = edCurrent`（`edOutdated[p]`/去抖 timer 一律用 p），并将全局单 timer 改为按文件独立 `edSaveTimers[p]`。②`openNote` 将 `edCurrent = path` 移到内容装载（`await noteStore.read`/缓存命中）完成之后、渲染之前，保证 edCurrent 恒等于「编辑器当前正显示的文件」，消除装载间隙的 blur/input 误归属。
+- **验证结果**: 回归套件新增 Bug-030（`testEdAutosaveBinding`：编辑 a→切 b→编辑 b，两文件各按其归属保存）与 Bug-030b（`testEdOpenRace`：源码断言 openNote 内 `noteStore.read` 位于 `edCurrent = path` 之前）；`npm test` 现为 **38 通过、0 失败**；`node --check` 通过。
+- **防再犯要点**: 打开笔记的异步装载：`edCurrent`（当前文件）必须在内容真正装载进编辑器之后、渲染之前才激活，不能同步前置；否则装载间隙内 vditor 的 blur/input 会把旧文件可见内容按新文件路径保存，造成串文件/丢失（CD-19）。

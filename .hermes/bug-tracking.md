@@ -57,6 +57,9 @@
 | CD-14 | 必须 | 右键菜单针对「焦点/光标所在元素」的操作，目标定位必须取自右键命中信息（如 `resolveWysHit` 的 `hit.cell`），不能依赖 `document.getSelection()`——右键不移动光标/选区，选区常停在别处，会退化成默认值（如表格行列增删固定到最左列/首行）；命中信息沿 右键委托 → 菜单 schema(action 闭包) → 操作函数参数 链路显式传递 | Bug-025 |
 | CD-15 | 必须 | vditor（及同类第三方编辑器）的 `after`/事件回调若需调用实例方法，必须用闭包捕获的实例引用（`inst || vdInst`）显式调用，不能依赖回调内 `this`——vditor 源码对触发类回调是平调用（`mergedOptions.after()`），`this` 指向 window，`this.setValue` 会抛 TypeError 导致补渲失败、编辑区空白 | Bug-026 |
 | CD-16 | 必须 | 视图重建（`loadView` 重入）时，若该视图承载拥有模块级实例/引用的第三方编辑器（vditor 等），切离该视图前必须显式销毁并清空模块级实例引用（如 `vdDestroy`），否则切回时 `ensureVd`（`if (!vdInst)`）不会在新 DOM 上重建而留白 | Bug-027 |
+| CD-17 | 必须 | 持久化与恢复必须共用同一数据源：凡 `window.__saved*` 启动快照（主题/强调色/字体等），任何设置变更写入 localStorage 时必须同步更新对应快照，否则视图重建（`bindSettings` 用 `window.__savedTheme || 'dark'` 恢复）会用旧值回退用户新选择 | Bug-028 |
+| CD-18 | 必须 | 第三方编辑器（vditor 等）的资源必须全部本地化（vendor 目录 + 与官方一致的 dist 结构），初始化 opts 显式传 `cdn` 指向本地；禁止依赖 unpkg.com 等外网 CDN，否则弱网下编辑区渲染被网络拖慢 | Bug-029 |
+| CD-19 | 必须 | 打开笔记等异步装载流程里，「当前文件」状态（如 `edCurrent`）必须在内容真正装载进编辑器之后、渲染之前才激活，不能同步前置；否则装载间隙内编辑器 blur/input 事件会把旧文件可见内容按新文件路径保存（串文件/丢失）。同时自动保存去抖 timer 必须按文件独立并捕获输入瞬间归属的文件 | Bug-030 |
 
 ## 维护要求
 

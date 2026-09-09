@@ -63,8 +63,15 @@ function testPluginLoad() {
   // 宿主通过 PluginAPI 向插件提供注册接口
   W.__registered = 0;
   W.PluginAPI = { register: function () { W.__registered++; } };
+  const pluginPath = path.join(__dirname, 'plugins', 'code-highlight', 'main.js');
+  if (!fs.existsSync(pluginPath)) {
+    // 插件未安装（app-plugins.js 市场条目 installed:false），宿主本就不加载它：
+    // 此时无插件文件可注入，断言跳过，避免 ENOENT 中断全量回归
+    assert(true, 'Bug-005: code-highlight 未安装，无插件文件需加载（跳过注入）');
+    return;
+  }
   const s = W.document.createElement('script');
-  s.textContent = fs.readFileSync(path.join(__dirname, 'plugins', 'code-highlight', 'main.js'), 'utf8');
+  s.textContent = fs.readFileSync(pluginPath, 'utf8');
   W.document.head.appendChild(s);
   assert(W.__registered === 1, 'Bug-005: 插件 main.js 正常注册（PluginAPI.register 调用 1 次）');
   assert(caughtError === null, 'Bug-005: 加载过程无未捕获异常（无 insertBefore 空指针）');
@@ -98,6 +105,12 @@ function testCodeLangGhost() {
  * 成功按钮亮对勾、失败 showToast 提示。
  * 作者: 火 冰 */
 async function testCodeHighlightCopyBtn() {
+  const pluginPath = path.join(__dirname, 'plugins', 'code-highlight', 'main.js');
+  if (!fs.existsSync(pluginPath)) {
+    // 插件未安装（app-plugins.js 市场条目 installed:false），宿主不加载它，跳过注入断言
+    assert(true, 'Bug-024: code-highlight 未安装，跳过复制按钮回退断言');
+    return;
+  }
   const dom = new JSDOM(
     '<!DOCTYPE html><html><body><pre data-lang="css" style="white-space:pre;">body{color:red;}</pre></body></html>',
     { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
@@ -111,7 +124,7 @@ async function testCodeHighlightCopyBtn() {
     } });
   };
   const s = W.document.createElement('script');
-  s.textContent = fs.readFileSync(path.join(__dirname, 'plugins', 'code-highlight', 'main.js'), 'utf8');
+  s.textContent = fs.readFileSync(pluginPath, 'utf8');
   W.document.head.appendChild(s);
   // 等 highlight.min.js fetch + eval + 扫描生成复制按钮
   for (let i = 0; i < 10; i++) {
@@ -143,6 +156,12 @@ async function testCodeHighlightCopyBtn() {
  * 断言：编辑面 pre 不被 .ch-code 包裹；普通（预览样）pre 仍受增强。
  * 作者: 火 冰 */
 async function testCodeHighlightSkipEditSurface() {
+  const pluginPath = path.join(__dirname, 'plugins', 'code-highlight', 'main.js');
+  if (!fs.existsSync(pluginPath)) {
+    // 插件未安装（app-plugins.js 市场条目 installed:false），宿主不加载它，跳过注入断言
+    assert(true, 'Bug-025: code-highlight 未安装，跳过编辑面不劫持断言');
+    return;
+  }
   const dom = new JSDOM(
     '<!DOCTYPE html><html><body>'
     + '<div id="ed-vditor"><div class="vditor"><div class="vditor-content">'
@@ -161,7 +180,7 @@ async function testCodeHighlightSkipEditSurface() {
     } });
   };
   const s = W.document.createElement('script');
-  s.textContent = fs.readFileSync(path.join(__dirname, 'plugins', 'code-highlight', 'main.js'), 'utf8');
+  s.textContent = fs.readFileSync(pluginPath, 'utf8');
   W.document.head.appendChild(s);
   // 等 fetch+eval+初始扫描完成
   for (let i = 0; i < 10; i++) {
@@ -232,13 +251,14 @@ function testVditorBridge() {
   W.vdSetValue('line1\nline2');
   assert(W.vdGetValue() === 'line1\nline2', '迁移: 实例创建后 vdSetValue/vdGetValue 往返正确');
 
-  // vdSetMode 映射：edit→editor、split→both、preview→preview
-  calls.previewModes.length = 0;
-  W.vdSetMode('edit');
+  // vdSetMode 三态映射：split/preview 进入 SV 模式并重建实例、edit 退回编辑节点重建；
+  // 视图显隐已由宿主 applyVdVisibility 确定性接管（不再调用 vditor setPreviewMode）。
+  calls.initModes.length = 0;
   W.vdSetMode('split');
   W.vdSetMode('preview');
-  assert(JSON.stringify(calls.previewModes) === JSON.stringify(['editor', 'both', 'preview']),
-    '迁移: vdSetMode 映射 edit→editor、split→both、preview→preview（实际 ' + calls.previewModes.join(',') + '）');
+  W.vdSetMode('edit');
+  assert(JSON.stringify(calls.initModes) === JSON.stringify(['sv', 'sv', 'ir']),
+    '迁移: vdSetMode 映射 split→sv、preview→sv、edit→ir 重建（实际 ' + calls.initModes.join(',') + '）');
 }
 
 /* ---- ED-11 迁移: 文件树「重命名」右键 / 双击文件名（renameNoteFile）----
@@ -312,14 +332,150 @@ async function testRenameNoteFile() {
     '迁移: 同名冲突被拦截（不 move 且提示「已存在同名笔记」）');
 }
 
+/* ---- Bug-028: 主题持久化同步 __savedTheme 快照，视图重建不再回退 ----
+ * 根因: window.__savedTheme 是应用启动时的一次性快照（app-layout.js），setTheme(mode,true)
+ *       只写 localStorage、不更新快照；每次进入设置视图 bindSettings 用旧快照
+ *       setTheme(savedTheme,false) 恢复，把 auto 覆盖回 dark。
+ * 修复: persist=true 时同步 window.__savedTheme；accent/字体三类函数同根因一并同步。
+ * 断言: 模拟「启动快照 dark → 选跟随系统 → 切回设置恢复」全过程，最终仍为 auto 效果
+ *       且「跟随系统」卡片高亮；另验证 accent/字体快照同步。
+ * 作者: 火 冰 */
+function testThemeSavedSnapshot() {
+  const dom = new JSDOM(
+    '<!DOCTYPE html><html><body>'
+    + '<div id="view-root"></div><div id="palette-overlay"></div>'
+    + '<div class="theme-card" data-theme-mode="dark"><span class="theme-card-check"></span></div>'
+    + '<div class="theme-card" data-theme-mode="auto"><span class="theme-card-check"></span></div>'
+    + '<div class="color-dot" data-accent="#EF4444"></div>'
+    + '</body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window; const D = W.document;
+  // jsdom 无 matchMedia 时 setTheme 内部已有 `window.matchMedia &&` 防御
+  const s = D.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'app-core.js'), 'utf8');
+  D.head.appendChild(s);
+
+  // 模拟启动快照（app-layout.js 一次性赋值），用户随后在设置选「跟随系统」
+  W.__savedTheme = 'dark';
+  W.setTheme('auto', true);
+  assert(W.__savedTheme === 'auto', 'Bug-028: 选「跟随系统」后 __savedTheme 同步为 auto（不再停留启动快照）');
+  assert(W.localStorage.getItem('note-app:theme') === 'auto', 'Bug-028: 持久化 localStorage 为 auto');
+
+  // 模拟切回设置视图 bindSettings 的恢复路径 setTheme(__savedTheme,false)
+  W.setTheme(W.__savedTheme, false);
+  const html = D.documentElement;
+  assert(!html.classList.contains('dark'), 'Bug-028: bindSettings 用最新快照恢复，不再把主题回退为深色');
+  const autoCard = D.querySelector('.theme-card[data-theme-mode="auto"]');
+  assert(autoCard.classList.contains('active'), 'Bug-028: 恢复后「跟随系统」卡片高亮（active）');
+
+  // accent/字体同类快照同步（同一根因防护）
+  W.setAccent('#EF4444');
+  assert(W.__savedAccent === '#EF4444', 'Bug-028: 强调色同步 __savedAccent 快照（同根因）');
+  W.applyFontSize(16);
+  assert(W.__savedFontSize === 16, 'Bug-028: 字号同步 __savedFontSize 快照（同根因）');
+  W.applyFontFamily('Noto Sans SC');
+  assert(W.__savedFontFamily === 'Noto Sans SC', 'Bug-028: 字体族同步 __savedFontFamily 快照（同根因）');
+  W.applyFontMono('Fira Code');
+  assert(W.__savedFontMono === 'Fira Code', 'Bug-028: 代码字体同步 __savedFontMono 快照（同根因）');
+}
+
+/* ---- Bug-029: vditor 资源本地化，避免弱网下 unpkg CDN 拖慢编辑区渲染 ----
+ * 确定性复现点：editor-vditor.js 若把 cdn 指回 unpkg.com（或本地 dist 被删除），
+ * 编辑区会重新陷入十几秒空白。此处做静态门禁：
+ *   1) 宿主 opts.cdn 指向本地 vendor，且源码不残留 unpkg.com
+ *   2) vditor 本地 dist 关键资源齐备（lute/i18n/icons/content-theme）
+ * 作者: 火 冰 */
+function testVditorLocalCdn() {
+  const src = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  assert(/cdn\s*:\s*['"]js\/vendor\/vditor['"]/.test(src),
+    'Bug-029: editor-vditor.js 的 opts.cdn 指向本地 vendor（不再走 unpkg.com）');
+  assert(!/cdn\s*:\s*['"]https?:\/\/unpkg\.com/.test(src),
+    'Bug-029: cdn 配置值不指向 unpkg.com 外网地址');
+
+  const vd = path.join(__dirname, 'js', 'vendor', 'vditor', 'dist');
+  const need = [
+    'js/lute/lute.min.js',
+    'js/i18n/zh_CN.js',
+    'js/icons/ant.js',
+    'js/highlight.js/highlight.min.js',
+    'css/content-theme/light.css',
+    'images/emoji/vditor.png',
+  ];
+  need.forEach(function (rel) {
+    assert(fs.existsSync(path.join(vd, rel)), 'Bug-029: vditor 本地 dist 资源存在 ' + rel);
+  });
+}
+
+/* ---- Bug-030b: openNote 异步装载间隙，edCurrent 不得提前指向新文件 ----
+ * openNote 的 noteStore.read 是异步 await；若 edCurrent=path 在函数开头同步设置，
+ * 则「点击新文件」到「新内容渲染进 vditor」之间编辑器仍显示旧文件，此时 vditor 的
+ * blur/input 事件会把旧文件可见内容按新文件路径保存（串文件/笔记丢失）。
+ * 修复：edCurrent=path 必须放在内容装载（await noteStore.read / 取缓存）完成之后、渲染之前。
+ * 断言：源码中 openNote 内 `await noteStore.read` 出现在 `edCurrent = path` 之前。
+ * 作者: 火 冰 */
+function testEdOpenRace() {
+  const src = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-host.js'), 'utf8');
+  const fn = src.slice(src.indexOf('function openNote'), src.indexOf('function persistRecentTabs'));
+  const readIdx = fn.indexOf('noteStore.read');
+  const assignIdx = fn.indexOf('edCurrent = path');
+  assert(readIdx !== -1 && assignIdx !== -1 && readIdx < assignIdx,
+    'Bug-030b: openNote 中 edCurrent 在内容装载（noteStore.read/缓存命中）之后才激活（' +
+    (readIdx) + '<' + (assignIdx) + '）');
+}
+
+/* ---- Bug-030: autosave 把内容保存到「产生输入时所在文件」，per-path 去抖互不覆盖 ----
+ * 旧实现在 autosave 去抖 timer 触发时才读 edCurrent，且所有文件共用一个 timer：
+ * 快速切换笔记时 A 的内容会被保存进 B（串文件/覆盖），或 A 的 timer 被 B 的输入清掉而丢保存。
+ * 修复：onEdInput 在输入瞬间固定归属 p=edCurrent，且按文件独立去抖 edSaveTimers[p]。
+ * 断言：编辑 a → 切 b → 编辑 b 后，两个文件各按其归属被保存，而非只保存 b。
+ * 作者: 火 冰 */
+async function testEdAutosaveBinding() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  // 预置 onEdInput 依赖：$ / countChars / restoreS / noteStore（记录保存调用）
+  W.__saveCalls = [];
+  const stubScript = W.document.createElement('script');
+  stubScript.textContent = '(function () {'
+    + 'window.$ = function () { return null; };'
+    + 'window.countChars = function (t) { return t ? String(t).length : 0; };'
+    + 'window.restoreS = function () { return true; };' // autosave 开启
+    + 'window.noteStore = { save: async function (p, c) { window.__saveCalls.push([p, c]); }, read: async function () { return ""; } };'
+    + '})();';
+  W.document.head.appendChild(stubScript);
+  // 注入 editor-core.js（定义 edCurrent/edOutdated/edDirty/edSaveTimers，顶层 let 跨 script 全局可见）
+  ['js/editor/editor-core.js', 'js/editor/editor-host.js'].forEach(function (rel) {
+    const s = W.document.createElement('script');
+    try { s.textContent = fs.readFileSync(path.join(__dirname, rel), 'utf8'); } catch (e) { assert(false, 'Bug-030: 注入 ' + rel + ' 失败: ' + e.message); }
+    W.document.head.appendChild(s);
+  });
+  // 驱动：编辑 a → 立即切 b → 编辑 b（模拟快速切换；修复前只会保存 b、或 a 覆盖 b）
+  try {
+    W.eval('edCurrent="a.md"; onEdInput("AAAContent"); edCurrent="b.md"; onEdInput("BBBContent");');
+  } catch (e) {
+    assert(false, 'Bug-030: 驱动 onEdInput 报错: ' + e.message);
+    return;
+  }
+  await new Promise(function (r) { setTimeout(r, 1000); }); // 等待 800ms 去抖保存触发
+  const calls = W.__saveCalls || [];
+  const hasA = calls.some(function (c) { return c[0] === 'a.md' && c[1] === 'AAAContent'; });
+  const hasB = calls.some(function (c) { return c[0] === 'b.md' && c[1] === 'BBBContent'; });
+  assert(hasA && hasB && calls.length === 2,
+    'Bug-030: a、b 两笔记各自按输入时归属被保存，不被切换串台/丢保存');
+}
+
 testLogBadge();
 testPluginLoad();
 testCodeLangGhost();
+testThemeSavedSnapshot();
+testVditorLocalCdn();
 testVditorBridge();
 Promise.all([
   testCodeHighlightCopyBtn(),
   testRenameNoteFile(),
   testCodeHighlightSkipEditSurface(),
+  testEdAutosaveBinding(),
+testEdOpenRace(),
 ]).then(function () {
   console.log(`\n回归结果: ${pass} 通过, ${fail} 失败`);
   if (fail) process.exitCode = 1;

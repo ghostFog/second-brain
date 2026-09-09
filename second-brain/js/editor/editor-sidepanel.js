@@ -51,10 +51,12 @@
     if (edSel && edSel.type === 'folder' && napi.dirMeta) {
       await renderDirProps(box, edSel.path, edSel.path === '');
       refreshIcons();
+      renderChunkPanel();   // 目录视图：清空独立「索引分块」区块
       return;
     }
     if (!edCurrent) {
       box.innerHTML = '<p class="text-[11px]" style="color: var(--note-ink-3);">请打开一篇笔记，或在左侧文件树选中目录查看其属性。</p>';
+      renderChunkPanel();
       return;
     }
     // B. 笔记属性
@@ -82,12 +84,28 @@
         + '<div>总大小：<span class="nums" style="color: var(--note-brand-300);">' + fmt(meta.totalSize) + '</span></div>'
         + '</div></div>';
     }
-    // 索引分块：可编辑面板（块大小/重叠 + 块名称/偏移值列表 + 两种偏移调整模式）
-    html += '<div class="border-t mt-1 pt-2" style="border-color: var(--note-border);">'
-      + '<p class="text-[11px] mb-1" style="color:var(--note-ink-2);">索引分块</p>'
-      + '<div id="ed-chunk"></div></div>';
+    // 索引分块已拆分到独立区块（renderChunkPanel 单独渲染，不再内嵌到属性）
     box.innerHTML = html;
     refreshIcons();
+    renderChunkPanel();
+  }
+
+  /* 渲染独立「索引分块」区块：
+   *  - 打开笔记：读取该笔记元数据并委托 renderChunkSection 渲染可编辑分块面板
+   *  - 未打开笔记 / 选中目录：显示占位提示
+   * 与 renderFileProps 同步调用，保证切笔记 / 切目录时索引分块随属性一起刷新。
+   * @returns {void}
+   * @author 火 冰 */
+  async function renderChunkPanel() {
+    const box = $('ed-chunk');
+    if (!box) return;
+    if (!edCurrent || (edSel && edSel.type === 'folder')) {
+      box.innerHTML = '<p class="text-[11px] pl-3" style="color: var(--note-ink-3);">请打开一篇笔记查看其索引分块。</p>';
+      return;
+    }
+    const napi = window.noteDesktop || {};
+    let note = null;
+    if (napi && napi.fileMeta) { try { const fm = await napi.fileMeta(edCurrent); note = fm.note || null; } catch (_) { /* 忽略 */ } }
     renderChunkSection(edCurrent, note);
   }
 
@@ -304,4 +322,77 @@
     if (!panel) return;
     if (panel.hidden) { panel.hidden = false; renderIndexPanel(); }
     else panel.hidden = true;
+  }
+
+  /* 侧边面板区块顺序持久化 key */
+  var SIDE_ORDER_KEY = 'sideOrder';
+
+  /* 按持久化的顺序恢复侧边面板区块的 DOM 顺序。
+   * 只在有记录时按 secId 顺序重排；无记录或已变动时保持当前（默认）顺序不动。
+   * @returns {void}
+   * @author 火 冰 */
+  function restoreSidePanelOrder() {
+    var container = document.querySelector('#right-panel .app-scroll');
+    if (!container) return;
+    var order = (typeof restoreS === 'function') ? restoreS(SIDE_ORDER_KEY, null) : null;
+    if (!Array.isArray(order) || !order.length) return;
+    var done = {};
+    order.forEach(function (id) {
+      if (done[id]) return;
+      var sec = container.querySelector('[data-panel-section="' + id + '"]');
+      if (sec) { container.appendChild(sec); done[id] = 1; }
+    });
+  }
+
+  /* 把当前侧边面板区块顺序持久化到 localStorage。
+   * @returns {void}
+   * @author 火 冰 */
+  function saveSidePanelOrder() {
+    var container = document.querySelector('#right-panel .app-scroll');
+    if (!container) return;
+    var ids = [];
+    container.querySelectorAll('[data-panel-section]').forEach(function (s) { ids.push(s.dataset.panelSection); });
+    if (typeof saveS === 'function') saveS(SIDE_ORDER_KEY, ids);
+  }
+
+  /* 绑定侧边面板区块拖拽调整顺序：拖 grip-vertical 手柄把区块在面板内前移/后移，结束后持久化。
+   * 采用原生 HTML5 draggable，draggable 挂在 collapse-head 上，拖动即整块移动、点击不触发拖拽（仍可折叠）。
+   * @returns {void}
+   * @author 火 冰 */
+  function bindSidePanelDrag() {
+    var container = document.querySelector('#right-panel .app-scroll');
+    if (!container) return;
+    var dragSec = null;
+    document.querySelectorAll('#right-panel .collapse-head[draggable]').forEach(function (head) {
+      head.addEventListener('dragstart', function (e) {
+        var sec = head.closest('[data-panel-section]');
+        if (!sec) return;
+        dragSec = sec;
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', sec.dataset.panelSection); } catch (_) { /* 某些环境需先 setData */ }
+        sec.style.opacity = '0.5';
+      });
+      head.addEventListener('dragend', function () {
+        if (!dragSec) return;
+        dragSec.style.opacity = '';
+        dragSec = null;
+        saveSidePanelOrder();
+        const chev = head.querySelector('i[data-lucide="chevron-right"]');
+        if (chev) chev.setAttribute('data-lucide', 'chevron-down');
+        refreshIcons();
+      });
+      head.addEventListener('dragover', function (e) {
+        if (!dragSec) return;
+        e.preventDefault();                  // 允许 drop 并触发目标 dragover 连续调度
+        e.dataTransfer.dropEffect = 'move';
+        var target = head.closest('[data-panel-section]');
+        if (!target || target === dragSec) return;
+        // 依据指针在目标头部的上下半区决定插入位置，避免反复横跳
+        var rect = target.getBoundingClientRect();
+        var before = (e.clientY - rect.top) < rect.height / 2;
+        if (before) container.insertBefore(dragSec, target);
+        else container.insertBefore(dragSec, target.nextSibling);
+      });
+      head.addEventListener('drop', function (e) { if (dragSec) e.preventDefault(); });
+    });
   }

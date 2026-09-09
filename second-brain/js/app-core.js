@@ -220,7 +220,10 @@
     html.classList.toggle('dark', target === 'dark');
     html.dataset.theme = target;
     if (mode === 'auto') html.dataset.themeMode = 'auto'; else html.dataset.themeMode = mode;
-    if (persist) localStorage.setItem('note-app:theme', mode);
+    if (persist) {
+      localStorage.setItem('note-app:theme', mode);
+      window.__savedTheme = mode;   // 同步启动快照，设置视图重建 bindSettings 恢复时不再用旧值回退主题（Bug-028）
+    }
     // 同步设置页主题卡片高亮
     document.querySelectorAll('.theme-card').forEach(c => {
       const active = c.dataset.themeMode === mode;
@@ -245,6 +248,7 @@
     root.setProperty('--note-brand-900', shade(color, 0.48));
     root.setProperty('--note-brand-950', shade(color, 0.34));
     localStorage.setItem('note-app:accent', color);
+    window.__savedAccent = color;   // 同步快照，设置视图重建恢复时不回退（Bug-028 同根因）
     document.querySelectorAll('.color-dot').forEach(d => d.classList.toggle('active', d.dataset.accent === color));
   }
 
@@ -268,6 +272,7 @@
   function applyFontSize(px) {
     document.documentElement.style.setProperty('--note-text-body', px + 'px');
     localStorage.setItem('note-app:font-size', px);
+    window.__savedFontSize = px;   // 同步快照，设置视图重建恢复时不回退（Bug-028 同根因）
     const label = document.getElementById('font-size-label');
     if (label) label.textContent = px + 'px';
   }
@@ -277,6 +282,7 @@
     const map = { 'Inter': "'Inter', 'Noto Sans SC', system-ui, sans-serif", 'Noto Sans SC': "'Noto Sans SC', 'PingFang SC', system-ui, sans-serif", '系统默认': 'system-ui, sans-serif' };
     if (map[font]) document.documentElement.style.setProperty('--note-font-sans', map[font]);
     localStorage.setItem('note-app:font-family', font);
+    window.__savedFontFamily = font;   // 同步快照，设置视图重建恢复时不回退（Bug-028 同根因）
   }
 
   /* 代码字体：更新根 CSS 变量 --note-font-mono，并持久化到 note-app:font-mono */
@@ -284,6 +290,7 @@
     const map = { 'JetBrains Mono': "'JetBrains Mono', 'Consolas', monospace", 'Fira Code': "'Fira Code', 'Consolas', monospace", 'Cascadia Code': "'Cascadia Code', 'Consolas', monospace" };
     if (map[font]) document.documentElement.style.setProperty('--note-font-mono', map[font]);
     localStorage.setItem('note-app:font-mono', font);
+    window.__savedFontMono = font;   // 同步快照，设置视图重建恢复时不回退（Bug-028 同根因）
   }
 
   /* 自动换行：控制编辑区 textarea 是否折行显示（关闭则横向滚动） */

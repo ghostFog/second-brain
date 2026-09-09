@@ -443,15 +443,20 @@ html[data-reduce-motion] *, html[data-reduce-motion] *::before, html[data-reduce
  * 说明: vditor 接管源码/所见即所得/预览全部编辑能力；#ed-vditor 为唯一挂载容器。
  * 作者: 火 冰 */
 #ed-vditor { flex: 1 1 0%; min-height: 0; overflow: hidden; }
-/* 宿主全屏：由 vdToggleFullscreen 切换，fixed 铺满视口，Esc / 浮动按钮还原 */
-#ed-vditor.vd-host-fullscreen {
-  position: fixed;
-  top: 0; left: 0;
-  width: 100vw;
-  height: 100vh;
-  z-index: 9999;
-  background: var(--note-background);
-}
+/* 宿主全屏：由 vdToggleFullscreen 切换（body.ed-fs-active）。
+ * 说明: 原用 fixed + 100vw/100vh 铺满，但被带 transform/缩放定位的包裹元素劫持 containing block 后
+ *       无法真正铺满视口（实测编辑区只剩约 2/3 宽、底部留白）。改为「隐藏应用外围 UI + 编辑区独占撑满」，
+ *       不依赖 fixed，规避该问题。作者: 火 冰 */
+body.ed-fs-active { overflow: hidden; }
+body.ed-fs-active #tree-resizer,
+body.ed-fs-active #side-resizer,
+body.ed-fs-active #right-panel,
+body.ed-fs-active #editor-tabs-row,
+body.ed-fs-active #ed-index-panel,
+body.ed-fs-active #ed-statusbar,
+body.ed-fs-active .resp-leaf { display: none !important; }
+body.ed-fs-active #ed-vditor { position: static; width: auto; height: 100%; }
+body.ed-fs-active #ed-vditor .vditor { height: 100% !important; }
 #ed-vditor .vditor { border: none; border-radius: 0; height: 100%; }
 #ed-vditor .vditor-toolbar { border-top-left-radius: 0; border-top-right-radius: 0; }
 #ed-vditor .vditor-reset { padding: 0 8px; }
