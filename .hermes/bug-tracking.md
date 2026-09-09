@@ -60,6 +60,10 @@
 | CD-17 | 必须 | 持久化与恢复必须共用同一数据源：凡 `window.__saved*` 启动快照（主题/强调色/字体等），任何设置变更写入 localStorage 时必须同步更新对应快照，否则视图重建（`bindSettings` 用 `window.__savedTheme || 'dark'` 恢复）会用旧值回退用户新选择 | Bug-028 |
 | CD-18 | 必须 | 第三方编辑器（vditor 等）的资源必须全部本地化（vendor 目录 + 与官方一致的 dist 结构），初始化 opts 显式传 `cdn` 指向本地；禁止依赖 unpkg.com 等外网 CDN，否则弱网下编辑区渲染被网络拖慢 | Bug-029 |
 | CD-19 | 必须 | 打开笔记等异步装载流程里，「当前文件」状态（如 `edCurrent`）必须在内容真正装载进编辑器之后、渲染之前才激活，不能同步前置；否则装载间隙内编辑器 blur/input 事件会把旧文件可见内容按新文件路径保存（串文件/丢失）。同时自动保存去抖 timer 必须按文件独立并捕获输入瞬间归属的文件 | Bug-030 |
+| CD-20 | 必须 | 配置第三方编辑器（vditor 等）的 `toolbar` 数组只能使用其**内置合法 key**；臆造/臆想的 key（如 `formula`、`find`）会被 vditor 原样保留并在 `Custom` 兜底渲染成 `data-type="undefined"` 的空白按钮，静默难察。新增 key 前先到 `node_modules/vditor/dist/index.js` 的 `genItem`/`mergeToolbar` 核对 | Bug-032 |
+| CD-21 | 必须 | Electron 桌面应用必须配置 `app.requestSingleInstanceLock()`：未获得锁的实例直接 `app.quit()`（不并发建窗），获得锁的实例监听 `second-instance` 恢复既有窗口；且 `whenReady` 开头用 `if (!gotTheLock) return;` 守卫。否则托盘常驻/残留后再次启动会与旧实例并发，渲染进程争用资源造成「再启动十几秒卡顿」 | Bug-033 |
+| CD-22 | 必须 | 第三方编辑器（vditor 等）资源优先用 **npm 运行时依赖 + `cdn` 直接指向 `node_modules/<pkg>`**（npm 包自带官方 `dist/` 结构、electron-builder 随分发），**禁止在仓库内手动 vendor 复制大体积 `dist`**：手工复制必然伴随「把仓库文件搬进 dist」这类迁移，git 会把它识别为删除旧路径 + 新增全新文件，历史无法 `--follow` 追溯、又造成新旧布局双重占库；静态 vendor 副本与 npm 包重复冗余易脱节。资源必须本地化，不得依赖 unpkg 等外网 CDN | Bug-031 |
+| CD-23 | 必须 | 注入 `<head>` 的自定义主题/覆盖 CSS，选择器特异度必须 ≥ 第三方编辑器（vditor 等）自带规则（如加 `html body` 前缀），或每次应用把注入 `<style>` 重挂到 `<head>` 末尾——否则会被引擎运行时**动态后加载**的同特异度样式覆盖，覆盖失效（编辑器落回默认纯白、主题不统一） | Bug-034 |
 
 ## 维护要求
 

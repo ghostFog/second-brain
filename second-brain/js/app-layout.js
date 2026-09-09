@@ -313,10 +313,12 @@
         else if (e.key === 'Enter') { e.preventDefault(); if (paletteItems[paletteIndex]) runCommand(paletteItems[paletteIndex]); return; }
       }
       // 输入态防护：焦点在 input/textarea/[contenteditable] 且非命令面板时，仅放行带修饰键的命令，避免打字误触发
+      // 功能键（F1–F12 等）无修饰键但绝非打字字符，需放行给注册表（如 F11 全屏 / F12 开发者工具），否则编辑区内按不到。
       const el = e.target;
       const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true);
       const hasMod = e.ctrlKey || e.metaKey || e.altKey;
-      if (typing && !paletteOpen && !hasMod) return;
+      const isFnKey = /^F\d{1,2}$/i.test(e.key || '');
+      if (typing && !paletteOpen && !hasMod && !isFnKey) return;
       // 其余命令统一从注册表匹配并执行（命中即吞掉事件）
       if (typeof kbMatch === 'function') {
         const cmd = kbMatch(e);

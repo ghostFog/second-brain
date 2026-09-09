@@ -2,7 +2,7 @@
  * 第二脑 — Markdown 编辑引擎 vditor 桥接 + .md Provider
  * 作者: 火 冰
  * 功能:
- *   - 引入开源引擎 vditor（js/vendor/vditor）作为 Markdown 编辑区唯一渲染/编辑实现，
+ *   - 引入开源引擎 vditor（node_modules/vditor/dist，npm 运行时依赖）作为 Markdown 编辑区唯一渲染/编辑实现，
  *     整体承接原自研「源码 textarea + 所见即所得 + 预览」三套 DOM 与全部自研编辑增强。
  *   - 以宿主桥接函数（vdInit / vdSyncValue / vdSetMode / vdSetSource / vdToggleSource / vdGetValue / vdSetValue）驱动 vditor。
  *   - 模式映射：宿主 编辑→ir、分屏→sv(+both)、预览→preview。
@@ -33,8 +33,8 @@
   const VDTOOLBAR = [
     'undo', 'redo', '|', 'headings', 'bold', 'italic', 'strike', '|',
     'list', 'ordered-list', 'check', 'outdent', 'indent', '|',
-    'quote', 'line', 'code', 'inline-code', '|', 'table', 'formula', 'link', '|',
-    'outline', 'export', '|', 'find',
+    'quote', 'line', 'code', 'inline-code', '|', 'table', 'link', '|',
+    'outline', 'export',
   ];
 
   /** 应用当前是否为暗色主题（用于 vditor theme 选项跟随宿主）。
@@ -45,14 +45,51 @@
     return document.documentElement && document.documentElement.getAttribute('data-theme') === 'dark';
   }
 
-  /** 将 vditor 主题与全局一致（跟随 设置-外观-主题模式 的已解析结果）。
-   *  已构建实例即时 setTheme；未构建则空转，由 buildVditor 用 isDarkTheme() 兜底。
-   * author 火 冰 */
-  function syncVdTheme() {
-    const dark = isDarkTheme();
-    if (vdInst) {
-      try { vdInst.setTheme(dark ? 'dark' : 'light'); } catch (_) { /* 忽略同步异常 */ }
+  /** 收集插件注册的「编辑器主题解析器」，归并出 vditor 应应用的 { theme, extraCss }。
+   *  解析器由插件经 PluginAPI.registerEditorThemeResolver 注册，返回 { theme:'dark'|'light', extraCss? }，
+   *  取首个合法结果；无解析器（或全部返回空）时回落全局明暗（html[data-theme]）。
+   *  作者: 火 冰 */
+  function resolveVdTheme() {
+    const hint = { dark: isDarkTheme() };
+    const resolvers = window.__hostThemeResolvers || [];
+    for (let i = 0; i < resolvers.length; i++) {
+      if (typeof resolvers[i] !== 'function') continue;
+      let r = null;
+      try { r = resolvers[i](hint); } catch (_) { r = null; }
+      if (r && (r.theme === 'dark' || r.theme === 'light')) {
+        return { theme: r.theme, extraCss: typeof r.extraCss === 'string' ? r.extraCss : '' };
+      }
     }
+    return { theme: hint.dark ? 'dark' : 'light', extraCss: '' };
+  }
+  window.vdResolveVdTheme = resolveVdTheme;
+
+  /** 注入/刷新编辑器额外主题 CSS（插件生成的自定义覆盖样式，持久 <style>，复用同一元素避免堆积）
+   *  @param {string} css 可选，为空则清空既有注入
+   *  作者: 火 冰 */
+  function applyVdExtraCss(css) {
+    const id = 'host-vditor-theme-extra';
+    let style = document.getElementById(id);
+    if (css) {
+      if (!style) { style = document.createElement('style'); style.id = id; }
+      style.textContent = css;
+      // 每次应用都重新 appendChild 到 <head> 末尾（已存在时会移动节点），
+      // 确保晚于 vditor 运行时动态注入的主题 <link>，让覆盖样式在级联中胜出。
+      document.head.appendChild(style);
+    } else if (style) {
+      style.textContent = '';
+    }
+  }
+
+  /** 将 vditor 主题应用到编辑区：先解析（插件可插拔源），再 setTheme + 注入额外 CSS。
+   *  已构建实例即时 setTheme；未构建则仅缓存额外 CSS，由 buildVditor 用 resolveVdTheme() 兜底。
+   *  作者: 火 冰 */
+  function syncVdTheme() {
+    const r = resolveVdTheme();
+    if (vdInst) {
+      try { vdInst.setTheme(r.theme); } catch (_) { /* 忽略同步异常 */ }
+    }
+    applyVdExtraCss(r.extraCss);
   }
   window.vdSyncTheme = syncVdTheme;
 
@@ -103,6 +140,228 @@
     }
   }
 
+  /* ============================================================
+   * IR 模式表格右键菜单（IR 表格操作）
+   * vditor 原生「表格浮层工具栏」只在 wysiwyg.popover（仅所见即所得出现）。
+   * 本模块给 ir 模式补一个等价入口：在表格单元格内**右键**弹出「插入行/列、删除行/列」菜单。
+   * 关键同步思路：IR 模式下 vditor 的 getValue/getMarkdown 恒按当前
+   * ir.element.innerHTML 实时推导（见 vditor getMarkdown: ir→VditorIRDOM2Md(innerHTML)），
+   * 因此直接在 ir.element 的真实 <table> DOM 上增删行/列后，调用 vdInst.getValue()
+   * 即得正确 markdown 并 sync2Host 保存，无需触发 vditor 内部重渲染，光标不跳转。
+   * 作者: 火 冰
+   * ============================================================ */
+
+  /** @type {{table:HTMLElement,tr:HTMLElement,td:HTMLElement}|null} IR 表格右键命中的单元格 */
+  let irCtxHit = null;
+
+  /** 取单元格在其所在行中的列索引
+   * @param {HTMLElement} row   行元素（tr）
+   * @param {HTMLElement} cell  td/th
+   * @returns {number} */
+  function irTableCellIndex(row, cell) {
+    return Array.prototype.indexOf.call(row.children, cell);
+  }
+
+  /** 在当前行上/下方插入一行（行内单元格数与参考行一致；表头行用 th，数据行用 td）
+   * 边界：表头行(th)下方插入时，新行必须落到 `|---|` 分隔线之下（tbody 首行），
+   * 否则会串进 thead 变成第二行表头，序列化后出现在分隔线上方。
+   * @param {HTMLElement} table   表格
+   * @param {HTMLElement} refRow  参考行
+   * @param {boolean} before      true=上方插入 | false=下方插入
+   * @returns {HTMLElement} 新行 */
+  function irInsertRow(table, refRow, before) {
+    const isHeader = refRow.parentNode && refRow.parentNode.nodeName === 'THEAD';
+    // 新插入的行一律是数据行（td）。注意：绝不往 thead 里插新表头行，
+    // 否则序列化会出现「分隔线上方」的假表头。
+    const tr = document.createElement('tr');
+    const n = refRow.cells ? refRow.cells.length : 0;
+    for (let i = 0; i < n; i++) {
+      const cell = document.createElement('td');
+      cell.innerHTML = '\u00a0<br>';
+      tr.appendChild(cell);
+    }
+    if (isHeader) {
+      // 表头下方插行：作为首条数据行放到 tbody（分隔线之下）
+      let tb = table.querySelector('tbody');
+      if (!tb) { tb = document.createElement('tbody'); table.appendChild(tb); }
+      tb.insertBefore(tr, tb.firstChild || null);
+    } else if (before) {
+      refRow.parentNode.insertBefore(tr, refRow);
+    } else if (refRow.nextSibling) {
+      refRow.parentNode.insertBefore(tr, refRow.nextSibling);
+    } else {
+      refRow.parentNode.appendChild(tr);
+    }
+    return tr;
+  }
+
+  /** 在参考列左/右侧插入一列（对每一行实行插入单元格；表头行用 th，数据行用 td）
+   * @param {HTMLElement} table  表格
+   * @param {HTMLElement} refRow 参考行（取列数基准）
+   * @param {number} idx         参考列索引
+   * @param {boolean} before     true=左侧 | false=右侧
+   */
+  function irInsertCol(table, refRow, idx, before) {
+    const rows = table.rows || [];
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      if (!row.cells || row.cells.length <= idx) continue;
+      const tag = (row.parentNode && row.parentNode.nodeName === 'THEAD') ? 'th' : 'td';
+      const cell = document.createElement(tag);
+      cell.innerHTML = '\u00a0<br>';
+      if (before) {
+        row.cells[idx].parentNode.insertBefore(cell, row.cells[idx]);
+      } else {
+        row.cells[idx].insertAdjacentElement('afterend', cell);
+      }
+    }
+  }
+
+  /** 删除参考行（边界：表头行不可删，否则失去表头；仅数据行可删，且保留至少一行避免整表被清空）
+   * @param {HTMLElement} table  表格
+   * @param {HTMLElement} refRow 待删行 */
+  function irDeleteRow(table, refRow) {
+    const isHeader = refRow.parentNode && refRow.parentNode.nodeName === 'THEAD';
+    if (isHeader) return; // 表头行不可删除
+    if ((table.rows || []).length > 1) refRow.parentNode.removeChild(refRow);
+  }
+
+  /** 删除参考列（每行仅当列数 >1 才删）
+   * @param {HTMLElement} table  表格
+   * @param {HTMLElement} refRow 参考行
+   * @param {number} idx         待删列索引 */
+  function irDeleteCol(table, refRow, idx) {
+    const rows = table.rows || [];
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      if (!row.cells || row.cells.length <= idx || row.cells.length <= 1) continue;
+      row.removeChild(row.cells[idx]);
+    }
+  }
+
+  /* 暴露纯 DOM 表格助手到 window.__vdTable（jsdom 回归断言用），不改业务路径 */
+  window.__vdTable = {
+    irInsertRow: irInsertRow,
+    irInsertCol: irInsertCol,
+    irDeleteRow: irDeleteRow,
+    irDeleteCol: irDeleteCol,
+    irTableCellIndex: irTableCellIndex,
+  };
+
+  /** 构建表格右键菜单单项
+   * @param {string} label 文案
+   * @param {string} icon  lucide 图标名
+   * @param {Function} action 点击回调 */
+  function irTableMenuItem(label, icon, action) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;'
+      + 'padding:6px 10px;border:none;background:transparent;color:var(--note-ink,#333);'
+      + 'font-size:13px;text-align:left;cursor:pointer;border-radius:4px;';
+    item.addEventListener('mouseover', function () { item.style.background = 'rgba(0,0,0,.06)'; });
+    item.addEventListener('mouseout', function () { item.style.background = 'transparent'; });
+    item.innerHTML = '<i data-lucide="' + icon + '" class="w-4 h-4"></i><span>' + label + '</span>';
+    item.addEventListener('mousedown', function (e) { e.preventDefault(); }); // 不抢走编辑器光标
+    item.addEventListener('click', function () { closeIrTableMenu(); action(); });
+    return item;
+  }
+
+  /** 关闭 IR 表格右键菜单 */
+  function closeIrTableMenu() {
+    const menu = document.getElementById('ed-ir-table-menu');
+    if (menu) menu.remove();
+    const backdrop = document.getElementById('ed-ir-table-backdrop');
+    if (backdrop) backdrop.remove();
+  }
+
+  /** 显示 IR 表格右键菜单（靠近边缘自动翻转防溢出）
+   * @param {number} x 鼠标 X
+   * @param {number} y 鼠标 Y
+   * @param {boolean} isHeader 是否光标在表头行（表头行不提供「上方插入行」「删除该行」） */
+  function showIrTableMenu(x, y, isHeader) {
+    closeIrTableMenu();
+    const menu = document.createElement('div');
+    menu.id = 'ed-ir-table-menu';
+    menu.style.cssText = 'position:fixed;z-index:180;min-width:150px;padding:6px;'
+      + 'background:var(--note-surface-2,#fff);border:1px solid var(--note-border,#e0e0e0);'
+      + 'border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.16);';
+    const defs = [
+      ['在上方插入行', 'arrow-up', 'row', 'before'],
+      ['在下方插入行', 'arrow-down', 'row', 'after'],
+      ['在左侧插入列', 'arrow-left', 'col', 'before'],
+      ['在右侧插入列', 'arrow-right', 'col', 'after'],
+      ['删除该行', 'unlink', 'row', 'delete'],
+      ['删除该列', 'columns', 'col', 'delete'],
+    ];
+    defs.forEach(function (d) {
+      if (isHeader && (d[2] + ':' + d[3] === 'row:before')) return; // 表头行不可在上方插入
+      if (isHeader && (d[2] + ':' + d[3] === 'row:delete')) return; // 表头行不可删除
+      menu.appendChild(irTableMenuItem(d[0], d[1], function () { irTableBarAction(d[2], d[3]); }));
+    });
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.min(Math.max(8, x), Math.max(8, window.innerWidth - r.width)) + 'px';
+    menu.style.top = Math.min(Math.max(8, y), Math.max(8, window.innerHeight - r.height)) + 'px';
+    // 遮罩：点击 / 右键 / 滚动 关闭
+    const overlay = document.createElement('div');
+    overlay.id = 'ed-ir-table-backdrop';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:179;';
+    overlay.addEventListener('contextmenu', function (e2) { e2.preventDefault(); closeIrTableMenu(); });
+    overlay.addEventListener('click', closeIrTableMenu);
+    overlay.addEventListener('scroll', closeIrTableMenu, true);
+    document.body.appendChild(overlay);
+    if (typeof refreshIcons === 'function') { try { refreshIcons(); } catch (_) { /* 忽略 */ } }
+  }
+
+  /** 右键命中探测：落在 ir 编辑区某表格单元格内
+   * @param {Event}  e 右键事件
+   * @param {Object} v vditor 内部对象（vdInst.vditor）
+   * @returns {{table:HTMLElement,tr:HTMLElement,td:HTMLElement}|null} */
+  function irTableAtRightClick(e, v) {
+    const node = e.target;
+    if (!node || !v.ir || !v.ir.element || !v.ir.element.contains(node)) return null;
+    const td = (node.nodeType === 1) ? node.closest('td,th')
+      : (node.parentElement && node.parentElement.closest('td,th'));
+    if (!td) return null;
+    const tr = td.parentNode;
+    const table = tr && tr.closest ? tr.closest('table') : null;
+    return table ? { table: table, tr: tr, td: td } : null;
+  }
+
+  /** 执行行/列操作并同步保存（右键菜单动作）
+   * @param {string} axis 'row'|'col'
+   * @param {string} op   'before'|'after'|'delete' */
+  function irTableBarAction(axis, op) {
+    if (!irCtxHit || !vdInst) return;
+    const hit = irCtxHit;
+    const v = vdInst.vditor;
+    const idx = irTableCellIndex(hit.tr, hit.td);
+    if (axis === 'row') {
+      if (op === 'delete') irDeleteRow(hit.table, hit.tr);
+      else irInsertRow(hit.table, hit.tr, op === 'before');
+    } else {
+      if (op === 'delete') irDeleteCol(hit.table, hit.tr, idx);
+      else irInsertCol(hit.table, hit.tr, idx, op === 'before');
+    }
+    // IR 下 getValue 实时由 ir.element.innerHTML 推导，改完直接回传宿主保存
+    try { sync2Host(vdInst.getValue()); } catch (_) { /* 忽略同步异常 */ }
+    irCtxHit = null;
+    if (v.ir && v.ir.element) { try { v.ir.element.focus(); } catch (_) { /* 忽略 */ } }
+  }
+
+  /* IR 表格右键：落在表格单元格内时拦截默认菜单，弹表格操作菜单；切非 IR 或非表格时放行默认 */
+  document.addEventListener('contextmenu', function (e) {
+    if (!vdInst || vdMode !== 'ir') { irCtxHit = null; return; }
+    const v = vdInst.vditor;
+    const hit = irTableAtRightClick(e, v);
+    if (!hit) { irCtxHit = null; return; }
+    e.preventDefault();
+    irCtxHit = hit;
+    const isHeader = hit.tr && hit.tr.parentNode && hit.tr.parentNode.nodeName === 'THEAD';
+    showIrTableMenu(e.clientX, e.clientY, isHeader);
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeIrTableMenu(); });
+
   /** 构建 vditor 实例（核心装配）。在 vdInst 存在时先销毁保留内容。
    * 说明：edit/split/preview 用 setPreviewMode 切换，无需重建；仅 ir↔sv 切换才重建。 */
   function buildVditor() {
@@ -122,10 +381,11 @@
       mode: vdMode,
       value: value,
       cache: false,
-      // 资源全部走本地 vendor（dist 结构），避免从 unpkg.com 拉 i18n/lute/主题/icons 造成
-      // 弱网下编辑区十几秒才渲染（Bug-029）。js/vendor/vditor/dist 为静态复制目录，与官方 CDN 目录结构一致。
-      cdn: 'js/vendor/vditor',
-      theme: isDarkTheme() ? 'dark' : 'light',
+      // 资源直接走 node_modules/vditor/dist（npm 运行时依赖，随包分发，含官方 dist 目录结构），
+      // 避免从 unpkg.com 拉 i18n/lute/主题/icons 造成弱网下编辑区十几秒才渲染（Bug-029），
+      // 也避免在仓库内 vendor 复制 vditor 导致 dist 迁移占用/历史膨胀（Bug-031）。
+      cdn: 'node_modules/vditor',
+      theme: resolveVdTheme().theme,
       lineNumber: !!(typeof restoreS === 'function' ? restoreS('lineNumbers', true) : true),
       toolbar: VDTOOLBAR,
       preview: { delay: 50, cdn: '', mode: (vdPreview === 'both') ? 'both' : 'editor' },
@@ -153,6 +413,8 @@
       inst = new window.Vditor(el, opts);
       vdInst = inst;
       vdBuffer = '';
+      // 构建后应用解析出的额外主题 CSS（插件注入的编辑器覆盖样式）
+      applyVdExtraCss(resolveVdTheme().extraCss);
       // 构建后确定性应用当前模式对应的视图显隐（sv 三种布局 / ir / wysiwyg），
       // 取代 vditor setPreviewMode（其对 'preview' 无效且会强制 sv 源码可见）
       applyVdVisibility();

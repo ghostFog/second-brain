@@ -23,9 +23,10 @@ vditor 能力范围：
 ## 三、Proposed Changes（改动清单）
 
 ### 1. vditor 资产引入
-- 在 `second-brain/` 目录执行 `npm install vditor`，将 `node_modules/vditor/dist/**` 整体拷贝到 `js/vendor/vditor/`（含 `index.css`、`index.min.js`/`index.js`、`content-theme/`、`icon/`、`themes/` 等）。
-- **依赖已存在则跳过下载**（实现时用 `ls js/vendor/vditor/index.css` 判断）。
-- 桌面端 `note://` 协议能加载（同 vendor/lucide 的静态引用方式）；网页端由服务器静态托管同路径。
+- vditor 作为 **npm 运行时依赖** 直接引用（已在 `package.json` `dependencies`: `"vditor": "^4.0.0"`），**不在仓库内 vendor 复制**。
+- `index.html` 对 vditor 样式/入口引用 `node_modules/vditor/dist/index.css`、`node_modules/vditor/dist/index.min.js`；`editor-vditor.js` 的 `cdn: 'node_modules/vditor'`，运行期 vditor 按 `{cdn}/dist/...` 拼资源命中 npm 包自带官方 `dist/` 结构。
+- 桌面端 `note://` 协议：`node_modules` 位于 `ROOT` 内，直接命中（处理器只拦截 `..` 穿越）；electron-builder `files` 已含 `node_modules/**`，vditor 随打包分发。
+- 经验（Bug-031/CD-22）：勿把 npm 包内容手工复制进 `js/vendor/<pkg>`——vendor 副本与 npm 包冗余易脱节，且「搬进 dist」会让 git 把文件识别为删旧+新增、历史无法 `--follow` 追溯、双重占库。
 
 ### 2. `second-brain/index.html`（脚本/样式接入）
 在 `<head>` 追加（vditor 样式需在我们覆盖样式之前，保证可覆盖）：
@@ -128,7 +129,7 @@ vditor 能力范围：
 
 ## 四、Assumptions & Decisions（假设与决策）
 
-1. vditor 采用 **npm + 本地 vendor 静态引入**（离线桌面端必需，符合 `note://` 静态加载）。
+1. vditor 采用 **npm 运行时依赖直接引用**（`cdn` 指向 `node_modules/vditor`，资源本地、不涉外网 CDN，符合 `note://` 静态加载），仓库内不保留静态 vendor 副本。
 2. 引擎/Provider **进宿主** `editor-vditor.js`，桌面+网页双端一致；插件只留声明外壳（已确认）。
 3. 编辑区 **单 vditor 容器全替换**，退役三套自研 DOM 与全部自研编辑增强（已确认）。
 4. 模式映射：宿主 `编辑→ir`、`分屏→sv`、`预览→纯预览`；原「源码/所见即所得」按钮降级为 `ir/sv` 切换。

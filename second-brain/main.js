@@ -14,6 +14,23 @@ const { AiEngine, chunkConfigured } = require('./ai-engine');
 /* 项目根目录（即本文件所在目录） */
 const ROOT = __dirname;
 
+/** 单实例锁：防止多个实例并发启动。
+ * 现象：若用户在托盘（窗口隐藏但进程存活）或上次异常退出残留时再次双击启动，会出现两个
+ * 实例同时运行，渲染进程争用磁盘 IO/CPU，导致第二个实例「第一次启动要十几秒」。
+ * 加锁后：新实例发现已有实例，直接让旧实例的窗口恢复并聚焦，随后自身退出，避免并发争用。
+ * @author 火 冰 */
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit(); // 已有实例在运行：本实例直接退出
+}
+else {
+  // 已有实例收到用户再次启动的请求（用户双击图标/托盘恢复等）：
+  // 恢复并聚焦主窗口，让用户看到既有的应用而非另起一个慢实例
+  app.on('second-instance', function () {
+    showMainWindow();
+  });
+}
+
 /* 在 app 就绪前声明 note 协议为 standard/secure，并启用 fetch 与跨源，
  * 否则页面内的相对 URL、fetch 和脚本加载会被安全策略拦截 */
 protocol.registerSchemesAsPrivileged([
@@ -92,18 +109,19 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
+  _slog('browserwindow_created');
 
   // 通过自定义协议加载首页，相对 fetch 自动沿用 note:// 协议
   mainWin.loadURL('note://local/index.html');
 
-  // 快捷键打开/关闭开发者工具：F12 或 Ctrl+Shift+I。
-  // 应用已 setApplicationMenu(null) 移除默认菜单，故需在前端按键捕获前手动监听。
+  // 保留 Ctrl+Shift+I 全局开/关开发者工具（不参与快捷键注册表，作为标准兜底）。
+  // F12 已纳入用户可重绑的「设置-快捷键」注册表（cmd:devtools），由渲染进程 keydown → IPC 路由，
+  // 故此处不再拦截 F12，避免抢占用户重绑的组合。
   // 作者: 火 冰
   mainWin.webContents.on('before-input-event', function (event, input) {
     if (input.type !== 'keyDown') return;
-    const f12 = (input.key === 'F12');
     const ctrlShiftI = input.control && input.shift && (input.key === 'I' || input.key === 'i');
-    if (f12 || ctrlShiftI) {
+    if (ctrlShiftI) {
       mainWin.webContents.toggleDevTools();
       event.preventDefault();
     }
@@ -112,6 +130,8 @@ function createWindow() {
   // 渲染端 console 全量转发落盘：把渲染进程的 console.log/warn/error（含 window.onerror 之外、
   // vditor 等第三方库的日志）桥接到 userData/logs/app.log，便于排查界面空白/编辑区异常。
   // 作者: 火 冰
+  // 启动耗时打点：渲染进程 DOM/脚本加载完成时机，用于判断「十几秒」在渲染端还是主进程端
+  mainWin.webContents.on('did-finish-load', function () { _slog('renderer_did_finish_load'); });
   mainWin.webContents.on('console-message', function (_e, level, message, line, sourceId) {
     const lv = { 0: 'log', 1: 'warn', 2: 'error', 3: 'debug' }[level] || 'log';
     appendLog({ level: lv, msg: '[console] ' + String(message),
@@ -128,7 +148,15 @@ ipcMain.on('win:maximize', () => {
   if (!mainWin) return;
   if (mainWin.isMaximized()) mainWin.unmaximize(); else mainWin.maximize();
 });
-
+/* 切换整个窗口全屏（F11 快捷键 / 设置-快捷键注册表 cmd:fullscreen），等价系统级全屏 */
+ipcMain.on('win:fullscreen', () => {
+  if (!mainWin) return;
+  mainWin.setFullScreen(!mainWin.isFullScreen());
+});
+/* 开/关开发者工具（设置-快捷键注册表 cmd:devtools，默认 F12；Ctrl+Shift+I 仍走 before-input-event 兜底） */
+ipcMain.on('win:devtools', () => {
+  if (mainWin) mainWin.webContents.toggleDevTools();
+});
 /* 关闭按钮(×)行为分派：
  * 仅首次（closeAsked=false）弹一次「关闭后希望执行什么操作」并记住选择；之后一律按 closeAction 直接执行，
  * 后续在设置「常规 → 关闭按钮行为」里维护，不再每次都弹。
@@ -1248,15 +1276,27 @@ ipcMain.handle('ai:ask', async (e, question, history) => {
 ipcMain.on('ai:stop', () => aiEngine.stop());
 
 /* ---------- 应用生命周期 ---------- */
+/* 启动耗时打点：记录 whenReady 各阶段与窗口加载完成耗时，便于排查「启动慢/界面空白」类问题。
+ * 作者: 火 冰 */
+const _t0 = Date.now();
+function _slog(tag) {
+  appendLog({ level: 'info', msg: `[startup] ${tag} +${Date.now() - _t0}ms` });
+}
+_slog('main_module_loaded');
 app.whenReady().then(async () => {
+  // 单实例守卫：未获得单实例锁的进程已在顶部 app.quit()，此处不再创建窗口
+  if (!gotTheLock) return;
+  _slog('whenReady_begin');
   // 移除默认应用菜单：frame:false 自绘标题栏本无菜单栏，且默认菜单的
   // Ctrl+R（Reload）会与编辑器的「替换」快捷键冲突，需禁用默认加速器
   Menu.setApplicationMenu(null);
   loadConfig(); // 恢复上次选择的笔记库目录
   initAiEngine(); // 初始化 AI 引擎（配置/索引持久化路径）
   registerNoteProtocol();
+  _slog('before_clearCache');
   // 清除历史磁盘缓存，防止拆分/升级后残留旧 HTML/JS 脚本导致界面空白
   await session.defaultSession.clearCache();
+  _slog('after_clearCache');
   createWindow();
   createTray(); // 创建系统托盘图标与菜单（G-12）
 

@@ -209,6 +209,13 @@ function kbInitBuiltins() {
   } });
   kbRegisterCommand({ id: 'cmd:new', label: '新建笔记', icon: 'file-plus', group: '内置', defaultShortcut: 'Ctrl+N', action: function () { location.hash = '#/editor'; document.dispatchEvent(new CustomEvent('note:new')); } });
   kbRegisterCommand({ id: 'cmd:graph', label: '打开图谱视图', icon: 'git-fork', group: '内置', defaultShortcut: 'Ctrl+G', action: function () { location.hash = '#/graph'; if (typeof closePalette === 'function') closePalette(); } });
+  // 全屏/开发者工具：桌面端经 noteDesktop 走 IPC 控制主进程；无 noteDesktop（网页端）时静默忽略
+  kbRegisterCommand({ id: 'cmd:fullscreen', label: '切换全屏（窗口）', icon: 'maximize', group: '内置', defaultShortcut: 'F11', action: function () {
+    if (window.noteDesktop && window.noteDesktop.toggleFullScreen) window.noteDesktop.toggleFullScreen();
+  } });
+  kbRegisterCommand({ id: 'cmd:devtools', label: '开发者工具', icon: 'bug', group: '内置', defaultShortcut: 'F12', action: function () {
+    if (window.noteDesktop && window.noteDesktop.toggleDevTools) window.noteDesktop.toggleDevTools();
+  } });
   // 查找替换：vditor 原始引擎接管（Ctrl+F / Ctrl+R 在编辑区内由 vditor 原生处理），宿主不再注册
   kbRegisterCommand({ id: 'cmd:settings', label: '打开设置', icon: 'settings', group: '内置', action: function () { location.hash = '#/settings'; if (typeof closePalette === 'function') closePalette(); } });
   kbRegisterCommand({ id: 'cmd:ai', label: '打开 AI 问答', icon: 'brain', group: '内置', action: function () { location.hash = '#/ai'; if (typeof closePalette === 'function') closePalette(); } });

@@ -380,19 +380,19 @@ function testThemeSavedSnapshot() {
 }
 
 /* ---- Bug-029: vditor 资源本地化，避免弱网下 unpkg CDN 拖慢编辑区渲染 ----
- * 确定性复现点：editor-vditor.js 若把 cdn 指回 unpkg.com（或本地 dist 被删除），
+ * 确定性复现点：editor-vditor.js 若把 cdn 指回 unpkg.com（或本地资源被删除/缺失），
  * 编辑区会重新陷入十几秒空白。此处做静态门禁：
- *   1) 宿主 opts.cdn 指向本地 vendor，且源码不残留 unpkg.com
- *   2) vditor 本地 dist 关键资源齐备（lute/i18n/icons/content-theme）
+ *   1) 宿主 opts.cdn 指向 node_modules/vditor（npm 运行时依赖，不再 vendor 复制），且源码不残留 unpkg.com
+ *   2) node_modules/vditor/dist 关键资源齐备（lute/i18n/icons/content-theme）
  * 作者: 火 冰 */
 function testVditorLocalCdn() {
   const src = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
-  assert(/cdn\s*:\s*['"]js\/vendor\/vditor['"]/.test(src),
-    'Bug-029: editor-vditor.js 的 opts.cdn 指向本地 vendor（不再走 unpkg.com）');
+  assert(/cdn\s*:\s*['"]node_modules\/vditor['"]/.test(src),
+    'Bug-031: editor-vditor.js 的 opts.cdn 指向 node_modules/vditor（不再走 unpkg.com、不再 vendor 复制）');
   assert(!/cdn\s*:\s*['"]https?:\/\/unpkg\.com/.test(src),
     'Bug-029: cdn 配置值不指向 unpkg.com 外网地址');
 
-  const vd = path.join(__dirname, 'js', 'vendor', 'vditor', 'dist');
+  const vd = path.join(__dirname, 'node_modules', 'vditor', 'dist');
   const need = [
     'js/lute/lute.min.js',
     'js/i18n/zh_CN.js',
@@ -402,7 +402,7 @@ function testVditorLocalCdn() {
     'images/emoji/vditor.png',
   ];
   need.forEach(function (rel) {
-    assert(fs.existsSync(path.join(vd, rel)), 'Bug-029: vditor 本地 dist 资源存在 ' + rel);
+    assert(fs.existsSync(path.join(vd, rel)), 'Bug-031: vditor 资源存在于 node_modules/dist ' + rel);
   });
 }
 
@@ -464,11 +464,122 @@ async function testEdAutosaveBinding() {
     'Bug-030: a、b 两笔记各自按输入时归属被保存，不被切换串台/丢保存');
 }
 
+/* ---- Bug-032: 工具栏不得配置 vditor 不存在的 key，否则渲染空白 undefined 按钮 ----
+ * 根因: 'formula'/'find' 非 vditor 内置 key，mergeToolbar 会原样保留字符串，
+ *        genItem 读 menuItem.name=undefined → Custom 兜底渲染出 data-type="undefined" 空白按钮。
+ * 修复: VDTOOLBAR 只保留内置合法 key。
+ * 断言: 源码中 VDTOOLBAR 数组内的字符串均不得命中 'formula'/'find' 这两个无效 key。
+ * 作者: 火 冰 */
+function testVditorToolbarValid() {
+  const src = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  const start = src.indexOf('const VDTOOLBAR');
+  const end = src.indexOf('\n  ]', start);
+  const arr = src.slice(src.indexOf('[', start), end + 3);
+  const invalid = ['formula', 'find'];
+  const hits = invalid.filter(function (k) { return arr.indexOf("'" + k + "'") !== -1; });
+  assert(hits.length === 0,
+    'Bug-032: VDTOOLBAR 不包含 vditor 不存在的工具栏 key（formula/find），不会渲染空白按钮' +
+    (hits.length ? '（残留: ' + hits.join(',') + '）' : ''));
+}
+
+/* ---- 设置-快捷键: F11 全屏 / F12 开发者工具 纳入快捷键注册表 ----
+ * 注册 cmd:fullscreen（默认 F11）与 cmd:devtools（默认 F12），经 kbMatch 命中后
+ * 调 noteDesktop.toggleFullScreen / toggleDevTools 走 IPC 控制主进程。
+ * 断言: F11/F12 命中对应命令，且 action 正确触发 noteDesktop 接口。
+ * 作者: 火 冰 */
+function testFullscreenDevtoolsKeybinds() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  W.saveS = function () {}; W.restoreS = function () { return null; };
+  const calls = [];
+  W.noteDesktop = {
+    toggleFullScreen: function () { calls.push('fs'); },
+    toggleDevTools: function () { calls.push('dt'); },
+  };
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'app-keybinds.js'), 'utf8');
+  W.document.head.appendChild(s);
+  W.kbInit();
+  const f11 = W.kbMatch({ key: 'F11', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false });
+  assert(f11 && f11.id === 'cmd:fullscreen', '设置-快捷键: F11 命中「切换全屏（窗口）」命令');
+  const f12 = W.kbMatch({ key: 'F12', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false });
+  assert(f12 && f12.id === 'cmd:devtools', '设置-快捷键: F12 命中「开发者工具」命令');
+  f11.action(); f12.action();
+  assert(calls.join(',') === 'fs,dt', '设置-快捷键: F11/F12 触发 noteDesktop.toggleFullScreen/toggleDevTools');
+}
+
+/* ---- IR 模式表格工具条：__vdTable 纯 DOM 行/列增删助手 ----
+ * 供 jsdom 直接验证：插入行/列、删除行/列、列表引都应正确改变表格结构。
+ * 作者: 火 冰 */
+function testIrTableBarHelpers() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  W.document.head.appendChild(s);
+  assert(W.__vdTable && typeof W.__vdTable.irInsertRow === 'function', 'editor-vditor.js 暴露 __vdTable 表格助手');
+
+  const makeTable = function () {
+    const t = W.document.createElement('table');
+    t.innerHTML = '<thead><tr><th>a</th><th>b</th></tr></thead>'
+      + '<tbody><tr><td>1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></tbody>';
+    return t;
+  };
+  const tbl = W.__vdTable;
+
+  // 表头 1 行 + 数据 2 行
+  let t = makeTable();
+  assert(t.rows.length === 3, 'IR表: 初始 3 行');
+  const bodyRow0 = t.querySelector('tbody tr:first-child');
+  tbl.irInsertRow(t, bodyRow0, true);                       // 在首数据行上方插行
+  assert(t.rows.length === 4, 'IR表: 上方插入行后 4 行');
+  assert(t.querySelector('tbody tr:first-child').children.length === 2, 'IR表: 新行 2 格');
+
+  t = makeTable();
+  const bodyRow1 = t.querySelector('tbody tr:nth-child(2)');
+  tbl.irInsertCol(t, bodyRow1, 0, true);                    // 在第 0 列左侧插列
+  Array.prototype.forEach.call(t.rows, function (r) { assert(r.cells.length === 3, 'IR表: 每行 3 格(插列)'); });
+  assert(t.querySelectorAll('thead th').length === 3, 'IR表: 表头插入 th 列');
+
+  t = makeTable();
+  tbl.irDeleteRow(t, t.querySelector('tbody tr:nth-child(2)')); // 删一数据行
+  assert(t.rows.length === 2, 'IR表: 删除行后 2 行');
+
+  t = makeTable();
+  tbl.irDeleteCol(t, t.querySelector('tbody tr:first-child'), 0); // 删第 0 列
+  Array.prototype.forEach.call(t.rows, function (r) { assert(r.cells.length === 1, 'IR表: 删除列后每行 1 格'); });
+  // 仅 1 列的表格删除列不应清空（防整表被删）
+  const oneCol = W.document.createElement('table');
+  oneCol.innerHTML = '<thead><tr><th>a</th></tr></thead><tbody><tr><td>1</td></tr></tbody>';
+  tbl.irDeleteCol(oneCol, oneCol.querySelector('tbody tr:first-child'), 0);
+  oneCol.querySelectorAll('tbody tr').forEach(function (r) { assert(r.cells.length === 1, 'IR表: 单列表不误删'); });
+
+  const idxT = makeTable();
+  assert(tbl.irTableCellIndex(idxT.querySelector('tbody tr:first-child'),
+    idxT.querySelector('tbody tr:first-child').children[1]) === 1, 'IR表: 列索引正确');
+
+  // 边界：表头行(th)「下方插入行」必须落到 |---| 分隔线下（tbody 首行，不串进 thead）
+  const hdrT = makeTable();
+  tbl.irInsertRow(hdrT, hdrT.querySelector('thead tr:first-child'), false);
+  assert(hdrT.querySelectorAll('thead tr').length === 1, 'IR表: 表头下方插行不增加表头行(thead 仍 1 行)');
+  assert(hdrT.querySelector('tbody tr:first-child').cells[0].tagName === 'TD', 'IR表: 表头下方插行为数据格(td)');
+
+  // 边界：表头行不可删除
+  const hdrDel = makeTable();
+  tbl.irDeleteRow(hdrDel, hdrDel.querySelector('thead tr:first-child'));
+  assert(hdrDel.querySelectorAll('thead tr').length === 1, 'IR表: 表头行不可删除');
+}
+
 testLogBadge();
 testPluginLoad();
 testCodeLangGhost();
 testThemeSavedSnapshot();
 testVditorLocalCdn();
+testVditorToolbarValid();
+testFullscreenDevtoolsKeybinds();
+testIrTableBarHelpers();
 testVditorBridge();
 Promise.all([
   testCodeHighlightCopyBtn(),

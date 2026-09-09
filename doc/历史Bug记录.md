@@ -354,3 +354,49 @@
 - **处理方法**: ①`onEdInput` 在输入瞬间固定归属 `p = edCurrent`（`edOutdated[p]`/去抖 timer 一律用 p），并将全局单 timer 改为按文件独立 `edSaveTimers[p]`。②`openNote` 将 `edCurrent = path` 移到内容装载（`await noteStore.read`/缓存命中）完成之后、渲染之前，保证 edCurrent 恒等于「编辑器当前正显示的文件」，消除装载间隙的 blur/input 误归属。
 - **验证结果**: 回归套件新增 Bug-030（`testEdAutosaveBinding`：编辑 a→切 b→编辑 b，两文件各按其归属保存）与 Bug-030b（`testEdOpenRace`：源码断言 openNote 内 `noteStore.read` 位于 `edCurrent = path` 之前）；`npm test` 现为 **38 通过、0 失败**；`node --check` 通过。
 - **防再犯要点**: 打开笔记的异步装载：`edCurrent`（当前文件）必须在内容真正装载进编辑器之后、渲染之前才激活，不能同步前置；否则装载间隙内 vditor 的 blur/input 会把旧文件可见内容按新文件路径保存，造成串文件/丢失（CD-19）。
+
+- <br />
+
+- **ID**: Bug-031
+- **日期**: 2026-09-09
+- **现象**: 编辑器运行正常但控制台报 `GET js/vendor/vditor/dist/js/i18n/zh_CN.js net::ERR_ABORTED 404 (Not Found)`，vditor 工作时为每个 /dist/ 拼出的资源请求 404。
+- **复现地点**: `second-brain/js/vendor/vditor/`（本地化资源目录布局）配合 `second-brain/js/editor/editor-vditor.js` 的 `buildVditor` `cdn: 'js/vendor/vditor'`
+- **原因**: vditor 引擎把资源按 `{cdn}/dist/...` 硬编码拼接（`dist/js/i18n/zh_CN.js`、`dist/js/lute/lute.min.js`、`dist/css/content-theme`、`dist/js/icons`），期望 `cdn` 指向包根、其下为官方 CDN 的 `dist/` 包裹层；但仓库内 `js/vendor/vditor/` 是 npm 包解包结构（`js/`、`css/`、`content-theme/`、`images/`、`index.*` 平铺于根），缺 `dist` 包裹层 → 全部 `/dist/js/...` 资源 404（Bug-029 声明已复制 `dist/`，实际磁盘未真正建立该包裹层）。**注**：本 Bug 曾尝试把 `js/vendor/vditor/` 根内容整体搬入 `dist/` 来命中，但那会让 git 把这批 vendor 文件识别为「删除旧路径 + 新增全新文件」——历史无法沿 `--follow` 追溯、且新旧布局双重占库，用户已还原该 dist 迁移方案。
+- **状态**: 已修复（测试完成）
+- **处理方法**: **放弃仓库内 vendor 复制 vditor**，改用 npm 运行时依赖直接引用：vditor 本就是 `dependencies`（`"vditor": "^4.0.0"`，npm 自带官方 `dist/` 结构），electron-builder `files` 已含 `node_modules/**` 随打包分发；且 `node_modules` 位于 `ROOT` 之内，`note://` 协议命中 `node_modules/vditor/dist/...`（处理器只拦截 `..` 穿越、不拦 node_modules）。改动：① `index.html` 对 vditor 样式/入口引用由 `js/vendor/vditor/dist/index.css|index.min.js` 改为 `node_modules/vditor/dist/index.css|index.min.js`；② `editor-vditor.js` 的 `cdn` 改为 `'node_modules/vditor'`；③ `git rm -r` 移除 `js/vendor/vditor` 整个目录（连同此前暂存的 372 个 dist 双重占用）。彻底绕开「dist 迁移」。Bug-029「不拉外网 unpkg」的目标不变：cdn 仍指本地 node_modules，不涉外网。
+- **验证结果**: 回归断言 `testVditorLocalCdn` 改为校验 `cdn` 指向 `node_modules/vditor`、源码不残留 `unpkg.com`，且 `node_modules/vditor/dist` 六个关键资源（`js/lute`、`js/i18n`、`js/icons`、`js/highlight.js`、`css/content-theme`、`images/emoji`）齐备；`npm test` **59 通过、0 失败**；`node --check` 通过。
+- **防再犯要点**: 第三方编辑器（vditor 等）资源应**优先用 npm 运行时依赖 + `cdn` 直接指向 `node_modules/<pkg>`**（自带官方 `dist/` 结构、随分发），不要在仓库内 vendor 手动复制大体积 `dist`——手工复制必然伴随「搬进 dist」这类迁移，git 会识别为删旧 + 新增，历史无法 `--follow` 追溯、又造成新旧布局双重占库；且仓库内的静态 vendor 副本与 npm 包重复冗余，易脱节（CD-22）。
+
+- <br />
+
+- **ID**: Bug-032
+- **日期**: 2026-09-09
+- **现象**: vditor 编辑器工具栏多出一个空白按钮，F12 查看其 DOM 为 `data-type="undefined"`、`aria-label="undefined"`、`class="vditor-tooltipped vditor-tooltipped_undefined"`。
+- **复现地点**: `second-brain/js/editor/editor-vditor.js` 的 `VDTOOLBAR` 配置 → vditor `mergeToolbar`/`genItem`
+- **原因**: `VDTOOLBAR` 包含 `'formula'` 与 `'find'` 两个**非 vditor 内置 key**。vditor 的 `Options.mergeToolbar`（dist/index.js L15198-15214）只把命中内置定义名的字符串替换成按钮对象，未命中的字符串**原样保留**；随后 `Toolbar.genItem` 读 `menuItem.name`——字符串无 `.name`，取 `undefined`，落入 `default → new Custom(...)` 兜底（L14493-14494/13173-13175），渲染出 `data-type="undefined"` 的空白按钮（`formula` 一个、`find` 一个）。数学公式的**预览渲染**由 `preview.math`（默认开启）承担，与此插入按钮无关。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 从 `VDTOOLBAR` 移除 `'formula'`、`'find'` 两个非法 key，仅保留 vditor 内置合法 key（table/link/outline/export 等），并更新 VDTOOLBAR 注释说明「只使用内置合法 key，避免空白按钮」。
+- **验证结果**: `npm test` 回归 **39 通过、0 失败**（含新增 Bug-032 断言：VDTOOLBAR 不得包含 formula/find）；`node --check` 通过。
+- **防再犯要点**: 配置 vditor `toolbar` 数组时只能使用其内置 key；臆造的 key（formula/find 等）会被 vditor 原样保留并在 Custom 兜底渲染成 `data-type="undefined"` 空白按钮，静默难察。
+
+- <br />
+
+- **ID**: Bug-033
+- **日期**: 2026-09-09
+- **现象**: 软件「第一次启动」需要十几秒（卡顿后才出界面）；偶发复现，重开不一定稳定。
+- **复现地点**: `second-brain/main.js`（应用生命周期，`app.whenReady` 创建窗口阶段）
+- **原因**: 未配置 `app.requestSingleInstanceLock()` 单实例锁。用户最小化到托盘（窗口隐藏但进程存活）或上次异常退出残留后再次双击启动时，会与旧实例并发运行——两个实例同时构建窗口，渲染进程争用磁盘 IO/CPU，导致后一个实例 `did-finish-load` 被拖慢到 **12+ 秒**（实测：单实例冷启动渲染仅 1.1s，双实例并发时第二个实例到 12.3s）。主进程各阶段本身极快（whenReady +140ms、clearCache +360ms），瓶颈全部在并发争用上的第二个实例渲染加载。
+- **状态**: 已修复（测试完成）
+- **处理方法**: ①在 `app.whenReady()` 之前调用 `app.requestSingleInstanceLock()`，未获得锁的实例直接 `app.quit()`（不会并发建窗）；②获得锁的实例监听 `app.on('second-instance')` → 调用既有 `showMainWindow()` 恢复并聚焦旧实例窗口，让用户看到既有的应用而非多起一个慢实例；③`app.whenReady().then` 开头加 `if (!gotTheLock) return;` 守卫，确保未获锁实例不执行窗口创建。另保留精简的 `[startup]` 阶段打点日志（whenReady/clearCache/did-finish-load 耗时），便于后续排查启动慢类问题。
+- **验证结果**: 并发启动两个实例验证：单实例冷启动渲染加载稳定 1.1~1.2s；双实例并发时日志仅 1 条 `whenReady_begin`（第二个实例被锁拦截退出），唯一实例渲染 1.1s 无卡顿；`npm test` 回归 **59 通过、0 失败**；`node --check` 通过。
+- **防再犯要点**: Electron 桌面应用必须配置 `app.requestSingleInstanceLock()`（未获锁即退出 + 监听 `second-instance` 恢复既有窗口），否则托盘常驻/残留进程再次启动会与旧实例并发，渲染进程争用资源造成「第二次启动/首次再启动」十几秒卡顿（CD-21）。
+
+- **ID**: Bug-034
+- **日期**: 2026-09-09
+- **现象**: 无论选择 Minimal 哪个配色（纸白/亚麻/冷灰/墨绿/自定义），应用外壳（侧边栏/顶栏/面板）跟随换色，但编辑器（Vditor）内容区始终纯白 `#fff`，与整体主题不统一（「白色孤岛」）。
+- **复现地点**: `plugins/minimal-theme/main.js`（`buildEditorCss` 注入覆盖样式）+ `js/editor/editor-vditor.js`（`applyVdExtraCss` 注入点）
+- **原因**: 插件把配色 CSS 变量映射为 vditor 覆盖样式时用**单类选择器**（特异度 `(0,1,0)`）；而 vditor 运行时会把自带主题 `<link>` **动态追加**到 `<head>` 尾部，其 `.vditor{background:#fff}` 与注入样式同特异度但**后加载**、级联胜出 → 编辑器落在默认纯白，`var(--note-background)` 未生效。
+- **状态**: 已修复（测试完成）
+- **处理方法**: ① `buildEditorCss` 所有选择器统一加 `html body` 前缀，把特异度提到 `(0,1,2)+`，必然压过 vditor 自带的单/双类规则；同时打全真实编辑区类（`.vditor-sv/.vditor-ir/.vditor-wysiwyg/.vditor-preview/.vditor-reset`）。② `applyVdExtraCss` 每次应用把 `#host-vditor-theme-extra` `appendChild` **重挂到 `<head>` 末尾**（同节点移动），保证晚于 vditor 动态注入的 `<link>`。③ **内容层主题化**：`buildEditorCss` 拆分 UI 壳与内容层（新增 `lightContentCss`/`darkContentCss`），编辑区 `table/引用/代码块` 浅色态用 `--note-*` 跟随配色、深色态用与宿主协调的固定暗色，消除任何模式下表格刺眼白底。
+- **验证结果**: 冒烟 95 通过（新增 3 条断言：注入 CSS 含 `html body .vditor` 前缀、引用 `var(--note-background, #fff)`、覆盖编辑区 `html body .vditor table`）、回归 59 通过、`node --check` 通过。
+- **防再犯要点**: 注入自定义主题/覆盖 CSS 时，选择器特异度必须 ≥ 目标引擎（vditor 等）自带规则，或每次把注入节点重挂到 `<head>` 末尾——否则被引擎运行时后加载的同特异度样式覆盖（CD-23）。

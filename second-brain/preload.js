@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   minimize: () => ipcRenderer.send('win:minimize'),
   /** 最大化/还原窗口（切换） */
   toggleMaximize: () => ipcRenderer.send('win:maximize'),
+  /** 切换整个窗口全屏（F11 / 设置-快捷键 cmd:fullscreen） */
+  toggleFullScreen: () => ipcRenderer.send('win:fullscreen'),
+  /** 开/关开发者工具（设置-快捷键 cmd:devtools，默认 F12） */
+  toggleDevTools: () => ipcRenderer.send('win:devtools'),
   /** 关闭窗口 */
   close: () => ipcRenderer.send('win:close'),
   /** 关闭按钮行为：confirm/quit/tray（供设置页调整并持久化） */
