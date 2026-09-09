@@ -834,6 +834,20 @@ globalThis.PluginAPI = {
   /** 注册编辑器能力 Provider（manifest.editor 声明 + 运行时实现） */
   registerEditorProvider: function (provider) { registerEditorProvider(provider); },
 
+  /** 注册「编辑器主题解析器」（抽象）：宿主在应用 vditor 主题时调用它拿到
+   *  { theme:'dark'|'light', extraCss? }；返回 null 表示不干预（回落宿主默认明暗）。
+   *  插件只描述「要什么主题」，宿主的 setTheme/样式注入由宿主内部完成——不直接调 vditor。
+   *  @return {Function} 注销器，调用后移除该 resolver。作者: 火 冰 */
+  registerEditorThemeResolver: function (fn) {
+    if (typeof fn !== 'function') return function () {};
+    const list = (window.__hostThemeResolvers = window.__hostThemeResolvers || []);
+    list.push(fn);
+    return function () {
+      const i = list.indexOf(fn);
+      if (i >= 0) list.splice(i, 1);
+    };
+  },
+
   /** 编辑器桥：供编辑器能力插件访问宿主编辑器的状态 / 渲染 / 读写能力。
    * 核心侧函数（getEdState / renderMarkdown / setEditorMode / noteStore）在 app-editor.js 等
    * 后置脚本中定义，此处运行期再取，避免加载顺序耦合。作者: 火 冰 */
@@ -844,6 +858,19 @@ globalThis.PluginAPI = {
     getMode: function () { return (typeof restoreS === 'function' ? restoreS('edMode', 'edit') : 'edit'); },
     readNote: function (path) { return (typeof noteStore !== 'undefined' && noteStore && noteStore.read) ? noteStore.read(path) : Promise.resolve(''); },
     saveNote: function (path, md) { return (typeof noteStore !== 'undefined' && noteStore && noteStore.save) ? noteStore.save(path, md) : Promise.resolve(); },
+    /* 编辑器主题抽象：宿主把 vditor 深浅切换与样式注入收口在内部，插件只读/触发，不直接调 vditor。 */
+    theme: {
+      /** 取当前已解析的 vditor 主题配置 { theme, extraCss } */
+      get: function () {
+        const fn = window.vdResolveVdTheme;
+        return typeof fn === 'function' ? fn() : { theme: '', extraCss: '' };
+      },
+      /** 重算并应用 vditor 主题（配色/编辑器主题配置变化后由插件调用） */
+      sync: function () {
+        const fn = window.vdSyncTheme;
+        if (typeof fn === 'function') { try { fn(); } catch (_) { /* 忽略同步异常 */ } }
+      },
+    },
   },
 };
 

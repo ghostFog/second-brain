@@ -131,6 +131,118 @@
     CUSTOM_VAR_PROPS.forEach(function (k) { if (body.style.getPropertyValue(k)) body.style.removeProperty(k); });
   }
 
+  /* ---------------- 编辑器（Vditor）主题联动：抽象 resolver，经宿主执行，不直接调 vditor ---------------- */
+
+  /** 每套配色的「编辑器主题」设置键（1..4 内置 + custom 自定义） */
+  var ED_THEME_KEY = { '1': 'edTheme1', '2': 'edTheme2', '3': 'edTheme3', '4': 'edTheme4', 'custom': 'edThemeCustom' };
+
+  /** 编辑器主题下拉显示值 → 模式映射 */
+  var ED_THEME_MODE = { '自动(跟随宿主)': 'auto', '浅色': 'light', '深色': 'dark' };
+
+  /**
+   * 读取当前配色对应的「编辑器主题」设置值（auto/light/dark）
+   * @returns {string}
+   */
+  function currentEditorMode() {
+    var id = normalizeId(localStorage.getItem(LS_KEY) || '0');
+    var key = ED_THEME_KEY[id] || 'edTheme1';
+    var v = ED_THEME_MODE[getSetting(key)] || 'auto';
+    return v;
+  }
+
+  /**
+   * 根据编辑器深浅把宿主配色映射成 vditor 的覆盖 CSS（「自定义CSS注入」）。
+   * 深色时交给 vditor 内建暗色主题，不强制覆盖浅色变量。
+   * @param {string} theme 'dark'|'light'
+   * @returns {string} CSS 文本
+   */
+  function buildEditorCss(theme) {
+    // UI 壳：仅浅色态才用 --note-* 覆盖外壳背景（深色态交给 vditor 自带暗色，避免把浅色变量灌进深色背景）。
+    // 选择器统一加 html body 前缀提高特异度：vditor 会在运行时动态注入自身主题 CSS（较晚出现在 <head>），
+    // 单类选择器(0,1,0)会因同特异度后加载而胜出；加前缀后必然压过 vditor 自带样式。
+    var ui = theme === 'dark' ? [] : [
+      'html body .vditor, html body .vditor .vditor-content, html body .vditor .vditor-sv, html body .vditor .vditor-ir, html body .vditor .vditor-wysiwyg, html body .vditor .vditor-preview, html body .vditor .vditor-reset { background-color: var(--note-background, #fff); color: var(--note-ink, #333); }',
+      'html body .vditor .vditor-toolbar { background-color: var(--note-surface, #fafafa); border-bottom-color: var(--note-border, #ddd); }',
+      'html body .vditor-toolbar__item { color: var(--note-ink-3, #888); }',
+      'html body .vditor-toolbar__item:hover, html body .vditor-toolbar__item--active { background-color: var(--note-surface-2, #eee); color: var(--note-brand, #7c6a52); }',
+      'html body .vditor-sv .vditor-sv__marker :not(.vditor-sv__marker--blank) { color: var(--note-ink-3, #888); }',
+      'html body .vditor ::selection { background-color: var(--note-brand, #7c6a52); color: #fff; }'
+    ];
+    // 内容层主题化：编辑区 IR/WYSIWYG 里的 table/引用/代码块不受 vditor 明暗内容主题影响（那只作用于 .vditor-reset 预览），
+    // 浅色态用 --note-* 跟随配色；深色态用与宿主深色协调的固定暗色，消除刺眼白底。
+    var content = (theme === 'dark' ? darkContentCss() : lightContentCss());
+    return ui.concat(content).join('\n');
+  }
+
+  /**
+   * 浅色态编辑区内容层 CSS：表格/引用/代码块跟随 --note-* 配色。
+   * 作者: 火 冰
+   * @returns {string[]}
+   */
+  function lightContentCss() {
+    return [
+      'html body .vditor table { border-collapse: collapse; background-color: var(--note-background, #fff); color: var(--note-ink, #333); border-color: var(--note-line, #ddd); }',
+      'html body .vditor table th { background-color: var(--note-surface, #fafafa); color: var(--note-ink, #333); border-color: var(--note-line, #ddd); }',
+      'html body .vditor table td { background-color: var(--note-background, #fff); color: var(--note-ink, #333); border-color: var(--note-line, #ddd); }',
+      'html body .vditor table tbody tr:nth-child(2n) { background-color: var(--note-surface, #fafafa); }',
+      'html body .vditor blockquote { background-color: var(--note-surface, #fafafa); border-left-color: var(--note-ring, #bbb); color: var(--note-ink-2, #555); }',
+      'html body .vditor pre, html body .vditor code:not(.hljs) { background-color: var(--note-surface, #fafafa); color: var(--note-ink, #333); border-color: var(--note-line, #ddd); }',
+      'html body .vditor pre code { background-color: transparent; color: inherit; }',
+      // 以下三项为映射表「编辑层」待补全项：链接→强调色, 分隔线→行线, callout/卡片→卡片背景
+      'html body .vditor a { color: var(--note-brand, #7c6a52); }',
+      'html body .vditor hr, html body .vditor .vditor-sv__hr { border-top-color: var(--note-line, #ddd); }',
+      'html body .vditor .vditor-callout, html body .vditor .vditor__callout { background-color: var(--note-card, #f2efe7); border-left-color: var(--note-ring, #bbb); color: var(--note-ink-2, #555); }'
+    ];
+  }
+
+  /**
+   * 深色态编辑区内容层 CSS：表格/引用/代码块用与宿主深色协调的固定暗色，避免刺眼白底。
+   * 作者: 火 冰
+   * @returns {string[]}
+   */
+  function darkContentCss() {
+    return [
+      'html body .vditor table { border-collapse: collapse; background-color: #202329; color: #d7d9dc; border-color: #3a3f47; }',
+      'html body .vditor table th { background-color: #2a2e35; color: #e2e4e7; border-color: #3a3f47; }',
+      'html body .vditor table td { background-color: #202329; color: #d7d9dc; border-color: #3a3f47; }',
+      'html body .vditor table tbody tr:nth-child(2n) { background-color: #262a30; }',
+      'html body .vditor blockquote { background-color: #262a30; border-left-color: #9aa0a8; color: #b6b9bd; }',
+      'html body .vditor pre, html body .vditor code:not(.hljs) { background-color: #262a30; color: #e2e4e7; border-color: #3a3f47; }',
+      'html body .vditor pre code { background-color: transparent; color: inherit; }',
+      // 深色态对应三项：链接→暗调强调, 分隔线→暗行线, callout/卡片→暗卡片背景
+      'html body .vditor a { color: #c9b48f; }',
+      'html body .vditor hr, html body .vditor .vditor-sv__hr { border-top-color: #3a3f47; }',
+      'html body .vditor .vditor-callout, html body .vditor .vditor__callout { background-color: #262a30; border-left-color: #9aa0a8; color: #b6b9bd; }'
+    ];
+  }
+
+  /**
+   * 编辑器主题解析器（注册给宿主）：按当前配色返回 vditor 应用深浅 + 额外注入 CSS。
+   * 宿主（editor-vditor.js resolveVdTheme）调用，插件不直接操作 vditor。
+   * @param {Object} hint 宿主传入 { dark: boolean }（全局明暗）
+   * @returns {Object} { theme:'dark'|'light', extraCss }
+   */
+  function editorThemeResolver(hint) {
+    var mode = currentEditorMode();
+    var theme = (mode === 'dark') ? 'dark' : ((mode === 'light') ? 'light' : ((hint && hint.dark) ? 'dark' : 'light'));
+    var css = '';
+    if (getSetting('injectCss') !== 'false') css = buildEditorCss(theme);
+    var userCss = getSetting('extraCss');
+    if (userCss) css = css ? css + '\n' + userCss : userCss;
+    return { theme: theme, extraCss: css };
+  }
+
+  /**
+   * 通知宿主重算并应用 vditor 主题（配色/编辑器主题配置变化后调用）。
+   * 经 PluginAPI.editor.theme.sync 抽象完成，宿主内部执行，插件不直接调 vditor。
+   */
+  function syncEditorTheme() {
+    if (PluginAPI && PluginAPI.editor && PluginAPI.editor.theme &&
+      typeof PluginAPI.editor.theme.sync === 'function') {
+      try { PluginAPI.editor.theme.sync(); } catch (_) { /* 忽略同步异常 */ }
+    }
+  }
+
   /**
    * 返回主题名称
    * @param {string} id 主题 id（'1'-'4' / 'custom' / '0'）
@@ -184,6 +296,8 @@
       localStorage.removeItem(LS_KEY);
       if (!silent) toast('Minimal Theme 已停用');
     }
+    // 配色变更 → 通知宿主重算 vditor 主题（编辑器深浅 + 注入 CSS 跟随）
+    syncEditorTheme();
   }
 
   /**
@@ -346,19 +460,21 @@
     hideDropdown();
   });
 
-  // 插件设置变更（自定义配色字段 / hoverToolbar / 默认配色）实时响应
+  // 插件设置变更（自定义配色字段 / hoverToolbar / 默认配色 / 编辑器主题配置）实时响应
   document.addEventListener('plugin-setting-changed', function (e) {
     var d = e.detail || {};
     if (!d || d.id !== PLUGIN_ID) return;
+    var k = d.key || '';
+    // 编辑器主题配置（每套深浅/注入开关/自定义css）变更 → 通知宿主重算 vditor 主题
+    if (/^edTheme/.test(k) || k === 'injectCss' || k === 'extraCss') { syncEditorTheme(); return; }
     // 自定义配色色值变更：当前正处自定义主题时即时重套
-    if ((d.key || '').indexOf('c') === 0 && /^c[A-Z]/.test(d.key) &&
-      String(localStorage.getItem(LS_KEY) || '') === 'custom') {
+    if (/^c[A-Z]/.test(k) && String(localStorage.getItem(LS_KEY) || '') === 'custom') {
       var body = document.body;
       if (body && body.classList.contains(CLASS_PREFIX + 'custom')) applyCustomVars();
       return;
     }
     // 默认配色变更：无已选主题时套用
-    if (d.key === 'defaultTheme' && !localStorage.getItem(LS_KEY)) {
+    if (k === 'defaultTheme' && !localStorage.getItem(LS_KEY)) {
       applyTheme(mapDefaultToId(String(d.value)));
     }
   });
@@ -387,6 +503,13 @@
     if (saved) { applyIfReady(normalizeId(saved)); return; }
     var def = getSetting('defaultTheme');
     if (def) { var did = mapDefaultToId(String(def)); if (did !== '0') applyIfReady(did); }
+  })();
+
+  // 注册「编辑器主题解析器」给宿主：由宿主在应用 vditor 主题时调用（抽象，不直接调 vditor）
+  (function registerResolver() {
+    if (PluginAPI && typeof PluginAPI.registerEditorThemeResolver === 'function') {
+      try { PluginAPI.registerEditorThemeResolver(editorThemeResolver); } catch (_) { /* 忽略注册异常 */ }
+    }
   })();
 
   // 注册插件动作（宿主 PluginAPI.register 把 actionKey 映射到这里的函数）

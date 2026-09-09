@@ -146,6 +146,10 @@ const cform = W.renderSchemaForm('minimal-theme', [
 ]);
 assert(cform.includes('type="color"') && cform.includes('data-pkey="cInk"'), 'renderSchemaForm 对 type:"color" 生成原生取色器');
 
+// ---- 14. 宿主抽象 API：编辑器主题解析器 与 editor.theme 桥 ----
+assert(typeof W.PluginAPI.registerEditorThemeResolver === 'function', 'PluginAPI 暴露 registerEditorThemeResolver');
+assert(!!W.PluginAPI.editor && !!W.PluginAPI.editor.theme && typeof W.PluginAPI.editor.theme.get === 'function' && typeof W.PluginAPI.editor.theme.sync === 'function', 'PluginAPI.editor.theme 提供 get/sync 抽象');
+
 // ---- 13. Minimal Theme：自定义配色 + 顶栏悬浮列表（插件主实现，隔离 dom）----
 testMinimalTheme();
 
@@ -189,7 +193,7 @@ assert(preEl.getAttribute('data-lang') === 'css', '选择 CSS 后 data-lang 更�
 W.showCodeLangPicker(preEl);
 W.applyCodeLang('python');
 assert(preEl.getAttribute('data-lang') === 'python', '再次选择后 data-lang 更新为 python');
-assert(preEl.previousElementSibling && preEl.previousElementSibling.classList.contains('code-lang') && preEl.previousElementSibling.textContent === 'python', '在 pre 前生成 code-lang 标签');
+assert(!preEl.previousElementSibling || !preEl.previousElementSibling.classList.contains('code-lang'), '不再生成可见 code-lang 标签（语言以 data-lang 为准）');
 assert(W.document.querySelector('.mde-lang-text').textContent === 'python', 'chip 文本随选择更新为 python');
 // chip 点击 → 展开/收起语言下拉（含下拉打开后重新锚定路径）
 W.showCodeLangPicker(preEl);
@@ -243,9 +247,9 @@ rw.esc = W.esc;
 const rs = rw.document.createElement('script');
 rs.textContent = fs.readFileSync(path.join(__dirname, 'js', 'app-note.js'), 'utf8');
 rw.document.head.appendChild(rs);
-const rm = rw.renderMarkdown('```text\nfoo\n```');
+const rm = rw.eval('renderMarkdown')('```text\nfoo\n```');
 const rpre = rm.match(/<pre[^>]*style="([^"]*)"/);
-assert(/code-lang/.test(rm), 'renderMarkdown 输出代码块语言标签');
+assert(/data-lang="text"/.test(rm), 'renderMarkdown 输出代码块语言标签（写入 data-lang）');
 assert(/min-height:\s*3rem/.test(rpre[1]), '代码块内联 min-height:3rem（不依赖 tailwind 运行时）');
 assert(/padding:\s*0\.9rem/.test(rpre[1]), '代码块内联 padding（不依赖 tailwind 运行时）');
 
@@ -380,6 +384,8 @@ function testMinimalTheme() {
     register: (id, actions) => { V.__api.actions = actions; },
     getSetting: (pid, key) => V.__api.store[pid + ':' + key],
     setSetting: (pid, key, v) => { V.__api.store[pid + ':' + key] = String(v); },
+    registerEditorThemeResolver: (fn) => { if (typeof fn !== 'function') return () => {}; V.__api.resolvers = (V.__api.resolvers || []); V.__api.resolvers.push(fn); return () => {}; },
+    editor: { theme: { get: () => ({ theme: 'light', extraCss: '' }), sync: () => { V.__synced = (V.__synced || 0) + 1; } } },
   };
   const s = V.document.createElement('script');
   s.textContent = fs.readFileSync(path.join(__dirname, 'plugins', 'minimal-theme', 'main.js'), 'utf8');
@@ -387,6 +393,14 @@ function testMinimalTheme() {
 
   assert(caught === null, 'Minimal Theme main.js 加载无未捕获异常');
   assert(!!V.__api.actions && typeof V.__api.actions['apply-custom'] === 'function', 'Minimal Theme 注册了 apply-custom 动作');
+
+  // 编辑主题解析器：已注册，且能生成对应 vditor 应用结果（抽象接口，不直接碰 vditor）
+  assert(Array.isArray(V.__api.resolvers) && V.__api.resolvers.length === 1 && typeof V.__api.resolvers[0] === 'function', '已向宿主注册编辑器主题解析器');
+  const r0 = V.__api.resolvers[0]({ dark: false });
+  assert((r0.theme === 'dark' || r0.theme === 'light') && typeof r0.extraCss === 'string', '解析器返回 { theme, extraCss } 结构');
+  V.localStorage.setItem('plugin:minimal-theme:edTheme3', '深色');
+  V.localStorage.setItem('plugin:minimal-theme:edThemeCustom', '浅色');
+  V.localStorage.setItem('plugin:minimal-theme:injectCss', 'true');
 
   const btn = V.document.querySelector('[data-plugin-toolbar="minimal-theme:toolbar"]');
   btn.dispatchEvent(new V.MouseEvent('mouseenter'));
@@ -400,6 +414,18 @@ function testMinimalTheme() {
   assert(body.classList.contains('mt-theme-custom'), '点击自定义项套用 mt-theme-custom');
   assert(body.style.getPropertyValue('--note-ink') === '#123456', '自定义主文字色写入 body 内联变量');
   assert(dd.style.display === 'none', '选择主题后面板隐藏');
+  assert(V.__synced >= 1, '配色变更后通知宿主重算 vditor 主题（theme.sync 被调用）');
+  const rCustom = V.__api.resolvers[0]({ dark: true });
+  assert(rCustom.theme === 'light' && rCustom.extraCss.length > 0, '自定义配色配置为浅色 → 解析器返回 light + 注入 CSS');
+  // 注入 CSS 必须用 html body 前缀提高特异度（压过 vditor 运行时后加载的自带样式），否则编辑器落白底
+  if (rCustom.extraCss.length > 0) {
+    assert(rCustom.extraCss.indexOf('html body .vditor') >= 0, '注入 CSS 使用 html body 前缀（特异度足以覆盖 vditor 自带背景）');
+    assert(rCustom.extraCss.indexOf('var(--note-background, #fff)') >= 0, '注入 CSS 引用 --note-background 使编辑器跟随配色');
+    assert(rCustom.extraCss.indexOf('html body .vditor table') >= 0, '注入 CSS 覆盖编辑区表格（内容层主题化，浅色态跟随配色）');
+    assert(rCustom.extraCss.indexOf('html body .vditor a { color: var(--note-brand') >= 0, '映射补全：链接→强调色');
+    assert(rCustom.extraCss.indexOf('.vditor-callout') >= 0, '映射补全：callout/卡片→卡片背景');
+    assert(rCustom.extraCss.indexOf('border-top-color: var(--note-line') >= 0, '映射补全：分隔线(hr)→行线');
+  }
 
   dd.querySelector('.mt-theme-item[data-mt-id="0"]').click();
   assert(!body.classList.contains('mt-theme-custom') && body.style.getPropertyValue('--note-ink') === '', '切换停用后清除自定义 class 与内联变量');

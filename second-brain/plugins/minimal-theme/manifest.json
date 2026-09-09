@@ -89,6 +89,60 @@
       "type": "color",
       "sub": "品牌/强调色（按钮高亮、选中态、链接等）",
       "default": "#7C6A52"
+    },
+    {
+      "key": "edTheme1",
+      "label": "编辑器主题·纸白",
+      "type": "select",
+      "sub": "套用「纸白」配色时编辑器的深浅主题",
+      "options": ["自动(跟随宿主)", "浅色", "深色"],
+      "default": "浅色"
+    },
+    {
+      "key": "edTheme2",
+      "label": "编辑器主题·亚麻",
+      "type": "select",
+      "sub": "套用「亚麻」配色时编辑器的深浅主题",
+      "options": ["自动(跟随宿主)", "浅色", "深色"],
+      "default": "浅色"
+    },
+    {
+      "key": "edTheme3",
+      "label": "编辑器主题·冷灰",
+      "type": "select",
+      "sub": "套用「冷灰」配色时编辑器的深浅主题",
+      "options": ["自动(跟随宿主)", "浅色", "深色"],
+      "default": "浅色"
+    },
+    {
+      "key": "edTheme4",
+      "label": "编辑器主题·墨绿",
+      "type": "select",
+      "sub": "套用「墨绿」配色时编辑器的深浅主题",
+      "options": ["自动(跟随宿主)", "浅色", "深色"],
+      "default": "浅色"
+    },
+    {
+      "key": "edThemeCustom",
+      "label": "编辑器主题·自定义",
+      "type": "select",
+      "sub": "套用「自定义配色」时编辑器的深浅主题",
+      "options": ["自动(跟随宿主)", "浅色", "深色"],
+      "default": "浅色"
+    },
+    {
+      "key": "injectCss",
+      "label": "同步宿主配色到编辑器",
+      "type": "toggle",
+      "sub": "把宿主配色 CSS 变量映射为 vditor 覆盖样式，让编辑器跟随配色",
+      "default": true
+    },
+    {
+      "key": "extraCss",
+      "label": "自定义编辑器CSS（可选）",
+      "type": "text",
+      "sub": "追加到注入样式，如 .vditor { font-family: ... }",
+      "default": ""
     }
   ]
 }
