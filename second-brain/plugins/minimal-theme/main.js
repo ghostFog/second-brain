@@ -5,10 +5,13 @@
  * 注册到 PluginAPI，宿主通过 materializePlugin → pluginManager.install 接入。
  * 切换方式：
  *   1. 内置 4 套配色（纸白/亚麻/冷灰/墨绿）→ html 添加 .mt-theme-N，由 styles.css 覆盖 CSS 变量
- *   2. 自定义配色（id = 'custom'）→ html 添加 .mt-theme-custom + 由插件内联注入全部 CSS 变量（from settings）
+ *   2. 用户自建主题（可多个，带名称 + 13 项配色字段）→ html 添加 .mt-theme-custom + 插件内联注入全部 CSS 变量
+ *   3. 旧「单一自定义配色」在首次读取时迁移为自建主题商店里 id='custom' 的条目，兼容既有行为
  * 首屏防闪烁：宿主 index.html head 的同步脚本会按 localStorage 前置恢复配色到 <html>（渲染前生效）；
  *   插件加载后在同一个 <html> 元素叠加刷新，切换时能正确清理，不残留、不闪默认配色。
  * 顶栏按钮：MutationObserver 监听 #plugin-toolbar，按钮悬浮时弹出可用主题列表下拉。
+ * 设置页面：在「插件管理→最小主题→插件设置」区块注入主题画廊（圆形色块），支持添加/编辑/删除自建主题；
+ *   内置主题（带（默认））双击只读查看，自建主题双击可编辑/删除。作者: 火 冰
  */
 (function () {
   'use strict';
@@ -17,16 +20,16 @@
   var LS_KEY = 'note-app:minimal-theme';
   var CLASS_PREFIX = 'mt-theme-';
   var PRESET_COUNT = 4; // 内置 4 套配色
-  /** 统一主题列表循环的当前档位（配色 id 或宿主模式），供 cycle 准确定位下一步 */
+  var CUSTOMS_KEY = 'plugin:minimal-theme:customs'; // 自建主题商店（JSON 数组：{id,name,fields}）
+  /** 统一主题列表循环的当前档位（配色 id/宿主模式/自建主题 id），供 cycle 准确定位下一步 */
   var CYCLE_STEP_KEY = 'note-app:minimal-theme:cycle-step';
 
-  /** 主题清单：内置 4 套 + 自定义配色 */
+  /** 主题清单：内置 4 套（自建主题经 readCustoms 动态并入列表） */
   var THEMES = [
     { id: '1', name: '纸白' },
     { id: '2', name: '亚麻' },
     { id: '3', name: '冷灰' },
-    { id: '4', name: '墨绿' },
-    { id: 'custom', name: '自定义配色' }
+    { id: '4', name: '墨绿' }
   ];
 
   /** 宿主明暗三态（并入主题列表，操作走 PluginAPI.theme，与宿主设置「外观」同一套） */
@@ -36,19 +39,36 @@
     { mode: 'auto',  name: '跟随系统', icon: 'monitor' }
   ];
 
-  /** 自定义配色的可调字段：key → { label, cssVar, default } */
-  var CUSTOM_FIELDS = [
-    { key: 'cBg',     label: '背景色',   cssVar: '--note-background',  default: '#FAF7F0' },
-    { key: 'cCard',   label: '卡片背景', cssVar: '--note-card',        default: '#F2EDE3' },
-    { key: 'cSurface',label: '表面/弹层',cssVar: '--note-surface',     default: '#F2EDE3' },
-    { key: 'cBorder', label: '边框/输入',cssVar: '--note-border',      default: '#E0DBD0' },
-    { key: 'cInk',    label: '主文字色', cssVar: '--note-ink',         default: '#3D3D3D' },
-    { key: 'cInk3',   label: '次要文字', cssVar: '--note-ink-3',       default: '#9A9488' },
-    { key: 'cLine',   label: '分隔线',   cssVar: '--note-line',        default: '#E0DBD0' },
-    { key: 'cBrand',  label: '强调色',   cssVar: '--note-brand',       default: '#7C6A52' }
+  /** 主题配置字段定义（13 配色字段 + 自定义编辑器CSS）。弹框/自建主题共用同一份口径。 */
+  var THEME_FIELD_DEFS = [
+    { key: 'cBg',        label: '背景色',     type: 'color', default: '#FAF7F0' },
+    { key: 'cCard',      label: '卡片背景',   type: 'color', default: '#F2EDE3' },
+    { key: 'cSurface',   label: '表面/弹层',  type: 'color', default: '#F2EDE3' },
+    { key: 'cBorder',    label: '边框/输入',  type: 'color', default: '#E0DBD0' },
+    { key: 'cInk',       label: '主文字色',   type: 'color', default: '#3D3D3D' },
+    { key: 'cInk3',      label: '次要文字',   type: 'color', default: '#9A9488' },
+    { key: 'cLine',      label: '分隔线',     type: 'color', default: '#E0DBD0' },
+    { key: 'cBrand',     label: '强调色',     type: 'color', default: '#7C6A52' },
+    { key: 'cSurface2',  label: '表面次级',   type: 'color', default: '#E8E1D4' },
+    { key: 'cInk2',      label: '中级文字',   type: 'color', default: '#6B6B5E' },
+    { key: 'cGutterBg',  label: '行号列',     type: 'color', default: '#F5F0E8' },
+    { key: 'cRing',      label: '强调环',     type: 'color', default: '#B8A890' },
+    { key: 'cMutedFg',   label: '次要前景',   type: 'color', default: '#8A8478' },
+    { key: 'cExtraCss',  label: '自定义编辑器CSS', type: 'text', default: '' }
   ];
 
-  /** 自定义主题启用时注入到 body 的完整 CSS 变量集合 */
+  /** 配色字段（用于 buildCustomVars 的 13 项），不含 extraCss */
+  var COLOR_FIELDS = THEME_FIELD_DEFS.filter(function (f) { return f.type === 'color'; }).map(function (f) { return f.key; });
+  /** 全部 per-theme 字段 key（画廊中需隐藏其平铺行） */
+  var PER_THEME_KEYS = THEME_FIELD_DEFS.map(function (f) { return f.key; });
+  /** 配色字段 key → 默认值 */
+  var COLOR_DEFAULTS = (function () {
+    var m = {};
+    THEME_FIELD_DEFS.forEach(function (f) { if (f.type === 'color') m[f.key] = f.default; });
+    return m;
+  })();
+
+  /** 自建主题启用时注入到 body 的完整 CSS 变量集合 */
   var CUSTOM_VAR_PROPS = [
     '--note-background', '--note-foreground', '--note-card', '--note-card-foreground',
     '--note-surface', '--note-surface-2', '--note-popover', '--note-popover-foreground',
@@ -80,18 +100,22 @@
   }
 
   /**
-   * 读取自定义配色全部可调字段的值
+   * 读取指定自建主题的配色字段值
+   * @param {Object} theme 自建主题 { id, name, fields }
    * @returns {Object} key → HEX 颜色字符串（缺失时用默认值）
    */
-  function readCustomColors() {
+  function themeColors(theme) {
     var out = {};
-    CUSTOM_FIELDS.forEach(function (f) { out[f.key] = getSetting(f.key) || f.default; });
+    THEME_FIELD_DEFS.forEach(function (f) {
+      var v = theme && theme.fields ? theme.fields[f.key] : null;
+      out[f.key] = (v && String(v)) || f.default;
+    });
     return out;
   }
 
   /**
-   * 根据自定义配色字段计算派生后的完整 CSS 变量集合
-   * @param {Object} c 自定义配色字段 { cBg, cCard, cSurface, cBorder, cInk, cInk3, cLine, cBrand }
+   * 根据配色字段计算派生后的完整 CSS 变量集合
+   * @param {Object} c 配色字段（13 配色 + cExtraCss）
    * @returns {Object} cssVar → 颜色值
    */
   function buildCustomVars(c) {
@@ -100,18 +124,18 @@
       '--note-foreground': c.cInk,
       '--note-card': c.cCard,
       '--note-card-foreground': c.cInk,
-      '--note-surface': c.cCard,
-      '--note-surface-2': c.cBorder,
-      '--note-popover': c.cCard,
+      '--note-surface': c.cSurface,
+      '--note-surface-2': c.cSurface2,
+      '--note-popover': c.cSurface,
       '--note-popover-foreground': c.cInk,
       '--note-muted': c.cCard,
-      '--note-muted-foreground': c.cInk3,
+      '--note-muted-foreground': c.cMutedFg,
       '--note-border': c.cBorder,
       '--note-input': c.cBorder,
-      '--note-ring': c.cBrand,
-      '--note-gutter-bg': c.cCard,
+      '--note-ring': c.cRing,
+      '--note-gutter-bg': c.cGutterBg,
       '--note-ink': c.cInk,
-      '--note-ink-2': c.cInk3,
+      '--note-ink-2': c.cInk2,
       '--note-ink-3': c.cInk3,
       '--note-line': c.cLine,
       '--note-brand': c.cBrand,
@@ -134,19 +158,31 @@
     Object.keys(map).forEach(function (k) { root.style.setProperty(k, map[k]); });
   }
 
-  /* 向 <html> 内联写入自定义主题全部 CSS 变量，并清掉此前的内联变量。
+  /* 向 <html> 内联写入某套配色（内置/自建）的全部 CSS 变量，并清掉此前的内联变量。
    * 目标固定为 documentElement：与宿主 index.html head 首屏前置恢复的对象一致，
    * 保证渲染前与插件刷新都在同一元素，切换时清理干净不残留。作者: 火 冰 */
-  function applyCustomVars() {
+  function applyColorVars(vars) {
     var root = document.documentElement;
     if (!root) return;
-    var vars = buildCustomVars(readCustomColors());
     clearCustomVars();
     Object.keys(vars).forEach(function (k) { root.style.setProperty(k, vars[k]); });
   }
 
+  /** 应用一套配色（内置 id 或自建主题）的变量到 <html> */
+  function applyThemeVars(themeId) {
+    var id = String(themeId);
+    var SB = typeof window !== 'undefined' ? window.SB_PALETTES : null;
+    if (id >= '1' && id <= String(PRESET_COUNT) && SB && SB.BUILTIN && SB.BUILTIN[id]) {
+      applyColorVars(SB.BUILTIN[id]);
+      return true;
+    }
+    var custom = findCustom(id);
+    if (custom) { applyColorVars(buildCustomVars(themeColors(custom))); return true; }
+    return false;
+  }
+
   /**
-   * 清掉 <html> 上由自定义主题写入的全部内联 CSS 变量
+   * 清掉 <html> 上由主题写入的全部内联 CSS 变量
    */
   function clearCustomVars() {
     var root = document.documentElement;
@@ -154,105 +190,118 @@
     CUSTOM_VAR_PROPS.forEach(function (k) { if (root.style.getPropertyValue(k)) root.style.removeProperty(k); });
   }
 
+  /* ---------------- 自建主题商店 ---------------- */
+
+  /**
+   * 一次性迁移旧「单一自定义配色」为自建主题商店首个条目（id='custom'）
+   * 旧口径的 cBg..cBrand/extraCss 存在时合并，避免既有配色丢失。
+   * @returns {Array} 迁移后的自建主题数组（无旧配色→空数组）
+   */
+  function migrateLegacyCustom() {
+    var any = false;
+    COLOR_FIELDS.forEach(function (k) { if (getSetting(k)) any = true; });
+    if (!any) return [];
+    var theme = { id: 'custom', name: '自定义配色', fields: {} };
+    THEME_FIELD_DEFS.forEach(function (f) {
+      var v = getSetting(f.key);
+      theme.fields[f.key] = (v && String(v)) || f.default;
+    });
+    writeCustoms([theme]);
+    return [theme];
+  }
+
+  /**
+   * 读取自建主题商店
+   * @returns {Array<{id,name,fields}>} 自建主题数组（无则空；首次含旧单一自定义则迁移）
+   */
+  function readCustoms() {
+    try {
+      var raw = localStorage.getItem(CUSTOMS_KEY);
+      if (raw) { var arr = JSON.parse(raw); if (Array.isArray(arr)) return arr; }
+    } catch (_) { /* 解析失败回退迁移 */ }
+    return migrateLegacyCustom();
+  }
+
+  /**
+   * 写回自建主题商店
+   * @param {Array} list 自建主题数组
+   */
+  function writeCustoms(list) {
+    try { localStorage.setItem(CUSTOMS_KEY, JSON.stringify(list)); } catch (_) { /* 存储失败忽略 */ }
+  }
+
+  /**
+   * 按 id 查找自建主题
+   * @param {string} id 主题 id（含内置 id，内置返回 null）
+   * @returns {Object|null} 自建主题对象或 null
+   */
+  function findCustom(id) {
+    var list = readCustoms();
+    for (var i = 0; i < list.length; i++) if (list[i].id === String(id)) return list[i];
+    return null;
+  }
+
+  /**
+   * 生成下一个自建主题 id（以现有最大后缀 +1；无则 c1）
+   * @returns {string} 新 id，如 'c1'/'c2'
+   */
+  function nextCustomId() {
+    var list = readCustoms();
+    var max = 0;
+    list.forEach(function (t) {
+      var m = /^c(\d+)$/.exec(String(t.id));
+      if (m) { var n = parseInt(m[1], 10); if (n > max) max = n; }
+    });
+    return 'c' + (max + 1);
+  }
+
   /* ---------------- 编辑器（Vditor）主题联动：抽象 resolver，经宿主执行，不直接调 vditor ---------------- */
 
-  /** 每套配色的「编辑器主题」设置键（1..4 内置 + custom 自定义） */
-  var ED_THEME_KEY = { '1': 'edTheme1', '2': 'edTheme2', '3': 'edTheme3', '4': 'edTheme4', 'custom': 'edThemeCustom' };
-
-  /** 编辑器主题下拉显示值 → 模式映射 */
-  var ED_THEME_MODE = { '自动(跟随宿主)': 'auto', '浅色': 'light', '深色': 'dark' };
-
   /**
-   * 读取当前配色对应的「编辑器主题」设置值（auto/light/dark）
-   * @returns {string}
-   */
-  function currentEditorMode() {
-    var id = normalizeId(localStorage.getItem(LS_KEY) || '0');
-    var key = ED_THEME_KEY[id] || 'edTheme1';
-    var v = ED_THEME_MODE[getSetting(key)] || 'auto';
-    return v;
-  }
-
-  /**
-   * 根据编辑器深浅把宿主配色映射成 vditor 的覆盖 CSS（「自定义CSS注入」）。
-   * 深色时交给 vditor 内建暗色主题，不强制覆盖浅色变量。
-   * @param {string} theme 'dark'|'light'
+   * 把当前主题的配色数值映射成 vditor 的覆盖 CSS（「同步宿主配色到编辑器」）。
+   * 「深色/浅色/跟随系统」只记录宿主明暗，编辑器按明暗套 vditor 深浅主题打底；
+   * 在此基础上把当前生效的配色变量数值映射进 vditor 壳与内容层
+   * （--note-background/--note-surface/--note-border/--note-ink/--note-brand 等，表格/引用/代码/链接/分隔线/callout 全覆盖），
+   * 使编辑器颜色随主题色调整保持一致；并兜底 vditor 浅色默认文字（.vditor-reset 硬编码 #24292e）在深色下不可读的问题。
+   * 作者: 火 冰
    * @returns {string} CSS 文本
    */
-  function buildEditorCss(theme) {
-    // UI 壳：仅浅色态才用 --note-* 覆盖外壳背景（深色态交给 vditor 自带暗色，避免把浅色变量灌进深色背景）。
-    // 选择器统一加 html body 前缀提高特异度：vditor 会在运行时动态注入自身主题 CSS（较晚出现在 <head>），
-    // 单类选择器(0,1,0)会因同特异度后加载而胜出；加前缀后必然压过 vditor 自带样式。
-    var ui = theme === 'dark' ? [] : [
-      'html body .vditor, html body .vditor .vditor-content, html body .vditor .vditor-sv, html body .vditor .vditor-ir, html body .vditor .vditor-wysiwyg, html body .vditor .vditor-preview, html body .vditor .vditor-reset { background-color: var(--note-background, #fff); color: var(--note-ink, #333); }',
-      'html body .vditor .vditor-toolbar { background-color: var(--note-surface, #fafafa); border-bottom-color: var(--note-border, #ddd); }',
-      'html body .vditor-toolbar__item { color: var(--note-ink-3, #888); }',
-      'html body .vditor-toolbar__item:hover, html body .vditor-toolbar__item--active { background-color: var(--note-surface-2, #eee); color: var(--note-brand, #7c6a52); }',
-      'html body .vditor-sv .vditor-sv__marker :not(.vditor-sv__marker--blank) { color: var(--note-ink-3, #888); }',
-      'html body .vditor ::selection { background-color: var(--note-brand, #7c6a52); color: #fff; }'
-    ];
-    // 内容层主题化：编辑区 IR/WYSIWYG 里的 table/引用/代码块不受 vditor 明暗内容主题影响（那只作用于 .vditor-reset 预览），
-    // 浅色态用 --note-* 跟随配色；深色态用与宿主深色协调的固定暗色，消除刺眼白底。
-    var content = (theme === 'dark' ? darkContentCss() : lightContentCss());
-    return ui.concat(content).join('\n');
-  }
-
-  /**
-   * 浅色态编辑区内容层 CSS：表格/引用/代码块跟随 --note-* 配色。
-   * 作者: 火 冰
-   * @returns {string[]}
-   */
-  function lightContentCss() {
+  function buildEditorCss() {
     return [
-      'html body .vditor table { border-collapse: collapse; background-color: var(--note-background, #fff); color: var(--note-ink, #333); border-color: var(--note-line, #ddd); }',
-      'html body .vditor table th { background-color: var(--note-surface, #fafafa); color: var(--note-ink, #333); border-color: var(--note-line, #ddd); }',
-      'html body .vditor table td { background-color: var(--note-background, #fff); color: var(--note-ink, #333); border-color: var(--note-line, #ddd); }',
-      'html body .vditor table tbody tr:nth-child(2n) { background-color: var(--note-surface, #fafafa); }',
-      'html body .vditor blockquote { background-color: var(--note-surface, #fafafa); border-left-color: var(--note-ring, #bbb); color: var(--note-ink-2, #555); }',
-      'html body .vditor pre, html body .vditor code:not(.hljs) { background-color: var(--note-surface, #fafafa); color: var(--note-ink, #333); border-color: var(--note-line, #ddd); }',
+      // 壳：背景/表面/文字 —— 数值映射当前主题色
+      'html body .vditor, html body .vditor .vditor-content, html body .vditor .vditor-sv, html body .vditor .vditor-ir, html body .vditor .vditor-wysiwyg, html body .vditor .vditor-preview, html body .vditor .vditor-reset { background-color: var(--note-background); color: var(--note-ink); }',
+      'html body .vditor .vditor-toolbar { background-color: var(--note-surface); border-bottom-color: var(--note-border); }',
+      'html body .vditor-toolbar__item { color: var(--note-ink-3); }',
+      'html body .vditor-toolbar__item:hover, html body .vditor-toolbar__item--active { background-color: var(--note-surface-2); color: var(--note-brand); }',
+      'html body .vditor ::selection { background-color: var(--note-brand); color: var(--note-brand-ink); }',
+      // 内容层：表格/引用/代码块/链接/分隔/卡片 —— 数值映射当前主题色
+      'html body .vditor table { background-color: var(--note-background); color: var(--note-ink); border-color: var(--note-line); }',
+      'html body .vditor table th { background-color: var(--note-card); color: var(--note-ink); border-color: var(--note-line); }',
+      'html body .vditor table td { background-color: var(--note-background); color: var(--note-ink); border-color: var(--note-line); }',
+      'html body .vditor table tbody tr:nth-child(2n) { background-color: var(--note-surface); }',
+      'html body .vditor blockquote { background-color: var(--note-surface); border-left-color: var(--note-ring); color: var(--note-ink-2); }',
+      'html body .vditor pre, html body .vditor code:not(.hljs) { background-color: var(--note-surface); color: var(--note-ink); border-color: var(--note-line); }',
       'html body .vditor pre code { background-color: transparent; color: inherit; }',
-      // 以下三项为映射表「编辑层」待补全项：链接→强调色, 分隔线→行线, callout/卡片→卡片背景
-      'html body .vditor a { color: var(--note-brand, #7c6a52); }',
-      'html body .vditor hr, html body .vditor .vditor-sv__hr { border-top-color: var(--note-line, #ddd); }',
-      'html body .vditor .vditor-callout, html body .vditor .vditor__callout { background-color: var(--note-card, #f2efe7); border-left-color: var(--note-ring, #bbb); color: var(--note-ink-2, #555); }'
-    ];
+      'html body .vditor a { color: var(--note-brand); }',
+      'html body .vditor hr { border-top-color: var(--note-line); }',
+      'html body .vditor .vditor-callout { background-color: var(--note-card); border-left-color: var(--note-ring); color: var(--note-ink-2); }'
+    ].join('\n');
   }
 
   /**
-   * 深色态编辑区内容层 CSS：表格/引用/代码块用与宿主深色协调的固定暗色，避免刺眼白底。
-   * 作者: 火 冰
-   * @returns {string[]}
-   */
-  function darkContentCss() {
-    return [
-      'html body .vditor table { border-collapse: collapse; background-color: #202329; color: #d7d9dc; border-color: #3a3f47; }',
-      'html body .vditor table th { background-color: #2a2e35; color: #e2e4e7; border-color: #3a3f47; }',
-      'html body .vditor table td { background-color: #202329; color: #d7d9dc; border-color: #3a3f47; }',
-      'html body .vditor table tbody tr:nth-child(2n) { background-color: #262a30; }',
-      'html body .vditor blockquote { background-color: #262a30; border-left-color: #9aa0a8; color: #b6b9bd; }',
-      'html body .vditor pre, html body .vditor code:not(.hljs) { background-color: #262a30; color: #e2e4e7; border-color: #3a3f47; }',
-      'html body .vditor pre code { background-color: transparent; color: inherit; }',
-      // 深色态对应三项：链接→暗调强调, 分隔线→暗行线, callout/卡片→暗卡片背景
-      'html body .vditor a { color: #c9b48f; }',
-      'html body .vditor hr, html body .vditor .vditor-sv__hr { border-top-color: #3a3f47; }',
-      'html body .vditor .vditor-callout, html body .vditor .vditor__callout { background-color: #262a30; border-left-color: #9aa0a8; color: #b6b9bd; }'
-    ];
-  }
-
-  /**
-   * 编辑器主题解析器（注册给宿主）：按当前配色返回 vditor 应用深浅 + 额外注入 CSS。
+   * 编辑器主题解析器（注册给宿主）：编辑器按宿主明暗套 vditor 深浅主题打底，并把当前主题配色
+   * 数值映射进编辑器（「同步宿主配色到编辑器」开关控制，默认开）。再叠加用户手写的「自定义编辑器CSS」。
    * 宿主（editor-vditor.js resolveVdTheme）调用，插件不直接操作 vditor。
-   * @param {Object} hint 宿主传入 { dark: boolean }（全局明暗）
+   * 作者: 火 冰
+   * @param {Object} hint { dark:boolean } 宿主当前是否暗色
    * @returns {Object} { theme:'dark'|'light', extraCss }
    */
   function editorThemeResolver(hint) {
-    var mode = currentEditorMode();
-    var theme = (mode === 'dark') ? 'dark' : ((mode === 'light') ? 'light' : ((hint && hint.dark) ? 'dark' : 'light'));
     var css = '';
-    if (getSetting('injectCss') !== 'false') css = buildEditorCss(theme);
+    if (getSetting('injectCss') !== 'false') css = buildEditorCss();
     var userCss = getSetting('extraCss');
     if (userCss) css = css ? css + '\n' + userCss : userCss;
-    return { theme: theme, extraCss: css };
+    return { theme: (hint && hint.dark) ? 'dark' : 'light', extraCss: css };
   }
 
   /**
@@ -267,12 +316,16 @@
   }
 
   /**
-   * 返回主题名称
-   * @param {string} id 主题 id（'1'-'4' / 'custom' / '0'）
+   * 返回主题名称（内置/宿主明暗/自建主题）
+   * @param {string} id 主题 id（'1'-'4' / 'custom' / 'cN'）
    * @returns {string}
    */
   function themeName(id) {
-    for (var i = 0; i < THEMES.length; i++) if (THEMES[i].id === String(id)) return THEMES[i].name;
+    var s = String(id);
+    for (var i = 0; i < THEMES.length; i++) if (THEMES[i].id === s) return THEMES[i].name;
+    for (var k = 0; k < HOST_THEMES.length; k++) if (HOST_THEMES[k].mode === s) return HOST_THEMES[k].name;
+    var custom = findCustom(s);
+    if (custom) return custom.name;
     return '停用';
   }
 
@@ -295,30 +348,28 @@
 
   /**
    * 应用指定主题
-   * @param {string|number} themeId id='custom' 或 '1'-'4'；'0'/'停用'/'undefined' 表示停用
+   * @param {string} themeId id：内置 '1'-'4'、自建主题 id（含既有 'custom'）；'0'/'undefined'/'停用' 表示停用
    * @param {boolean} [silent] 为 true 时不弹 Toast（启动静默恢复用）
    */
   function applyTheme(themeId, silent) {
     var root = document.documentElement;
     if (!root) return;
-    var id = (themeId === 'custom') ? 'custom' : String(normalizeId(themeId));
-    localStorage.setItem(CYCLE_STEP_KEY, id); // 记录当前统一主题档位（配色 id；宿主档由 setHostTheme 落）
+    var id = String(themeId === 'custom' ? 'custom' : themeId);
+    localStorage.setItem(CYCLE_STEP_KEY, id); // 记录当前统一主题档位（配色/自建 id；宿主档由 setHostTheme 落）
     // 先清掉所有主题 class（mt-theme-1..4 + mt-theme-custom）与自定义内联变量
     for (var i = 1; i <= PRESET_COUNT; i++) root.classList.remove(CLASS_PREFIX + i);
     root.classList.remove(CLASS_PREFIX + 'custom');
-    clearCustomVars();
-    if (id === 'custom') {
-      root.classList.add(CLASS_PREFIX + 'custom');
-      applyCustomVars();
-      localStorage.setItem(LS_KEY, 'custom');
-      if (!silent) toast('Minimal：自定义配色');
-    } else if (id >= '1' && id <= String(PRESET_COUNT)) {
-      applyBuiltinVars(id);   // 内联内置配色全套变量（优先于 styles.css，避免异步样式未就绪时闪宿主默认色）
+    var applied = applyThemeVars(id);
+    if (id >= '1' && id <= String(PRESET_COUNT)) {
       root.classList.add(CLASS_PREFIX + id);
       localStorage.setItem(LS_KEY, String(id));
       if (!silent) toast('Minimal Theme: ' + themeName(id));
+    } else if (applied) {
+      root.classList.add(CLASS_PREFIX + 'custom');
+      localStorage.setItem(LS_KEY, id);
+      if (!silent) toast('Minimal：' + themeName(id));
     } else {
-      // 已删除「停用」为可选项；此分支仅由切换宿主明暗档（applyStep）停用配色时触发
+      // 无该配色 → 停用（此分支仅由切换宿主明暗档（applyStep）停用配色时触发）
       localStorage.removeItem(LS_KEY);
     }
     // 配色变更 → 通知宿主重算 vditor 主题（编辑器深浅 + 注入 CSS 跟随）
@@ -326,12 +377,13 @@
   }
 
   /**
-   * 归一化主题 id：'custom' 原样返回；可转 1-N 的数字（含 '1'..'4'）返回字符串；其余返回 '0'
+   * 归一化主题 id：内置 1-N 返回字符串；自建主题 id（custom/cN）原样；其余返回 '0'
    * @param {*} v 原始输入
    * @returns {string}
    */
   function normalizeId(v) {
     if (v === 'custom') return 'custom';
+    if (typeof v === 'string' && /^c\d+$/.test(v)) return v;
     var n = Number(v);
     return (n >= 1 && n <= PRESET_COUNT) ? String(n) : '0';
   }
@@ -358,15 +410,18 @@
     }
   }
 
-  /** 返回当前 Minimal 配色 id（'0'=停用 / '1'-'4' / 'custom'） */
+  /** 返回当前 Minimal 主题 id（'0'=停用 / '1'-'4' / 自建主题 id） */
   function activeThemeId() {
-    return normalizeId(localStorage.getItem(LS_KEY) || '0');
+    var v = localStorage.getItem(LS_KEY) || '0';
+    var id = normalizeId(v);
+    // 自建主题被删除后，其 id 落入 '0' 之外时落地为空
+    return (id === v) ? id : '0';
   }
 
   /**
    * 应用统一「主题列表」中的某一档。
-   * 宿主明暗档走宿主抽象并停用配色（主题列表二选一，保证循环线性）；配色档走 applyTheme。
-   * @param {string} step 'dark'|'light'|'auto'（宿主档）或配色 id
+   * 宿主明暗档走宿主抽象并停用配色（主题列表二选一，保证循环线性）；配色/自建档走 applyTheme。
+   * @param {string} step 'dark'|'light'|'auto'（宿主档）或配色/自建 id
    */
   function applyStep(step) {
     if (step === 'dark' || step === 'light' || step === 'auto') {
@@ -377,12 +432,12 @@
 
   /**
    * 循环切换统一主题列表（顶栏按钮 / 快捷键 cycle-theme）：
-   * 深色 → 浅色 → 跟随系统 → 纸白 → 亚麻 → 冷灰 → 墨绿 → 自定义配色 → 深色 …
-   * 配色档不改宿主明暗；宿主明暗档（深/浅/跟随）会停用配色——列表二选一，循环干净不冲突。
+   * 深色 → 浅色 → 跟随系统 → 内置4套 → 自建主题们 → 深色 …
+   * 配色/自建档不改宿主明暗；宿主明暗档（深/浅/跟随）会停用配色——列表二选一，循环干净不冲突。
    */
   function cycleTheme() {
-    var colorOrder = ['1', '2', '3', '4', 'custom'];
-    var order = ['dark', 'light', 'auto'].concat(colorOrder); // 深→浅→跟随→纸白→…→自定义（已删除停用档）
+    var colorOrder = ['1', '2', '3', '4'].concat(readCustoms().map(function (t) { return t.id; }));
+    var order = ['dark', 'light', 'auto'].concat(colorOrder);
     // 用记录的当前档位定位；无记录时按现状推断
     var last = localStorage.getItem(CYCLE_STEP_KEY);
     var idx = order.indexOf(last);
@@ -419,12 +474,14 @@
       'border:1px solid var(--note-border, #ddd);border-radius:10px;' +
       'box-shadow:var(--note-shadow-2, 0 8px 24px -8px rgba(0,0,0,0.2));' +
       'font-size:13px;line-height:1.4;';
+    var colorItems = THEMES.map(function (t) { return itemHTML(t.id, t.name); });
+    readCustoms().forEach(function (t) { colorItems.push(itemHTML(t.id, t.name)); });
     el.innerHTML = '<div style="padding:6px 10px;font-weight:600;color:var(--note-ink-3,#888);' +
       'border-bottom:1px solid var(--note-border,#eee);margin-bottom:4px;">Theme</div>' +
       '<div style="padding:4px 10px;font-size:12px;color:var(--note-ink-3,#888);">Host 明暗</div>' +
       HOST_THEMES.map(function (t) { return hostItemHTML(t.mode, t.name, t.icon); }).join('') +
       '<div style="padding:4px 10px;font-size:12px;color:var(--note-ink-3,#888);margin-top:4px;">配色</div>' +
-      THEMES.map(function (t) { return itemHTML(t.id, t.name); }).join('');
+      colorItems.join('');
     document.body.appendChild(el);
     // 面板内悬浮也保持打开：离开按钮进入面板不关闭
     el.addEventListener('mouseenter', cancelHide);
@@ -440,12 +497,13 @@
    * @returns {string} HTML
    */
   function itemHTML(id, name) {
-    var cur = localStorage.getItem(LS_KEY) || '';
+    var cur = activeThemeId();
     var active = (String(id) === String(cur)) ? '' : ' display:none;';
+    var isCustom = (String(id) === 'custom' || /^c\d+$/.test(String(id)));
     return '<div class="mt-theme-item" data-mt-id="' + id + '" style="display:flex;align-items:center;gap:8px;' +
       'padding:7px 10px;border-radius:6px;cursor:pointer;color:var(--note-ink,#333);white-space:nowrap;">' +
-      '<i data-lucide="' + (id === 'custom' ? 'palette' : 'circle-dot') + '" style="width:14px;height:14px;flex:none;' +
-      'color:' + (id === 'custom' ? 'var(--note-brand,#7C6A52)' : 'var(--note-ink-3,#888)') + ';"></i>' +
+      '<i data-lucide="' + (isCustom ? 'palette' : 'circle-dot') + '" style="width:14px;height:14px;flex:none;' +
+      'color:' + (isCustom ? 'var(--note-brand,#7C6A52)' : 'var(--note-ink-3,#888)') + ';"></i>' +
       '<span style="flex:1;">' + name + '</span>' +
       '<i data-lucide="check" class="mt-check" style="width:14px;height:14px;flex:none;color:var(--note-brand,#7C6A52);' + active + '"></i>' +
       '</div>';
@@ -544,6 +602,318 @@
     obs.observe(root, { childList: true, subtree: true });
   }
 
+  /* ---------------- 设置页主题画廊：圆形色块 + 添加/编辑/删除 ---------------- */
+
+  /**
+   * 获取内置主题的代表色（圆形色块的背景色与边框色）
+   * @param {string} id 内置主题 id '1'-'4'
+   * @returns {{bg:string,border:string}} 背景色/边框色
+   */
+  function builtinSwatchColor(id) {
+    var SB = typeof window !== 'undefined' ? window.SB_PALETTES : null;
+    var m = SB && SB.BUILTIN && SB.BUILTIN[id];
+    return { bg: (m && m['--note-background']) || '#FAF7F0', border: (m && m['--note-border']) || '#E0DBD0' };
+  }
+
+  /**
+   * 取某主题（内置/自建）的代表色：自建取首配色字段，内置取 SB_PALETTES
+   * @param {Object} theme 主题项 { id, name, isDefault?, fields? }
+   * @returns {{bg:string,border:string}}
+   */
+  function swatchColor(theme) {
+    if (!theme.isDefault) {
+      var c = themeColors(theme);
+      return { bg: c.cBg, border: c.cBorder };
+    }
+    return builtinSwatchColor(theme.id);
+  }
+
+  /**
+   * 当前设置页画廊容器的「插件设置」`<section>`（含 data-pid 平铺行的祖先 section）
+   * @returns {Element|null}
+   */
+  function findSettingsSection() {
+    var scope = document.querySelector('[data-pm-body="minimal-theme"]');
+    var base = scope || document;
+    var row = base.querySelector('[data-pid="minimal-theme"][data-pkey]');
+    if (!row) return null;
+    var sec = row;
+    while (sec && sec.tagName !== 'SECTION') sec = sec.parentElement;
+    return sec;
+  }
+
+  /**
+   * 构建主题画廊 HTML（圆形色块 + 名称 + 添加按钮）
+   * @returns {string}
+   */
+  function galleryHTML() {
+    var active = activeThemeId();
+    var items = [];
+    // 内置主题：名后带（默认），只读
+    THEMES.forEach(function (t) {
+      var sc = builtinSwatchColor(t.id);
+      var act = (t.id === active);
+      items.push(swatchHTML({ id: t.id, name: t.name + '（默认）', active: act, readonly: true, isDefault: true,
+        bg: sc.bg, border: sc.border }));
+    });
+    // 自建主题：可编辑/删除
+    readCustoms().forEach(function (t) {
+      var c = themeColors(t);
+      var act = (t.id === active);
+      items.push(swatchHTML({ id: t.id, name: t.name, active: act, readonly: false, isDefault: false,
+        bg: c.cBg, border: c.cBorder }));
+    });
+    return '<div class="mt-gallery">'
+      + '<div class="mt-gallery-head">'
+      + '<span style="font-size:13px;font-weight:600;color:var(--note-ink,#333);">主题</span>'
+      + '<button type="button" class="mt-gallery-add" style="display:inline-flex;align-items:center;gap:4px;'
+      + 'padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;'
+      + 'background:var(--note-brand-600,#6B5A44);color:#FFFFFF;border:none;">+ 添加</button>'
+      + '</div>'
+      + '<div class="mt-gallery-items" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:10px;margin-top:10px;">'
+      + items.join('')
+      + '</div></div>';
+  }
+
+  /**
+   * 生成单个圆形主题块 HTML
+   * @param {Object} o { id,name,active,readonly,bg,border }
+   * @returns {string}
+   */
+  function swatchHTML(o) {
+    return '<div class="mt-swatch" data-mt-id="' + o.id + '" data-mt-default="' + (o.isDefault ? '1' : '0') + '"'
+      + ' title="' + (o.isDefault ? '双击查看（默认主题，仅查看）' : '双击编辑') + '"'
+      + ' style="display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;'
+      + 'padding:8px 4px;border-radius:8px;border:1px solid transparent;'
+      + (o.active ? 'box-shadow:0 0 0 2px var(--note-brand,#7C6A52);border-color:var(--note-brand,#7C6A52);' : '')
+      + '">'
+      + '<span class="mt-swatch-dot" style="width:36px;height:36px;border-radius:50%;'
+      + 'background:' + o.bg + ';'
+      + 'border:2px solid ' + o.border + ';'
+      + 'box-sizing:border-box;"></span>'
+      + '<span class="mt-swatch-name" style="font-size:11px;line-height:1.2;text-align:center;'
+      + 'color:var(--note-ink,#333);word-break:break-all;">' + o.name + '</span>'
+      + '</div>';
+  }
+
+  /**
+   * 同步「默认配色方案」下拉，把自建主题名补进 options（内置名保持宿主静态）
+   * @param {Element} sec 插件设置 section
+   */
+  function syncDefaultThemeOptions(sec) {
+    var sel = sec && sec.querySelector('[data-pid="minimal-theme"][data-pkey="defaultTheme"]');
+    if (!sel) return;
+    var customNames = readCustoms().map(function (t) { return String(t.name); });
+    var existing = Array.prototype.map.call(sel.options, function (o) { return o.text; });
+    customNames.forEach(function (n) {
+      if (existing.indexOf(n) === -1) {
+        var op = document.createElement('option');
+        op.textContent = n;
+        sel.appendChild(op);
+      }
+    });
+  }
+
+  /**
+   * 在「插件设置」区块注入主题画廊：
+   *   - 隐藏 per-theme 平铺字段行（13 配色 + extraCss），保留公共设置行
+   *   - 在区块顶部插入主题画廊（数组件）
+   * 幂等：已注入过（区块含 data-mt-gallery）则跳过
+   * @param {Element} root 观察/渲染根节点（document）
+   */
+  function injectSettingsGallery(root) {
+    var doc = root && root.nodeType === 9 ? root : document;
+    var sec = findSettingsSection();
+    if (!sec) return;
+    if (sec.querySelector('[data-mt-gallery]')) return;
+    // 隐藏 per-theme 平铺行
+    sec.querySelectorAll('[data-pid="minimal-theme"][data-pkey]').forEach(function (el) {
+      if (PER_THEME_KEYS.indexOf(el.getAttribute('data-pkey')) !== -1) {
+        var row = el;
+        // 逐级向上找“字段行”容器（含 label 的 div），最坏隐藏控件本身
+        for (var i = 0; i < 3 && row; i++) {
+          if (row.classList && row.classList.contains('flex')) break;
+          row = row.parentElement;
+        }
+        if (row) row.style.display = 'none';
+      }
+    });
+    // 插入画廊到「插件设置」标题之后
+    var heading = null;
+    Array.prototype.forEach.call(sec.querySelectorAll('div'), function (d) {
+      if (!heading && d.textContent && d.textContent.trim() === '插件设置') heading = d;
+    });
+    var gal = doc.createElement('div');
+    gal.setAttribute('data-mt-gallery', '1');
+    gal.className = 'mt-gallery-wrap';
+    gal.style.cssText = 'padding-top:6px;';
+    gal.innerHTML = galleryHTML();
+    if (heading && heading.nextSibling) sec.insertBefore(gal, heading.nextSibling);
+    else sec.insertBefore(gal, sec.firstChild);
+    syncDefaultThemeOptions(sec);
+    bindGallery(gal);
+  }
+
+  /**
+   * 绑定画廊交互：点圆块应用主题；双击打开弹框；点「添加」新建
+   * @param {Element} gal 画廊容器
+   */
+  function bindGallery(gal) {
+    var addBtn = gal.querySelector('.mt-gallery-add');
+    if (addBtn) addBtn.addEventListener('click', function () { openThemeDialog(null); });
+    gal.querySelectorAll('.mt-swatch').forEach(function (sw) {
+      sw.addEventListener('click', function () { applyTheme(sw.getAttribute('data-mt-id')); });
+      sw.addEventListener('dblclick', function () { openThemeDialogForSwatch(sw); });
+    });
+  }
+
+  /**
+   * 打开一个圆形块的弹框：内置只读查看，自建可编辑/删除
+   */
+  function openThemeDialogForSwatch(sw) {
+    var id = sw.getAttribute('data-mt-id');
+    var isDefault = sw.getAttribute('data-mt-default') === '1';
+    if (isDefault) { openThemeDialog({ id: id, name: themeName(id), isDefault: true, readonly: true }, true); }
+    else { var theme = findCustom(id); if (theme) openThemeDialog(theme, false); }
+  }
+
+  /**
+   * 打开主题编辑/查看弹框（遮罩，复用宿主弹层样式）。
+   * @param {Object|null} theme 现有主题或 null（新建）
+   * @param {boolean} [forceReadonly] 为 true 表示只读查看（内置主题）
+   */
+  function openThemeDialog(theme, forceReadonly) {
+    var isNew = !theme;
+    var readonly = !!forceReadonly;
+    var ov = document.createElement('div');
+    ov.id = 'mt-theme-overlay';
+    ov.className = 'fixed inset-0 z-50 flex items-center justify-center';
+    ov.style.cssText = 'background:rgba(0,0,0,0.45);';
+    var colors = theme ? themeColors(theme) : null;
+    var title = isNew ? '添加主题' : (readonly ? '主题设置（默认，仅查看）' : '编辑主题');
+    var nameVal = theme ? String(theme.name || '') : '';
+    var fieldsHtml = THEME_FIELD_DEFS.map(function (f) {
+      var val = colors ? String(colors[f.key]) : String(f.default || '');
+      var ctrl;
+      if (f.type === 'color') {
+        ctrl = '<input type="color" data-mt-f="' + f.key + '" value="' + val + '"'
+          + (readonly ? ' disabled' : '')
+          + ' style="width:44px;height:28px;padding:2px;background:var(--note-surface-2,#eee);border:1px solid var(--note-border,#ddd);border-radius:6px;cursor:pointer;">';
+      } else {
+        ctrl = '<input type="text" data-mt-f="' + f.key + '" value="' + val + '"'
+          + (readonly ? ' disabled' : '')
+          + ' placeholder="如 .vditor { font-family: serif; }"'
+          + ' style="flex:1;min-width:0;padding:6px 8px;border-radius:6px;font-size:12px;outline:none;background:var(--note-surface-2,#eee);border:1px solid var(--note-border,#ddd);color:var(--note-ink,#333);">';
+      }
+      return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">'
+        + '<span style="font-size:12px;color:var(--note-ink,#333);white-space:nowrap;">' + f.label + '</span>'
+        + ctrl + '</div>';
+    }).join('<span style="height:8px;"></span>');
+    var canDelete = !isNew && !readonly;
+    ov.innerHTML =
+      '<div style="width:400px;max-width:92vw;max-height:84vh;overflow:auto;border-radius:12px;'
+      + 'border:1px solid var(--note-border,#ddd);padding:16px;'
+      + 'background:var(--note-surface,#fff);color:var(--note-ink,#333);'
+      + 'box-shadow:0 12px 40px rgba(0,0,0,0.35);">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">'
+      + '<h3 style="font-size:15px;font-weight:600;">' + title + '</h3>'
+      + '<button type="button" class="mt-form-close" style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--note-ink-3,#888);cursor:pointer;font-size:16px;" aria-label="关闭">&times;</button>'
+      + '</div>'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">'
+      + '<span style="font-size:12px;color:var(--note-ink,#333);white-space:nowrap;">主题名称</span>'
+      + '<input type="text" data-mt-f="name" value="' + nameVal + '"' + (readonly ? ' disabled' : '')
+      + ' placeholder="输入主题名称"'
+      + ' style="flex:1;min-width:0;padding:6px 8px;border-radius:6px;font-size:12px;outline:none;background:var(--note-surface-2,#eee);border:1px solid var(--note-border,#ddd);color:var(--note-ink,#333);">'
+      + '</div>'
+      + '<div style="display:flex;flex-direction:column;gap:8px;">' + fieldsHtml + '</div>'
+      + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">'
+      + (canDelete ? '<button type="button" class="mt-form-del" style="margin-right:auto;padding:6px 12px;border-radius:6px;font-size:12px;color:#EF4444;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.35);cursor:pointer;">删除</button>' : '')
+      + (readonly ? '' : '<button type="button" class="mt-form-cancel" style="padding:6px 12px;border-radius:6px;font-size:12px;color:var(--note-ink-2,#555);background:var(--note-surface-2,#eee);border:1px solid var(--note-border,#ddd);cursor:pointer;">取消</button>')
+      + (!readonly && '<button type="button" class="mt-form-save" style="padding:6px 16px;border-radius:6px;font-size:12px;color:#FFF;background:var(--note-brand-600,#6B5A44);border:none;cursor:pointer;font-weight:600;">' + (isNew ? '创建' : '保存') + '</button>')
+      + '</div></div>';
+    document.body.appendChild(ov);
+    if (window.lucide && window.lucide.createIcons) window.lucide.createIcons({});
+    // 关闭
+    var close = function () { if (ov.parentNode) ov.parentNode.removeChild(ov); };
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
+    ov.querySelector('.mt-form-close').addEventListener('click', close);
+    var cancelBtn = ov.querySelector('.mt-form-cancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', close);
+    var saveBtn = ov.querySelector('.mt-form-save');
+    if (saveBtn) saveBtn.addEventListener('click', function () { saveThemeDialog(ov, theme, readonly); });
+    var delBtn = ov.querySelector('.mt-form-del');
+    if (delBtn) delBtn.addEventListener('click', function () { deleteThemeDialog(ov, theme); });
+  }
+
+  /**
+   * 保存弹框内容：校验名称 → 写入自建主题商店 → 刷新画廊 → 若当前在用重套
+   * @param {Element} ov 弹框
+   * @param {Object|null} theme 现有主题（编辑）或 null（新建）
+   * @param {boolean} readonly 只读则直接关
+   */
+  function saveThemeDialog(ov, theme, readonly) {
+    if (readonly) { if (ov.parentNode) ov.parentNode.removeChild(ov); return; }
+    var nameEl = ov.querySelector('[data-mt-f="name"]');
+    var name = (nameEl && nameEl.value || '').trim();
+    if (!name) { toast('请填写主题名称'); return; }
+    var fields = {};
+    THEME_FIELD_DEFS.forEach(function (f) {
+      var el = ov.querySelector('[data-mt-f="' + f.key + '"]');
+      fields[f.key] = (el && el.value) || f.default;
+    });
+    var list = readCustoms();
+    var id = theme ? String(theme.id) : nextCustomId();
+    // 重名校验（排除当前自身）
+    var dup = list.some(function (t) { return t.id !== id && String(t.name) === name; });
+    if (dup) { toast('已存在同名主题'); return; }
+    var entry = { id: id, name: name, fields: fields };
+    list = list.filter(function (t) { return t.id !== id; });
+    list.push(entry);
+    writeCustoms(list);
+    toast(theme ? '已保存主题：' + name : '已创建主题：' + name);
+    // 若当前正用该主题，保存色值后需重套配色（名称不变，id 仍有效）
+    if (activeThemeId() === id) { applyTheme(id, true); }
+    else if (!theme) { /* 新建主题不自动切换，保持当前主题 */ }
+    if (ov.parentNode) ov.parentNode.removeChild(ov);
+    refreshGalleryAndSettings();
+  }
+
+  /**
+   * 删除弹框内容：确认删除自建主题 → 刷新画廊；若当前在用则回退默认配色
+   */
+  function deleteThemeDialog(ov, theme) {
+    var id = String(theme.id);
+    if (!window.confirm) { /* 无 confirm 环境直接删 */ }
+    else if (!window.confirm('确认删除主题「' + theme.name + '」？')) return;
+    var list = readCustoms().filter(function (t) { return t.id !== id; });
+    writeCustoms(list);
+    toast('已删除主题：' + theme.name);
+    if (activeThemeId() === id) {
+      // 当前在用被删 → 回退「默认配色方案」
+      applyTheme(0);
+    }
+    if (ov.parentNode) ov.parentNode.removeChild(ov);
+    refreshGalleryAndSettings();
+  }
+
+  /**
+   * 重建画廊（刷新圆形色块与默认配色下拉）。设置面板可能在重建中，容错：找不到 section 就算了。
+   */
+  function refreshGalleryAndSettings() {
+    var sec = findSettingsSection();
+    if (!sec) return;
+    var wrap = sec.querySelector('[data-mt-gallery]');
+    if (!wrap) return;
+    var gal = document.createElement('div');
+    gal.setAttribute('data-mt-gallery', '1');
+    gal.className = 'mt-gallery-wrap';
+    gal.style.cssText = 'padding-top:6px;';
+    gal.innerHTML = galleryHTML();
+    wrap.parentNode.replaceChild(gal, wrap);
+    syncDefaultThemeOptions(sec);
+    bindGallery(gal);
+  }
+
   // 下拉面板项点击：宿主明暗档（并停用配色）或配色档，选完隐藏
   document.addEventListener('click', function (e) {
     var el = e.target && e.target.closest ? e.target.closest('.mt-theme-item') : null;
@@ -554,49 +924,45 @@
     hideDropdown();
   });
 
-  // 插件设置变更（自定义配色字段 / hoverToolbar / 默认配色 / 编辑器主题配置）实时响应
+  // 插件设置变更（自定义配色字段 / hoverToolbar / 默认配色 / 编辑器主题配置 / 自建主题）实时响应
   document.addEventListener('plugin-setting-changed', function (e) {
     var d = e.detail || {};
     if (!d || d.id !== PLUGIN_ID) return;
     var k = d.key || '';
-    // 编辑器主题配置（每套深浅/注入开关/自定义css）变更 → 通知宿主重算 vditor 主题
-    if (/^edTheme/.test(k) || k === 'injectCss' || k === 'extraCss') { syncEditorTheme(); return; }
-    // 自定义配色色值变更：当前正处自定义主题时即时重套
-    if (/^c[A-Z]/.test(k) && String(localStorage.getItem(LS_KEY) || '') === 'custom') {
-      var root = document.documentElement;
-      if (root && root.classList.contains(CLASS_PREFIX + 'custom')) applyCustomVars();
-      return;
-    }
-    // 默认配色变更：无已选主题时套用
-    if (k === 'defaultTheme' && !localStorage.getItem(LS_KEY)) {
-      applyTheme(mapDefaultToId(String(d.value)));
+    // 编辑器主题配置（注入开关/自定义css）变更 → 通知宿主重算 vditor 主题
+    if (k === 'injectCss' || k === 'extraCss') { syncEditorTheme(); return; }
+    // 公共设置行（defaultTheme/hoverToolbar）无额外即时侧效
+    if (k === 'hoverToolbar' || k === 'defaultTheme') return;
+    // 其余均属 per-theme 字段（旧单自定义 / 弹框已转自建商店，平铺行已隐藏），若当前在用自建主题则忽略
+    if (!findCustom(activeThemeId())) {
+      // 旧兼容：仅在活动档为旧 'custom' 时按字段重套
+      if (String(localStorage.getItem(LS_KEY) || '') === 'custom') {
+        var custom = findCustom('custom');
+        if (custom) applyThemeVars('custom');
+      }
     }
   });
 
   /**
-   * 把「默认配色方案」下拉值映射为主题 id
-   * @param {string} label 下拉值（停用/纸白/亚麻/冷灰/墨绿/自定义配色）
+   * 把「默认配色方案」下拉值映射为主题 id（内置/自建）
+   * @param {string} label 下拉值（纸白/亚麻/冷灰/墨绿/自建主题名）
    * @returns {string} 主题 id
    */
   function mapDefaultToId(label) {
-    if (label === '自定义配色') return 'custom';
     for (var i = 0; i < THEMES.length; i++) if (THEMES[i].name === label) return THEMES[i].id;
+    var list = readCustoms();
+    for (var j = 0; j < list.length; j++) if (String(list[j].name) === label) return list[j].id;
     return '0';
   }
 
-  // 插件启动时恢复上次主题（无显式选择时回退到「默认配色方案」设置）
-  (function restore() {
-    function applyIfReady(id) {
-      if (!document.body) {
-        document.addEventListener('DOMContentLoaded', function () { applyTheme(id, true); });
-        return;
-      }
-      applyTheme(id, true);
-    }
-    var saved = localStorage.getItem(LS_KEY);
-    if (saved) { applyIfReady(normalizeId(saved)); return; }
-    var def = getSetting('defaultTheme');
-    if (def) { var did = mapDefaultToId(String(def)); if (did !== '0') applyIfReady(did); }
+  // 首屏主题由 index.html head 同步脚本「按 localStorage 读取数据渲染一次」完成（宿主明暗 + 配色），
+  // 插件启动**不再自动套用主题**（不开 restore/applyTheme），避免与首帧渲染重复、二次设置。
+  // 例外：自建主题（id 为 cN）的完整配色仅存于本插件商店，宿主 head 无其数据源，故启动时由插件补齐，
+  // 保证画廊创建的主题在重载后仍以自身配色渲染、不闪宿主默认色。
+  // 内置 1-4 与旧 custom 仍由 head 前置恢复，不在此重复应用（保持「一次设置、一次渲染」）。作者: 火 冰
+  (function restoreCustomTheme() {
+    var id = activeThemeId();
+    if (/^c\d+$/.test(id) && findCustom(id)) applyTheme(id, true);
   })();
 
   // 注册「编辑器主题解析器」给宿主：由宿主在应用 vditor 主题时调用（抽象，不直接调 vditor）
@@ -618,4 +984,16 @@
 
   // 绑定顶栏悬浮（含 MutationObserver 等待按钮出现）
   watchToolbar();
+  // 设置页画廊注入（设置面板重渲染后也会经 observer 重建）
+  if (typeof MutationObserver !== 'undefined') {
+    var _root = document.body || document.documentElement;
+    if (_root) {
+      injectSettingsGallery(_root);
+      var galleryObs = new MutationObserver(function () { injectSettingsGallery(_root); });
+      galleryObs.observe(_root, { childList: true, subtree: true });
+    } else {
+      document.addEventListener('DOMContentLoaded', injectGalleryLater);
+    }
+  }
+  function injectGalleryLater() { injectSettingsGallery(document); }
 })();

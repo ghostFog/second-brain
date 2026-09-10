@@ -395,13 +395,20 @@ function testMinimalTheme() {
   assert(caught === null, 'Minimal Theme main.js 加载无未捕获异常');
   assert(!!V.__api.actions && typeof V.__api.actions['apply-custom'] === 'function', 'Minimal Theme 注册了 apply-custom 动作');
 
-  // 编辑主题解析器：已注册，且能生成对应 vditor 应用结果（抽象接口，不直接碰 vditor）
+  // 编辑主题解析器：已注册——按宿主明暗套 vditor 深浅主题打底，并把主题配色数值映射进编辑器（抽象接口，不直接碰 vditor）
   assert(Array.isArray(V.__api.resolvers) && V.__api.resolvers.length === 1 && typeof V.__api.resolvers[0] === 'function', '已向宿主注册编辑器主题解析器');
-  const r0 = V.__api.resolvers[0]({ dark: false });
-  assert((r0.theme === 'dark' || r0.theme === 'light') && typeof r0.extraCss === 'string', '解析器返回 { theme, extraCss } 结构');
-  V.localStorage.setItem('plugin:minimal-theme:edTheme3', '深色');
-  V.localStorage.setItem('plugin:minimal-theme:edThemeCustom', '浅色');
-  V.localStorage.setItem('plugin:minimal-theme:injectCss', 'true');
+  const rLight = V.__api.resolvers[0]({ dark: false });
+  const rDark = V.__api.resolvers[0]({ dark: true });
+  assert(rLight.theme === 'light' && typeof rLight.extraCss === 'string' && rLight.extraCss.length > 0, '浅色宿主 → 解析器返回 theme=light + 配色数值映射');
+  assert(rDark.theme === 'dark' && rDark.extraCss.length > 0, '深色宿主 → 解析器返回 theme=dark + 配色数值映射');
+  assert(rLight.extraCss.indexOf('var(--note-background)') !== -1 && rLight.extraCss.indexOf('html body .vditor .vditor-reset') !== -1, '映射包含 .vditor-reset 文字色兜底（引用 --note-ink，深色下可读）');
+  assert(rLight.extraCss.indexOf('#fff') === -1 && rLight.extraCss.indexOf('#24292e') === -1, '映射只引用主题变量，无硬编码浅色/深色兜底值');
+  V.__api.store['minimal-theme:injectCss'] = 'false';
+  assert(V.__api.resolvers[0]({ dark: true }).extraCss === '', '关闭「同步宿主配色到编辑器」后解析器不再注入配色映射');
+  V.__api.store['minimal-theme:injectCss'] = '';
+  V.__api.store['minimal-theme:extraCss'] = '.vditor { font-family: serif; }';
+  assert(V.__api.resolvers[0]({ dark: true }).extraCss.indexOf('.vditor') !== -1, '解析器在配色映射之上叠加用户自定义编辑器CSS');
+  V.__api.store['minimal-theme:extraCss'] = '';
 
   const btn = V.document.querySelector('[data-plugin-toolbar="minimal-theme:toolbar"]');
   btn.dispatchEvent(new V.MouseEvent('mouseenter'));
@@ -428,16 +435,7 @@ function testMinimalTheme() {
   assert(dd.style.display === 'none', '选择主题后面板隐藏');
   assert(V.__synced >= 1, '配色变更后通知宿主重算 vditor 主题（theme.sync 被调用）');
   const rCustom = V.__api.resolvers[0]({ dark: true });
-  assert(rCustom.theme === 'light' && rCustom.extraCss.length > 0, '自定义配色配置为浅色 → 解析器返回 light + 注入 CSS');
-  // 注入 CSS 必须用 html body 前缀提高特异度（压过 vditor 运行时后加载的自带样式），否则编辑器落白底
-  if (rCustom.extraCss.length > 0) {
-    assert(rCustom.extraCss.indexOf('html body .vditor') >= 0, '注入 CSS 使用 html body 前缀（特异度足以覆盖 vditor 自带背景）');
-    assert(rCustom.extraCss.indexOf('var(--note-background, #fff)') >= 0, '注入 CSS 引用 --note-background 使编辑器跟随配色');
-    assert(rCustom.extraCss.indexOf('html body .vditor table') >= 0, '注入 CSS 覆盖编辑区表格（内容层主题化，浅色态跟随配色）');
-    assert(rCustom.extraCss.indexOf('html body .vditor a { color: var(--note-brand') >= 0, '映射补全：链接→强调色');
-    assert(rCustom.extraCss.indexOf('.vditor-callout') >= 0, '映射补全：callout/卡片→卡片背景');
-    assert(rCustom.extraCss.indexOf('border-top-color: var(--note-line') >= 0, '映射补全：分隔线(hr)→行线');
-  }
+  assert(rCustom.theme === 'dark' && /var\(--note-card|var\(--note-brand/.test(rCustom.extraCss), '自定义配色 → 编辑器按宿主明暗套 dark 主题，并把自定义配色数值映射注入编辑器');
 
   // 快捷键/顶栏 cycle：统一主题列表（宿主明暗 + 配色）线性轮换，已删除停用档
   V.__hostMode = undefined; V.__savedHostMode = 'light';

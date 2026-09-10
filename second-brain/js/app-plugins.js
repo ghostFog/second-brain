@@ -842,6 +842,12 @@ globalThis.PluginAPI = {
     if (typeof fn !== 'function') return function () {};
     const list = (window.__hostThemeResolvers = window.__hostThemeResolvers || []);
     list.push(fn);
+    // 解析器注册后立即触发宿主重算并应用 vditor 主题：插件 main.js 经异步 fetch 执行，
+    // 若 vditor 已先构建则其上一步拿到的 extraCss(如表格深色覆盖) 为空，需在此补一次 sync，
+    // 否则编辑器编辑区保持白色、要等再次进入/切换视图才回主题。作者: 火 冰
+    if (window.vdSyncTheme) {
+      try { window.vdSyncTheme(); } catch (_) { /* 忽略同步异常 */ }
+    }
     return function () {
       const i = list.indexOf(fn);
       if (i >= 0) list.splice(i, 1);

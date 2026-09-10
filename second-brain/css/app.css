@@ -521,7 +521,8 @@ body.ed-fs-active #ed-vditor .vditor { height: 100% !important; }
   transition: background 0.15s;
 }
 .ed-mode-pop button:hover { background: var(--note-surface-2); }
-/* vditor 配色对齐应用主题（暗色/亮色统一映射到 --note-* 变量） */
+/* vditor 配色数值映射当前主题（暗色/亮色统一映射到 --note-* 变量，随主题色调整保持一致）；
+ * 负责 vditor 以 CSS 变量驱动处（背景/文字/边框/工具栏）落到当前主题色。作者: 火 冰 */
 #ed-vditor .vditor,
 #ed-vditor .vditor--dark {
   --vditor-background: var(--note-background);
@@ -531,9 +532,9 @@ body.ed-fs-active #ed-vditor .vditor { height: 100% !important; }
   --vditor-toolbar-color: var(--note-ink-3);
 }
 /* 深色下 vditor 渲染内容可见性兜底：本版本 vditor 的 `.vditor-reset` 硬编码 `color:#24292e`（浅色文字），
- * 在深色背景上与被覆盖为深色的应用背景同色导致内容不可见，此处强制其跟随应用正文墨色。
- * `.vditor--dark` 类加在挂载容器 `#ed-vditor` 自身，故用组合选择器（非后代选择器）。
- * 子元素（代码/引用等）各自有其颜色，不受此继承影响。
+ * 在深色背景上与被映射为深色的应用背景同色导致内容不可见，此处强制其跟随应用正文墨色。
+ * `.vditor--dark` 类加在挂载容器 `#ed-vditor` 自身，故用组合选择器（非后代选择器）；
+ * 与插件 buildEditorCss 的 .vditor-reset 覆盖（html body 前缀）互为双保险。
  * 作者: 火 冰 */
 #ed-vditor.vditor--dark .vditor-reset {
   color: var(--note-ink);

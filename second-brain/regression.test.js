@@ -430,12 +430,52 @@ function testThemeSavedSnapshot() {
   assert(html.indexOf('js/theme-palettes.js') !== -1 && html.indexOf('js/theme-palettes.js') < mtCssIdx,
     'Bug-043: head 前置加载共享主题数据源 theme-palettes.js（早于 CSS，渲染前内联内置配色）');
 
-  // Bug-043-编辑器: 首屏 vditor 构建时若 minimal-theme 插件解析器尚未异步注册，宿主 resolveVdTheme 的
-  // fallback 不能盲从宿主暗色（否则先闪 vditor--dark 再由插件 flip 回浅色）。须按 minimal 配色编辑器深浅推导。
   const ejs = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
-  assert(ejs.indexOf('minimalThemeEditorMode') !== -1 && /note-app:minimal-theme/.test(ejs)
-    && /plugin:minimal-theme:/.test(ejs) && /'浅色'/.test(ejs) && /'深色'/.test(ejs),
-    'Bug-043-编辑器: resolveVdTheme fallback 按 minimal 配色编辑器深浅(edThemeN,默认浅色)推导, 不盲从宿主暗色');
+
+  // Bug-046: 编辑器做主题配色「数值映射」——buildEditorCss 把当前主题的 --note-* 值映射进 vditor
+  // 壳与内容层（含表格/文字，兜底 .vditor-reset 硬编码 #24292e 在深色下不可读）；
+  // 不得回落固定深色/浅色值；editorThemeResolver 按 hint.dark 套 vditor 深浅主题打底并可关映射；
+  // manifest 含 injectCss 配色映射开关。宿主 resolveVdTheme fallback 按 isDarkTheme() 返回 dark/light。
+  assert(/buildEditorCss/.test(pjs) && pjs.indexOf('html body .vditor .vditor-reset { background-color: var(--note-background); color: var(--note-ink); }') !== -1,
+    'Bug-046: 插件用 buildEditorCss 把主题配色数值映射进编辑器（含 .vditor-reset 文字色，深色下可读）');
+  assert(/html body \.vditor table \{ background-color: var\(--note-background[^#]/.test(pjs)
+    && /html body \.vditor table th \{ background-color: var\(--note-card/.test(pjs),
+    'Bug-046: 表格/表头数值映射为主题颜色（无固定深色/浅色残留）');
+  const mapSeg = pjs.slice(pjs.indexOf('function buildEditorCss'), pjs.indexOf('function editorThemeResolver'));
+  assert(!/, ?#[0-9a-fA-F]{3,6}/.test(mapSeg) && mapSeg.indexOf('var(--note-background)') !== -1,
+    'Bug-046: buildEditorCss 映射只引用主题变量，不回落固定色值');
+  assert(pjs.indexOf("if (getSetting('injectCss') !== 'false') css = buildEditorCss();") !== -1
+    && pjs.indexOf("return { theme: (hint && hint.dark) ? 'dark'") !== -1,
+    'Bug-046: editorThemeResolver 可按开关注入配色映射，并按宿主明暗(hint.dark)套 vditor 深浅主题打底');
+  assert(ejs.indexOf("hint.dark ? 'dark' : 'light'") !== -1
+    && ejs.indexOf('minimalThemeEditorMode') === -1,
+    'Bug-046: 宿主 resolveVdTheme fallback 按宿主明暗返回 dark/light，已移除 minimalThemeEditorMode 深浅推导');
+  assert(mani.settings.every(s => !/^edTheme/.test(s.key)) && mani.settings.some(s => s.key === 'injectCss'),
+    'Bug-046: manifest 无 edTheme 深浅设置项，但保留 injectCss 配色映射开关');
+
+  // Bug-044-1: 插件解析器异步注册后，宿主须补一次 vditor 主题 sync，避免已构建的编辑器表格保持白色
+  // （渲染容器需读到 buildEditorCss 的表格深色覆盖，否则要等再次进入/切换视图才回主题）。
+  const pjs44 = fs.readFileSync(path.join(__dirname, 'js', 'app-plugins.js'), 'utf8');
+  assert(pjs44.indexOf('registerEditorThemeResolver') !== -1
+    && /list\.push\(fn\)[\s\S]*?vdSyncTheme/.test(pjs44),
+    'Bug-044-1: registerEditorThemeResolver 注册后触发 window.vdSyncTheme 补一次主题应用，修复编辑器表格白色');
+
+  // Bug-044-2: Ribbon 按钮点击用「视图 key」归一化比较，避免启动时 location.hash 为空串仍触发重渲染装载区。
+  const rjs44 = fs.readFileSync(path.join(__dirname, 'js', 'app-ribbon.js'), 'utf8');
+  assert(/'#\/editor'\)\.replace\('#\/'|location\.hash \|\| '#\/editor'/.test(rjs44)
+    && /current !== target/.test(rjs44)
+    && !/location\.hash === btn\.route/.test(rjs44),
+    'Bug-044-2: Ribbon 点击按视图 key 比较，点击当前激活按钮不重渲染装载区');
+
+  // Bug-045: 主题「一次设置、一次渲染」——启动主题由 index.html head 读取 localStorage 一次性渲染；
+  // 插件启动不再自动 applyTheme（restore），head 需含「默认配色方案」兜底，避免二次设置。
+  const pjs45 = fs.readFileSync(path.join(__dirname, 'plugins', 'minimal-theme', 'main.js'), 'utf8');
+  assert(!/\(function restore\(\)/.test(pjs45) && !/applyIfReady\(/.test(pjs45)
+    && !/var saved = localStorage\.getItem\(LS_KEY\);/.test(pjs45),
+    'Bug-045: minimal-theme 插件启动不再 restore/applyTheme 自动套用主题');
+  assert(html.indexOf("plugin:minimal-theme:defaultTheme") !== -1
+    && html.indexOf("localStorage.getItem('note-app:minimal-theme')") < html.indexOf("plugin:minimal-theme:defaultTheme"),
+    'Bug-045: 首帧 head 读取默认配色方案兜底（一次渲染，插件不再二次设置）');
 })();
 
 /* ---- Bug-029: vditor 资源本地化，避免弱网下 unpkg CDN 拖慢编辑区渲染 ----

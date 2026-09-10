@@ -91,50 +91,45 @@
       "default": "#7C6A52"
     },
     {
-      "key": "edTheme1",
-      "label": "编辑器主题·纸白",
-      "type": "select",
-      "sub": "套用「纸白」配色时编辑器的深浅主题",
-      "options": ["自动(跟随宿主)", "浅色", "深色"],
-      "default": "浅色"
+      "key": "cSurface2",
+      "label": "自定义·表面次级",
+      "type": "color",
+      "sub": "更深一层的表面底色（悬浮/激活面等）",
+      "default": "#E8E1D4"
     },
     {
-      "key": "edTheme2",
-      "label": "编辑器主题·亚麻",
-      "type": "select",
-      "sub": "套用「亚麻」配色时编辑器的深浅主题",
-      "options": ["自动(跟随宿主)", "浅色", "深色"],
-      "default": "浅色"
+      "key": "cInk2",
+      "label": "自定义·中级文字",
+      "type": "color",
+      "sub": "中等层级文字色（正文之上、强调之下的层级）",
+      "default": "#6B6B5E"
     },
     {
-      "key": "edTheme3",
-      "label": "编辑器主题·冷灰",
-      "type": "select",
-      "sub": "套用「冷灰」配色时编辑器的深浅主题",
-      "options": ["自动(跟随宿主)", "浅色", "深色"],
-      "default": "浅色"
+      "key": "cGutterBg",
+      "label": "自定义·行号列",
+      "type": "color",
+      "sub": "编辑器行号列 / 边栏底色",
+      "default": "#F5F0E8"
     },
     {
-      "key": "edTheme4",
-      "label": "编辑器主题·墨绿",
-      "type": "select",
-      "sub": "套用「墨绿」配色时编辑器的深浅主题",
-      "options": ["自动(跟随宿主)", "浅色", "深色"],
-      "default": "浅色"
+      "key": "cRing",
+      "label": "自定义·强调环",
+      "type": "color",
+      "sub": "选中描边/焦点环/引用徽标颜色",
+      "default": "#B8A890"
     },
     {
-      "key": "edThemeCustom",
-      "label": "编辑器主题·自定义",
-      "type": "select",
-      "sub": "套用「自定义配色」时编辑器的深浅主题",
-      "options": ["自动(跟随宿主)", "浅色", "深色"],
-      "default": "浅色"
+      "key": "cMutedFg",
+      "label": "自定义·次要前景",
+      "type": "color",
+      "sub": "提示/说明/次要交互文字颜色",
+      "default": "#8A8478"
     },
     {
       "key": "injectCss",
       "label": "同步宿主配色到编辑器",
       "type": "toggle",
-      "sub": "把宿主配色 CSS 变量映射为 vditor 覆盖样式，让编辑器跟随配色",
+      "sub": "把当前主题的配色数值映射为 vditor 覆盖样式，让编辑器颜色随主题色的调整保持一致",
       "default": true
     },
     {

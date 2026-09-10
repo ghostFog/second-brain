@@ -45,27 +45,9 @@
     return document.documentElement && document.documentElement.getAttribute('data-theme') === 'dark';
   }
 
-  /** 无插件解析器时按 minimal-theme 当前配色推导编辑器深浅（避免首屏 vditor 先闪宿主暗色再回主题）。
-   *  内置配色的编辑器深浅默认「浅色」，故 fallback 不该盲从宿主暗色，否则插件解析器异步就位前
-   *  编辑器会以 vditor--dark 构建、待插件注册后再给 flip 回浅色（主题闪烁）。读取 localStorage
-   *  与插件同步的配置，缺省按各配色默认「浅色」；返回 'dark'/'light'；未明确（跟随宿主）返回 ''。
-   *  作者: 火 冰 */
-  function minimalThemeEditorMode() {
-    try {
-      const key = {
-        '1': 'edTheme1', '2': 'edTheme2', '3': 'edTheme3', '4': 'edTheme4', custom: 'edThemeCustom',
-      }[localStorage.getItem('note-app:minimal-theme') || ''];
-      if (!key) return '';
-      const v = localStorage.getItem('plugin:minimal-theme:' + key) || '浅色';
-      if (v === '深色') return 'dark';
-      if (v === '浅色') return 'light';
-      return ''; // 自动(跟随宿主) → 交给宿主明暗
-    } catch (_) { return ''; }
-  }
-
   /** 收集插件注册的「编辑器主题解析器」，归并出 vditor 应应用的 { theme, extraCss }。
-   *  解析器由插件经 PluginAPI.registerEditorThemeResolver 注册，返回 { theme:'dark'|'light', extraCss? }，
-   *  取首个合法结果；无解析器（或全部返回空）时回落 minimal 配色编辑器深浅，再到全局明暗（html[data-theme]）。
+   *  解析器由插件经 PluginAPI.registerEditorThemeResolver 注册；取首个合法结果。
+   *  无解析器时编辑器按宿主明暗应用 vditor 自带深/浅主题（配色只做外壳，不向编辑器数值映射）。
    *  作者: 火 冰 */
   function resolveVdTheme() {
     const hint = { dark: isDarkTheme() };
@@ -78,8 +60,7 @@
         return { theme: r.theme, extraCss: typeof r.extraCss === 'string' ? r.extraCss : '' };
       }
     }
-    const mtMode = minimalThemeEditorMode();
-    return { theme: mtMode || (hint.dark ? 'dark' : 'light'), extraCss: '' };
+    return { theme: hint.dark ? 'dark' : 'light', extraCss: '' };
   }
   window.vdResolveVdTheme = resolveVdTheme;
 

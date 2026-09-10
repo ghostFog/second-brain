@@ -107,3 +107,34 @@
   --note-brand-500: #7C6A52;
   --note-brand-600: #6B5A44;
 }
+
+/* ========================================================================
+ * 设置页主题画廊：圆形色块 + 添加/编辑/删除
+ * 作者: 火 冰
+ * ======================================================================== */
+.mt-gallery-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mt-gallery-add {
+  transition: opacity 0.15s;
+}
+.mt-gallery-add:hover {
+  opacity: 0.85;
+}
+
+.mt-swatch {
+  transition: transform 0.12s, opacity 0.12s;
+}
+.mt-swatch:hover {
+  transform: translateY(-1px);
+}
+.mt-swatch:hover .mt-swatch-dot {
+  transform: scale(1.04);
+}
+.mt-swatch-dot {
+  transition: transform 0.12s;
+}

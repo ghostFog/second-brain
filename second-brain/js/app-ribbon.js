@@ -310,8 +310,11 @@ globalThis.RibbonManager = (function () {
       }
       if (typeof btn.onClick === 'function') { btn.onClick(); return; }
       if (btn.route) {
-        if (location.hash === btn.route) { /* 已是当前视图 */ }
-        else location.hash = btn.route;
+        // 用「视图 key」归一化比较，而非字面量 hash：启动时 location.hash 为空串时，
+        // 编辑器视图已按 fallback 显示，此刻点击激活按钮不应再触发 hashchange 重渲染装载区。
+        var current = (location.hash || '#/editor').replace('#/', '');
+        var target = btn.route.replace('#/', '');
+        if (current !== target) location.hash = btn.route;
       }
     });
 

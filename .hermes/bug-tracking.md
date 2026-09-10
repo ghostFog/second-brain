@@ -69,6 +69,10 @@
 | CD-26 | 必须 | 使用 Tailwind v4 browser 版的方向性边界类 `border-b/t/l/r` 时，须确保 `--tw-border-style` 有全局默认值（如 `:root{--tw-border-style:solid}`）或同时上 `border-solid` 类，否则 `border-*-style` 解成 `var()` 未定义→回退 none 不显示边框 | Bug-039 |
 | CD-28 | 必须 | 首屏恢复持久化外观/主题须双层处理避免明暗闪烁：①HTML 层在 `<head>` 的 CSS 引用之前放首帧同步脚本，按 `localStorage` 预置 `<html>` class（light/dark，`auto` 用 `matchMedia`），且 `<html>` 不得硬编码与用户设置冲突的主题属性；②主进程 `BrowserWindow` 设了 `backgroundColor` 时，必须 `show:false` + 监听 `ready-to-show` 后再 `show()` 并留超时兜底（防渲染异常白窗），否则窗口背景会抢在页面浅色首帧前露出深色 | Bug-041 |
 | CD-29 | 必须 | 首屏「渲染前恢复主题」须覆盖所有主题维度（宿主明暗 + 插件配色），前置到 head 且挂在同一元素 `<html>`；任何配色的变量取值应落在宿主同步资源（如 `js/theme-palettes.js` 的 `window.SB_PALETTES`）并在 head 同步引用，不得依赖插件异步注入的样式（styles.css 常晚于插件 js 执行），否则「清 head 前置变量→样式未就绪→闪宿主默认色」再闪回 | Bug-043 |
+| CD-30 | 必须 | 依赖「异步加载的插件」才生效的解析结果（如 vditor 的 `extraCss`/主题），应用方须在「插件注册解析器后」主动补一次 sync（注册即同步，如 `registerEditorThemeResolver` 末尾调 `window.vdSyncTheme`），不能只依赖再次进入/点击重建触发；否则竞态下已构建的编辑器保持错误观感（如表格白色） | Bug-044 |
+| CD-31 | 必须 | 主题/外观类遵循「一次设置数据、一次渲染」：设置仅写入 `localStorage`，渲染统一由入口（`index.html` head 首帧读数据执行一次）负责；插件侧不得在**启动阶段**再次 `applyTheme` 二次设置，仅在用户主动切换时渲染一次；新增主题维度须只有一条「读数据→渲染」路径 | Bug-045 |
+| CD-32 | 必须 | 主题/配色方案映射到渲染面（如编辑器/vditor）时，不得另设与配色无关的「深浅」档位、也不得硬编码第三方固定色（如 `#202329`）；宿主明暗只影响应用外壳，不应让配色内容回退到固定深色 | Bug-046 |
+| CD-33 | 必须 | 「深色/浅色/跟随系统」等外观模式只是编辑器深浅的**打底**（套渲染库原生深/浅主题）；**编辑器的具体颜色必须做主题配色数值映射**——内容层（`.vditor-reset` 文字、表格、引用、代码等）一律取当前生效的主题 CSS 变量（`--note-*`），不得依赖渲染库自带的浅色默认文字（如 vditor `.vditor-reset{color:#24292e}`，深色下不可读），也不得回落固定色值 | Bug-046 |
 
 ## 维护要求
 
