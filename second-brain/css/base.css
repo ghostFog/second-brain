@@ -6,6 +6,11 @@
 
 /* === 设计令牌（共享） === */
 :root {
+  /* Tailwind v4 边界走向类（border-b/t/l/r）只生成 `border-*-style: var(--tw-border-style)`，
+   * 该变量默认未定义时 border-*-style 回退为 none → 加了 class 但看不到线。
+   * 全局默认 solid，则 border-b/t/l/r 单独即可显示实线；若需虚线/点线再叠 border-dashed/border-dotted。
+   * 作者: 火 冰 */
+  --tw-border-style: solid;
   /* 品牌主色相 —— Violet（Obsidian 风格） */
   --note-brand-50: #F5F3FF;
   --note-brand-100: #EDE9FE;

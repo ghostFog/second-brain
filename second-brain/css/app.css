@@ -160,6 +160,22 @@
 }
 .settings-cat:hover { background: var(--note-surface-2); color: var(--note-ink); }
 .settings-cat.active { border-left-color: var(--note-brand-600); color: var(--note-brand-600); background: rgba(124,58,237,.08); }
+/* 分类项右侧折叠箭头：子菜单展开时旋转 180° */
+.settings-cat .cat-chevron { transition: transform .2s ease; opacity: .7; }
+.settings-cat.sub-open .cat-chevron { transform: rotate(180deg); }
+
+/* 设置分类二级子菜单：缩进在父分类下方，点击定位到对应区块 */
+.settings-subcat {
+  display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 30px;
+  border-radius: var(--note-radius-md); cursor: pointer; color: var(--note-ink-3);
+  font-size: 13px; transition: background-color .15s, color .15s;
+}
+.settings-subcat::before {
+  content: ''; width: 3px; height: 3px; border-radius: 50%;
+  background: currentColor; opacity: .6; flex-shrink: 0;
+}
+.settings-subcat:hover { background: var(--note-surface-2); color: var(--note-ink-2); }
+.settings-subcat.active { color: var(--note-brand-600); background: rgba(124,58,237,.08); }
 
 /* 标题栏笔记库下拉框 */
 .vault-dropdown {
@@ -518,6 +534,19 @@ body.ed-fs-active #ed-vditor .vditor { height: 100% !important; }
  * 作者: 火 冰 */
 #ed-vditor.vditor--dark .vditor-reset {
   color: var(--note-ink);
+}
+
+/* ---------- 有序列表序号：Tailwind preflight 将 ol/ul/menu 统一重置为 list-style:none，
+ * 而 vditor 的 index.css 只恢复了 ul(disc、circle、square)，未恢复 ol（无任何 list-style 规则），
+ * 导致 IR/WYSIWYG/预览三态下有序列表序号「1. 2. 3.」全部消失。
+ * 此处按 vditor 容器作用域恢复 decimal（vditor 自绘 marker 无对应 CSS，原生依赖 list-style-type）。
+ * 作者: 火 冰 */
+#ed-vditor .vditor-reset ol,
+#ed-vditor .vditor-ir ol,
+#ed-vditor .vditor-wysiwyg ol,
+#ed-vditor .vditor-preview ol {
+  list-style-type: decimal;
+  list-style-position: outside;
 }
 
 /* ---------- 所见即所得：块选中态（代码块/引用/表格/分隔线等顶层特殊块） ----------

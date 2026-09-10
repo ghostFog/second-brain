@@ -1168,10 +1168,13 @@ class AiEngine {
    */
   async _streamOllama(messages, m, onToken) {
     const base = String(m.baseUrl || '').replace(/\/+$/, '');
+    const body = { model: m.model, messages, stream: true };
+    // 上下文长度 num_ctx：模型配置了则随请求携带（Ollama 用 options.num_ctx 指定）
+    if (m.numCtx) body.options = { num_ctx: Number(m.numCtx) };
     const resp = await fetch(base + '/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: m.model, messages, stream: true }),
+      body: JSON.stringify(body),
       signal: this.abort.signal,
     });
     if (!resp.ok || !resp.body) throw new Error('Ollama 请求失败 ' + resp.status);
@@ -1222,6 +1225,62 @@ class AiEngine {
       model: m.model,
     }));
     return { models, currentModelId: this.cfg.currentModelId };
+  }
+
+  /**
+   * 从 Ollama 服务拉取已安装模型列表（GET /api/tags），供添加/编辑生成模型时选择。
+   * @param {string} baseUrl Ollama 服务地址（如 http://127.0.0.1:11434）
+   * @returns {Promise<{models: Array<{name: string, size: number, modifiedAt: string}>}>}
+   * @throws {Error} 服务不可达或返回非 2xx
+   * @author 火 冰
+   */
+  async listOllamaModels(baseUrl) {
+    const base = String(baseUrl || '').replace(/\/+$/, '');
+    const resp = await fetch(base + '/api/tags', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!resp.ok) throw new Error('Ollama 拉取模型列表失败 ' + resp.status);
+    const j = await resp.json();
+    const models = Array.isArray(j.models) ? j.models : [];
+    return {
+      models: models.map(m => ({
+        name: m.name || m.model || '',
+        size: m.size || 0,
+        modifiedAt: m.modified_at || '',
+      })),
+    };
+  }
+
+  /**
+   * 管理 Ollama 模型的加载/卸载/上下文长度。
+   * - 加载（load）：以 keep_alive 常驻内存（预热 + 保活），可同时设置 num_ctx 上下文长度
+   * - 卸载（unload）：keep_alive=0 立即释放内存
+   * @param {{baseUrl: string, model: string, action: 'load'|'unload', numCtx?: number|string}} p 参数
+   * @returns {Promise<{done: boolean, action: string}>}
+   * @throws {Error} 服务不可达或返回非 2xx
+   * @author 火 冰
+   */
+  async manageOllamaModel({ baseUrl, model, action, numCtx }) {
+    const base = String(baseUrl || '').replace(/\/+$/, '');
+    const isLoad = action !== 'unload';
+    const body = {
+      model: String(model || ''),
+      prompt: '',
+      stream: false,
+      keep_alive: isLoad ? '30m' : 0, // 加载保活 30 分钟；卸载立即释放
+    };
+    if (isLoad && numCtx) body.options = { num_ctx: Number(numCtx) };
+    const resp = await fetch(base + '/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120000), // 首次加载模型可能较慢
+    });
+    if (!resp.ok) throw new Error('Ollama 操作失败 ' + resp.status);
+    const j = await resp.json();
+    return { done: !!j.done, action: isLoad ? 'load' : 'unload' };
   }
 }
 

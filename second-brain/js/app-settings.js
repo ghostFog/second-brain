@@ -177,7 +177,7 @@
     }
     if (cat === 'AI 问答') {
       return settingsPanel(cat, CATS[cat],
-        '<section class="settings-group">'
+        '<section class="settings-group" id="ai-sec-local">'
         + '<div class="flex items-center justify-between mb-4"><h3 class="text-body font-semibold" style="color:var(--note-ink);">本地模型</h3>'
         + '<span id="ai-cfg-status" class="text-[11px] px-2 py-0.5 rounded-full border" style="border-color:var(--note-border); color:var(--note-ink-3); background:var(--note-surface-2);">未加载</span></div>'
         // 模型下载目录：嵌入模型仓库下载落盘位置（默认 userData/models）
@@ -210,13 +210,13 @@
         + '<div class="border-t pt-4 mt-2" style="border-color:var(--note-border);">'
         + '<button class="flex items-center justify-center gap-1.5 py-2.5 rounded-md text-[13px] font-medium w-full" data-ai-saction="load" style="background:var(--note-brand-600); color:#FFFFFF;"><i data-lucide="cpu" class="w-4 h-4"></i>加载嵌入模型</button></div>'
         + '</section>'
-        + '<section class="settings-group">'
+        + '<section class="settings-group" id="ai-sec-gen">'
         + '<div class="flex items-center justify-between mb-3"><h3 class="text-body font-semibold" style="color:var(--note-ink);">生成模型</h3>'
         + '<button class="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[12px] font-medium" data-ai-saction="add" style="background:var(--note-brand-600); color:#FFFFFF;"><i data-lucide="plus" class="w-3.5 h-3.5"></i>添加模型</button></div>'
         + '<div id="ai-model-list" class="rounded-lg border divide-y" style="border-color:var(--note-border);"></div>'
         + '<p class="text-caption mt-2" style="color:var(--note-ink-3);">支持配置多个生成模型（本地 Ollama / 远程 OpenAI 兼容），在问答页顶部切换。列表展示供应商与模型名称。</p>'
         + '</section>'
-        + '<section class="settings-group">'
+        + '<section class="settings-group" id="ai-sec-index">'
         + '<div class="flex items-center justify-between mb-3"><h3 class="text-body font-semibold" style="color:var(--note-ink);">知识库索引</h3><span id="ai-index-status" class="text-[11px] nums" style="color:var(--note-ink-3);">0 片段</span></div>'
         + '<p class="text-caption mb-4" style="color:var(--note-ink-3);">把笔记库全部 Markdown 切分并向量化，供语义检索使用。</p>'
         + '<div class="border-t pt-3 mb-1"><div class="text-[14px]" style="color:var(--note-ink);">索引分块默认参数</div><div class="text-caption mb-2" style="color:var(--note-ink-3);">未单独设置的笔记，按此参数生成索引块。</div>'
@@ -229,7 +229,9 @@
         + '</div></div>'
         + '<button class="flex items-center justify-center gap-1.5 py-2.5 rounded-md text-[13px] font-medium w-full" data-ai-saction="rebuild" style="background:var(--note-brand-600); color:#FFFFFF;"><i data-lucide="refresh-cw" class="w-4 h-4"></i>重建索引</button>'
         + '<button class="flex items-center justify-center gap-1.5 py-2.5 rounded-md text-[13px] font-medium w-full border mt-2" data-ai-saction="save" style="border-color:var(--note-border); color:var(--note-ink-2); background:var(--note-surface-2);"><i data-lucide="save" class="w-4 h-4"></i>保存配置</button>'
-        + '</section>');
+        + '</section>'
+        // 底部占位：保证「知识库索引」等靠后区块可被侧边栏二级菜单滚动对齐到容器顶部
+        + '<div class="h-96" aria-hidden="true"></div>');
     }
     return '';
   }
@@ -310,6 +312,8 @@
     let aiModels = [];        // 生成模型列表状态
     let currentModelId = '';  // 当前选中模型 id
     const PROV_LABEL = { ollama: '本地 Ollama', openai: '远程大模型' };
+    // 是否具备 Ollama 加载/卸载/上下文管理能力（桌面桥接才有）
+    const canManage = typeof ai.manageOllamaModel === 'function';
 
     const collectLocal = function () {
       const cfg = {};
@@ -329,7 +333,13 @@
       });
     };
 
-    /* 渲染生成模型列表（供应商 + 模型名称 + 当前标记 + 编辑/删除） */
+    /* 生成唯一模型 id（添加/复制弹层共用） */
+    const genModelId = function () {
+      return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    };
+
+    /* 渲染生成模型列表（按 baseUrl 分组：组头显示地址与模型数；行内 当前标记 + 复制/编辑/删除，
+     * Ollama 模型另带 加载/卸载/上下文 操作），整行 draggable 支持拖拽排序（HTML5 原生拖拽） */
     const renderModelList = function () {
       const box = document.getElementById('ai-model-list');
       if (!box) return;
@@ -337,16 +347,38 @@
         box.innerHTML = '<div class="px-4 py-6 text-center text-caption" style="color:var(--note-ink-3);">尚未配置生成模型，点击「添加模型」开始</div>';
         return;
       }
-      box.innerHTML = aiModels.map(function (m) {
+      // 按 baseUrl 分组（保持首次出现顺序）
+      const groups = [];
+      const groupIndex = {};
+      aiModels.forEach(function (m) {
+        const key = m.baseUrl || '(未设置地址)';
+        if (!(key in groupIndex)) { groupIndex[key] = groups.length; groups.push({ key: key, items: [] }); }
+        groups[groupIndex[key]].items.push(m);
+      });
+      const rowHtml = function (m) {
         const active = m.id === currentModelId;
+        const isOllama = m.provider === 'ollama';
         return '<div class="ai-model-row flex items-center gap-2 px-3 py-2.5" draggable="true" data-mid="' + esc(m.id) + '" style="border-color:var(--note-border); cursor:grab;">'
           + '<i data-lucide="grip-vertical" class="w-4 h-4 shrink-0" style="color:var(--note-ink-3);"></i>'
           + '<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:' + (active ? 'var(--state-success)' : 'var(--note-ink-3)') + ';"></span>'
           + '<div class="flex-1 min-w-0"><div class="text-[13px] truncate" style="color:var(--note-ink);">' + esc(m.model) + '</div>'
-          + '<div class="text-caption truncate" style="color:var(--note-ink-3);">' + (PROV_LABEL[m.provider] || m.provider) + ' · ' + esc(m.baseUrl) + '</div></div>'
+          + '<div class="text-caption truncate" style="color:var(--note-ink-3);">' + (PROV_LABEL[m.provider] || m.provider) + '</div></div>'
           + (active ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style="background:rgba(124,58,237,0.15); color:var(--note-brand-400);">当前</span>' : '')
-          + '<button class="ai-model-edit w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" data-mid="' + esc(m.id) + '" title="编辑"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>'
-          + '<button class="ai-model-del w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" data-mid="' + esc(m.id) + '" title="删除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>'
+          + (isOllama && canManage ? '<input type="number" min="0" class="ai-model-ctx w-16 px-1 py-1 text-[11px] nums text-center rounded-md outline-none shrink-0" draggable="false" data-mid="' + esc(m.id) + '" value="' + (m.numCtx ? Number(m.numCtx) : '') + '" placeholder="ctx" title="上下文长度 num_ctx（留空=模型默认）" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink-3);">'
+            + '<button class="ai-model-load w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" draggable="false" data-mid="' + esc(m.id) + '" title="加载模型（常驻内存）"><i data-lucide="play" class="w-3.5 h-3.5"></i></button>'
+            + '<button class="ai-model-unload w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" draggable="false" data-mid="' + esc(m.id) + '" title="卸载模型（释放内存）"><i data-lucide="power" class="w-3.5 h-3.5"></i></button>'
+            : '')
+          + '<button class="ai-model-copy w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" draggable="false" data-mid="' + esc(m.id) + '" title="复制"><i data-lucide="copy" class="w-3.5 h-3.5"></i></button>'
+          + '<button class="ai-model-edit w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" draggable="false" data-mid="' + esc(m.id) + '" title="编辑"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>'
+          + '<button class="ai-model-del w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" draggable="false" data-mid="' + esc(m.id) + '" title="删除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>'
+          + '</div>';
+      };
+      box.innerHTML = groups.map(function (g) {
+        return '<div class="ai-model-group">'
+          + '<div class="ai-model-group-head flex items-center justify-between px-3 py-1.5 text-[11px] font-medium" style="background:var(--note-surface-2); color:var(--note-ink-3); border-color:var(--note-border);">'
+          + '<span class="truncate"><i data-lucide="server" class="w-3 h-3 inline mr-1"></i>' + esc(g.key) + '</span>'
+          + '<span class="nums shrink-0 ml-2">' + g.items.length + ' 个模型</span></div>'
+          + g.items.map(rowHtml).join('')
           + '</div>';
       }).join('');
       if (window.lucide && window.lucide.createIcons) window.lucide.createIcons({});
@@ -602,8 +634,16 @@
         + '<input type="text" data-ai-form="baseUrl" class="w-full rounded-md px-3 py-2 text-[13px] outline-none" placeholder="http://127.0.0.1:11434 / https://api.xxx.com/v1" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
         + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">API Key</div>'
         + '<input type="password" data-ai-form="apiKey" class="w-full rounded-md px-3 py-2 text-[13px] outline-none" placeholder="远程大模型鉴权密钥（Ollama 可留空）" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
+        // Ollama：从服务拉取模型列表（下拉选择）
+        + '<div data-ai-form="ollama-pick" class="ai-ollama-pick hidden">'
+        + '<div class="flex items-center justify-between mb-1.5"><div class="text-[13px]" style="color:var(--note-ink);">从 Ollama 获取模型</div>'
+        + '<button type="button" data-ai-form="fetch" class="px-2.5 py-1 rounded-md text-[11px] font-medium shrink-0" style="background:var(--note-brand-600); color:#FFFFFF;">获取模型列表</button></div>'
+        + '<div class="relative"><select data-ai-form="ollama-list" class="select-box w-full" disabled><option value="">先点击上方按钮拉取</option></select>'
+        + '<i data-lucide="chevron-down" class="w-4 h-4 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style="color:var(--note-ink-3);"></i></div></div>'
         + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">模型名称</div>'
         + '<input type="text" data-ai-form="model" class="w-full rounded-md px-3 py-2 text-[13px] outline-none" placeholder="如 qwen2.5:7b / gpt-4o-mini" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
+        + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">上下文长度（num_ctx）</div>'
+        + '<input type="number" min="0" data-ai-form="numCtx" class="w-full rounded-md px-3 py-2 text-[13px] nums outline-none" placeholder="留空=模型默认（如 4096/8192）" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
         + '</div>'
         + '<div class="flex justify-end gap-2 mt-5">'
         + '<button class="ai-form-cancel px-4 py-2 rounded-md text-[13px] border" style="border-color:var(--note-border); color:var(--note-ink-2); background:var(--note-surface-2);">取消</button>'
@@ -611,23 +651,60 @@
         + '</div></div>';
       document.body.appendChild(ov);
       if (window.lucide && window.lucide.createIcons) window.lucide.createIcons({});
+      const provSel = ov.querySelector('[data-ai-form="provider"]');
+      const baseUrlInput = ov.querySelector('[data-ai-form="baseUrl"]');
+      const pickBox = ov.querySelector('.ai-ollama-pick');
+      const pickList = ov.querySelector('[data-ai-form="ollama-list"]');
+      const fetchBtn = ov.querySelector('[data-ai-form="fetch"]');
+      // 仅 Ollama 提供方且具备桌面桥接时显示「从 Ollama 获取模型」区（远程大模型用 API Key + 手填模型名）
+      const canOllamaPick = typeof ai.listOllamaModels === 'function';
+      const syncOllamaPick = function () { pickBox.classList.toggle('hidden', !(canOllamaPick && provSel.value === 'ollama')); };
+      provSel.addEventListener('change', syncOllamaPick);
+      // 拉取 Ollama 已安装模型列表并填充下拉
+      fetchBtn.addEventListener('click', function () {
+        const base = baseUrlInput.value.trim();
+        if (!base) { showToast('请先填写接口地址'); return; }
+        fetchBtn.disabled = true;
+        fetchBtn.textContent = '拉取中…';
+        ai.listOllamaModels(base).then(function (r) {
+          const models = (r && r.models) || [];
+          pickList.innerHTML = '<option value="">请选择模型（共 ' + models.length + ' 个）</option>'
+            + models.map(function (m) { return '<option value="' + esc(m.name) + '">' + esc(m.name) + '</option>'; }).join('');
+          pickList.disabled = !models.length;
+          showToast(models.length ? '已获取 ' + models.length + ' 个 Ollama 模型' : '该 Ollama 服务暂无模型');
+        }).catch(function (e) {
+          pickList.innerHTML = '<option value="">获取失败，请检查地址与服务</option>';
+          pickList.disabled = true;
+          showToast('获取失败：' + ((e && e.message) || e));
+        }).finally(function () {
+          fetchBtn.disabled = false;
+          fetchBtn.textContent = '获取模型列表';
+        });
+      });
+      // 选中下拉项 → 填入模型名称输入框
+      pickList.addEventListener('change', function () {
+        if (pickList.value) ov.querySelector('[data-ai-form="model"]').value = pickList.value;
+      });
       if (item) {
-        ov.querySelector('[data-ai-form="provider"]').value = item.provider || 'ollama';
-        ov.querySelector('[data-ai-form="baseUrl"]').value = item.baseUrl || '';
+        provSel.value = item.provider || 'ollama';
+        baseUrlInput.value = item.baseUrl || '';
         ov.querySelector('[data-ai-form="apiKey"]').value = item.apiKey || '';
         ov.querySelector('[data-ai-form="model"]').value = item.model || '';
+        ov.querySelector('[data-ai-form="numCtx"]').value = item.numCtx ? Number(item.numCtx) : '';
       }
+      syncOllamaPick();
       const close = function () { ov.remove(); };
       ov.querySelector('.ai-form-close').addEventListener('click', close);
       ov.querySelector('.ai-form-cancel').addEventListener('click', close);
       ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
       ov.querySelector('.ai-form-save').addEventListener('click', function () {
         const m = {
-          id: item ? item.id : ('m' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)),
+          id: item ? item.id : genModelId(),
           provider: ov.querySelector('[data-ai-form="provider"]').value,
           baseUrl: ov.querySelector('[data-ai-form="baseUrl"]').value.trim(),
           apiKey: ov.querySelector('[data-ai-form="apiKey"]').value.trim(),
           model: ov.querySelector('[data-ai-form="model"]').value.trim(),
+          numCtx: ov.querySelector('[data-ai-form="numCtx"]').value.trim() || '',
         };
         if (!m.model) { showToast('请填写模型名称'); return; }
         if (item) {
@@ -647,6 +724,16 @@
       aiModels = aiModels.filter(function (m) { return m.id !== id; });
       if (currentModelId === id) currentModelId = aiModels.length ? aiModels[0].id : '';
       persist().then(function () { showToast('模型已删除'); }).catch(function () { showToast('保存失败'); });
+    };
+
+    /* 复制模型：克隆该模型配置（新 id）插入到原项之后，方便快速派生同供应商/同接口的新模型 */
+    const duplicateModel = function (id) {
+      const idx = aiModels.findIndex(function (m) { return m.id === id; });
+      if (idx < 0) return;
+      const src = aiModels[idx];
+      const copy = Object.assign({}, src, { id: genModelId() });
+      aiModels.splice(idx + 1, 0, copy);
+      persist().then(function () { showToast('模型已复制：' + copy.model); }).catch(function () { showToast('保存失败'); });
     };
 
     // 读取配置并渲染本地字段 + 模型列表
@@ -682,13 +769,42 @@
       if (stEl) stEl.textContent = st && st.embeddingLoaded ? '已加载' : '未加载';
     }).catch(function () {});
 
-    // 模型列表事件委托（编辑/删除）
+    // 模型列表事件委托（加载/卸载/复制/编辑/删除 + 上下文修改）
     const listBox = document.getElementById('ai-model-list');
     if (listBox) {
+      // 修改行内 num_ctx（change 事件不冒泡到 click，单独委托）
+      listBox.addEventListener('change', function (e) {
+        const ctxInp = e.target.closest('.ai-model-ctx');
+        if (!ctxInp) return;
+        const id = ctxInp.dataset.mid;
+        const it = aiModels.find(function (m) { return m.id === id; });
+        if (!it) return;
+        const v = ctxInp.value.trim();
+        it.numCtx = v ? Number(v) : '';
+        persist().then(function () { showToast('上下文长度已更新'); }).catch(function () { showToast('保存失败'); });
+      });
       listBox.addEventListener('click', function (e) {
+        const loadBtn = e.target.closest('.ai-model-load');
+        const unloadBtn = e.target.closest('.ai-model-unload');
+        const copyBtn = e.target.closest('.ai-model-copy');
         const editBtn = e.target.closest('.ai-model-edit');
         const delBtn = e.target.closest('.ai-model-del');
-        if (editBtn) {
+        if (loadBtn) {
+          const it = aiModels.find(function (m) { return m.id === loadBtn.dataset.mid; });
+          if (!it) return;
+          showToast('正在加载模型：' + it.model + '…');
+          ai.manageOllamaModel({ baseUrl: it.baseUrl, model: it.model, action: 'load', numCtx: it.numCtx })
+            .then(function (r) { showToast((r && r.action === 'load' ? '模型已加载（常驻内存）' : '模型加载完成') + '：' + it.model); })
+            .catch(function (e) { showToast('加载失败：' + ((e && e.message) || e)); });
+        } else if (unloadBtn) {
+          const it = aiModels.find(function (m) { return m.id === unloadBtn.dataset.mid; });
+          if (!it) return;
+          ai.manageOllamaModel({ baseUrl: it.baseUrl, model: it.model, action: 'unload' })
+            .then(function () { showToast('模型已卸载（释放内存）：' + it.model); })
+            .catch(function (e) { showToast('卸载失败：' + ((e && e.message) || e)); });
+        } else if (copyBtn) {
+          duplicateModel(copyBtn.dataset.mid);
+        } else if (editBtn) {
           const it = aiModels.find(function (m) { return m.id === editBtn.dataset.mid; });
           if (it) openModelForm(it);
         } else if (delBtn) {
@@ -1249,12 +1365,60 @@
     if (sizeSel) sizeSel.value = savedFont;
     applyFontSize(savedFont);
 
-    // 分类切换
+    // 初始分类高亮：视图标记 data-active="1" 的分类默认选中（无则不高亮任何分类）
+    document.querySelectorAll('.settings-cat[data-active="1"]').forEach(c => c.classList.add('active'));
+
+    // 分类切换：含子菜单的分类点击时展开/收起二级菜单（箭头随 sub-open 旋转），其余分类点击时收起已展开的子菜单
     document.querySelectorAll('.settings-cat').forEach(cat => {
       cat.addEventListener('click', function () {
         document.querySelectorAll('.settings-cat').forEach(c => c.classList.remove('active'));
+        document.querySelectorAll('.settings-subcat').forEach(s => s.classList.remove('active'));
         this.classList.add('active');
+        const subs = document.querySelectorAll('.settings-subcat[data-cat="' + this.dataset.cat + '"]');
+        if (subs.length) {
+          const anyVisible = [...subs].some(s => !s.classList.contains('hidden'));
+          subs.forEach(s => s.classList.toggle('hidden', anyVisible));
+          this.classList.toggle('sub-open', !anyVisible);
+        }
+        document.querySelectorAll('.settings-cat.sub-open').forEach(c => {
+          if (c !== this) {
+            document.querySelectorAll('.settings-subcat[data-cat="' + c.dataset.cat + '"]').forEach(s => s.classList.add('hidden'));
+            c.classList.remove('sub-open');
+          }
+        });
         switchSettings(this.dataset.cat);
+      });
+    });
+
+    // 二级子菜单：切换到所属分类并平滑滚动定位到对应区块
+    document.querySelectorAll('.settings-subcat').forEach(sub => {
+      sub.addEventListener('click', function () {
+        document.querySelectorAll('.settings-cat').forEach(c => c.classList.remove('active'));
+        document.querySelectorAll('.settings-subcat').forEach(s => s.classList.remove('active'));
+        this.classList.add('active');
+        const main = document.querySelector('.settings-cat[data-cat="' + this.dataset.cat + '"]');
+        if (main) main.classList.add('active');
+        // 点击子项时确保其所属子菜单展开
+        document.querySelectorAll('.settings-subcat[data-cat="' + this.dataset.cat + '"]').forEach(s => s.classList.remove('hidden'));
+        if (main) main.classList.add('sub-open');
+        switchSettings(this.dataset.cat);
+        // 定位到锚点区块：直接按容器滚动偏移瞬时定位（不受异步内容填充/平滑动画打断），
+        // 并以 200ms 间隔循环校正直至区块贴近容器顶部（最多 12 次，覆盖内容异步撑高）
+        const scrollToTarget = function () {
+          const target = document.getElementById(sub.dataset.scroll);
+          const cont = document.getElementById('settings-content');
+          if (!target || !cont) return false;
+          const y = target.getBoundingClientRect().top - cont.getBoundingClientRect().top + cont.scrollTop;
+          cont.scrollTop = Math.max(0, y - 32);
+          const top = target.getBoundingClientRect().top - cont.getBoundingClientRect().top;
+          return top >= 0 && top < 60;
+        };
+        scrollToTarget();
+        let retry = 0;
+        const timer = setInterval(function () {
+          if (++retry >= 12) { clearInterval(timer); return; }
+          if (scrollToTarget()) clearInterval(timer);
+        }, 200);
       });
     });
 

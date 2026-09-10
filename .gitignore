@@ -20,6 +20,7 @@ build/
 out/
 win-unpacked/
 *.blockmap
+TempProfile/
 
 # ---- 日志 ----
 *.log

@@ -400,3 +400,63 @@
 - **处理方法**: ① `buildEditorCss` 所有选择器统一加 `html body` 前缀，把特异度提到 `(0,1,2)+`，必然压过 vditor 自带的单/双类规则；同时打全真实编辑区类（`.vditor-sv/.vditor-ir/.vditor-wysiwyg/.vditor-preview/.vditor-reset`）。② `applyVdExtraCss` 每次应用把 `#host-vditor-theme-extra` `appendChild` **重挂到 `<head>` 末尾**（同节点移动），保证晚于 vditor 动态注入的 `<link>`。③ **内容层主题化**：`buildEditorCss` 拆分 UI 壳与内容层（新增 `lightContentCss`/`darkContentCss`），编辑区 `table/引用/代码块` 浅色态用 `--note-*` 跟随配色、深色态用与宿主协调的固定暗色，消除任何模式下表格刺眼白底。
 - **验证结果**: 冒烟 95 通过（新增 3 条断言：注入 CSS 含 `html body .vditor` 前缀、引用 `var(--note-background, #fff)`、覆盖编辑区 `html body .vditor table`）、回归 59 通过、`node --check` 通过。
 - **防再犯要点**: 注入自定义主题/覆盖 CSS 时，选择器特异度必须 ≥ 目标引擎（vditor 等）自带规则，或每次把注入节点重挂到 `<head>` 末尾——否则被引擎运行时后加载的同特异度样式覆盖（CD-23）。
+
+- <br />
+
+- **ID**: Bug-035
+- **日期**: 2026-09-10
+- **现象**: vditor 编辑区（IR/所见即所得/预览三态）的有序列表序号「1. 2. 3.」全部消失，只剩文本项。
+- **复现地点**: `js/editor/editor-vditor.js`（vditor 渲染）+ `node_modules/vditor/dist/index.css` + Tailwind `js/vendor/tailwind-browser.js`（preflight）
+- **原因**: Tailwind preflight 全局重置把 `ol, ul, menu` 统一 `list-style: none`；vditor 的 `index.css` 只恢复了 `ul`（disc/circle/square），**未恢复 `ol`**（无任何 `list-style-type` 规则）。vditor 的有序列表靠浏览器原生 `list-style-type` 显示序号（自绘 `data-marker` 无对应 CSS），被 preflight 抹掉即序号消失。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 在 `css/app.css` 的 vditor 作用域补充恢复 `#ed-vditor .vditor-reset/.vditor-ir/.vditor-wysiwyg/.vditor-preview ol { list-style-type: decimal; list-style-position: outside; }`（特异度 `(1,0,2)+`，压过 preflight 的 `ol`），编辑器有序列表序号恢复正常。
+- **验证结果**: 服务器提供的 `app.css` 确认含该规则（实测 32260 字节、`list-style-type: decimal` present）；jsdom 回归新增 `testOrderedListCss`（断言 app.css 含 `#ed-vditor .vditor-reset ol` 与 decimal），`npm test` **65 通过、0 失败**。
+- **防再犯要点**: 引入 Tailwind 等 preflight（全局重置样式）时，凡它重置掉的列表/排版默认值，第三方编辑器（vditor 等）自带 CSS 未恢复的都必须按容器作用域显式恢复（CD-24）。
+
+- <br />
+
+- **ID**: Bug-036
+- **日期**: 2026-09-10
+- **现象**: vditor IR 模式下，当表格或代码块是文档**第一个元素**时，光标无法落到块前，无法在其上方插入新行/内容。
+- **复现地点**: `js/editor/editor-vditor.js`（IR 模式，`#ed-vditor .vditor-ir`）
+- **原因**: 块作为首元素时其上方没有可放置光标的空段落；vditor 原生 `insertBeforeBlock` 需先在块内任意单元格/行首派发特定方向键（ArrowUp/ArrowLeft/Backspace）才可能触发，非直觉、不稳定，用户无法直接「在表格/代码块前插入」。代码块则完全无右键入口。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 在 `editor-vditor.js` 的 IR 上下文菜单扩展：①新增 `irInsertAbove(blockEl)`——以 `closest('[data-block="0"]')` 归一到表格/代码块的块根，`insertBefore` 插入 `<p data-block="0">ZWSP<wbr></p>`，用 `<wbr>` 锚定光标并 `sync2Host` 保存；②表格右键菜单新增「在表格上方插入空行」，代码块右键新增「在代码块上方插入空行」（共用 `showIrMenu` 通用菜单构建）。
+- **验证结果**: 实机（browser_evaluate）验证：表格/代码块右键均弹出含「上方插入空行」的菜单，点击后在块前出现 `<p data-block="0"><wbr></p>`；jsdom 回归新增 `testIrBlockAbove`（暴露 `__vdBlock.irInsertAbove`、`[data-block="0"]` 归一、含表格/代码块两项菜单入口），`npm test` **65 通过、0 失败**。
+- **防再犯要点**: 对块级元素（表格/代码块等）提供「上方插入空行」入口时，块根定位以 `closest('[data-block="0"]')` 归一到 IR 顶层块，避免误插入到行内容器内（CD-24 复用/补充）。
+
+- <br />
+
+- **ID**: Bug-037
+- **日期**: 2026-09-10
+- **现象**: 报告：待办（多选框）列表「插入时显示正常，切换视图或重新打开后显示字面 `.[]` / `[]`」（非复选框）。
+- **复现地点**: `js/editor/editor-vditor.js`（vditor IR/WYSIWYG/预览）+ Lute 解析（`node_modules/vditor/dist/js/lute/lute.min.js`）+ `js/app-note.js`（非编辑区 `renderMarkdown`）
+- **原因**: 排查结论——当前代码解析与渲染均已正确，**未能复现**。①Lute `Md2VditorIRDOM` 与 `Md2VditorDOM` 均把 `- [ ] x` 输出为带 `vditor-task` 的 `<input type="checkbox">`；`VditorIRDOM2Md` 往返仍保留 `[ ]` 标记（实测）。②实机在 IR/所见即所得/预览/重开四态均保持 checkbox。判断历史根因很可能是早期 Tailwind preflight 把待办 `ul` 还原为普通圆点列表时的视觉残留（`•[ ]`），随 vditor 迁移与样式恢复已消除。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 增加确定性门禁 `testTaskListRoundTrip`（Lute IR→checkbox、IR→MD 往返保留待办标记）防退化，并整理既有 `app-note.js` 待办渲染（Lucide 图标）仅用于非编辑区、与编辑区解耦；未对编辑区做投机改动。
+- **验证结果**: Lute 序列化往返与四态实机均确认 checkbox 正常，无 `.[]` / `[]` 字面；jsdom 回归新增 `testTaskListRoundTrip`，`npm test` **65 通过、0 失败**。
+- **防再犯要点**: 涉及第三方编辑器列表/待办渲染时，以 Lute 序列化往返 + 各编辑模式实机核验作为门禁；Tailwind preflight 对列表类的重置需按容器作用域恢复，防待办/有序列表退化为纯文本列表（CD-24 复用/补充）。
+
+- <br />
+
+- **ID**: Bug-038
+- **日期**: 2026-09-10
+- **现象**: vditor IR 模式下：①空行（`<p data-block="0">ZWSP<wbr></p>`）按 Backspace/Delete「删不掉」——vditor 原生只删掉 ZWSP 字符、段落元素仍残留；②光标在表格/代码块最前面按 Backspace，若其上一行是空行，不会删除该空行。
+- **复现地点**: `js/editor/editor-vditor.js`（IR 模式 `#ed-vditor .vditor-ir`）
+- **原因**: vditor 原生 `fixDelete`/`insertBeforeBlock` 对 `data-block="0"` 的空段落未做「整行删除」语义（Backspace 只缩减文本节点）；且块前 Backspace 逻辑优先跳转到上一元素，未识别「上一行是空行需删除」的场景。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 在 `editor-vditor.js` 新增捕获阶段 keydown 监听 `handleIrDeleteKeydown`（`document.addEventListener('keydown', handler, true)`，命中时 `preventDefault`+`stopImmediatePropagation` 不与 vditor 原生冲突）：①`isEmptyLine(root)` 判定 ZWSP 空段落 → Backspace/Delete 均 `removeEmptyLine` 删除整行，并把光标定位到相邻块（Backspace→上一块末尾、Delete→下一块开头），删除后保证编辑器至少留一个占位块；②`blockRootOf` + `caretAtBlockStart` 判定光标在块最前且 `Backspace`，若 `previousElementSibling` 是空行则删除之，非空行则放行给 vditor 原生跳上一行。
+- **验证结果**: jsdom 回归新增 `testIrEmptyLineDelete`（断言 `__vdBlock` 暴露 isEmptyLine/handleIrDeleteKeydown、ZWSP 空段落 isEmptyLine=true、含文本则 false、capture 阶段绑定），`npm test` **70 通过、0 失败**；`node --check` 通过。
+- **防再犯要点**: 自定义第三方编辑器（vditor 等）键盘行为时，用捕获阶段监听并命中时 `preventDefault`+`stopImmediatePropagation`，避免与引擎自身 keydown 冲突；对 ZWSP 空段落须按「整行」语义处理删除（CD-25 新增）。
+
+- <br />
+
+- **ID**: Bug-039
+- **日期**: 2026-09-10
+- **现象**: 在侧边面板「标签」等容器上手动添加 `class="border-b" style="border-color: var(--note-border);"`，下边框线不显示。
+- **复现地点**: `css/base.css` + `js/vendor/tailwind-browser.js`（Tailwind v4 browser 版）+ `views/editor.html`（侧边面板标签区）
+- **原因**: Tailwind v4 browser 版中方向性边界类 `border-b` 只生成 `border-bottom-style: var(--tw-border-style); border-bottom-width: 1px`，**不再**像 v3 那样直接写 `border-bottom: 1px solid`。而 `--tw-border-style` 这个变量只有在同元素上了 `border-solid`/`border-dashed` 等类时才会被定义；单独用 `border-b` 时变量未定义 → `border-bottom-style` 解析回退为 `none` → 无线。同理影响 `border-t/`l/`r`。
+- **状态**: 已修复（测试完成）
+- **处理方法**: 在 `css/base.css` 的 `:root` 全局默认 `--tw-border-style: solid`。这样 `border-b/t/l/r` 单独即可显示实线；需要虚线/点线时再叠 `border-dashed`/`border-dotted` 覆盖。因 `:root` 变量可被所有元素继承，且 base.css 在 tailwind-browser.js 之前加载，故全局生效。
+- **验证结果**: jsdom 回归新增 `testDefaultBorderStyle`（断言 base.css 含 `--tw-border-style: solid`），`npm test` **71 通过、0 失败**。
+- **防再犯要点**: 使用 Tailwind v4 browser 版的方向性边界类 `border-b/t/l/r` 时，须确保 `--tw-border-style` 有全局默认值（如 `:root{--tw-border-style:solid}`）或同时上 `border-solid` 类，否则变回退 none 不显示边框（CD-26 新增）。

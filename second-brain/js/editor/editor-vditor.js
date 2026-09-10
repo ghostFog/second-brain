@@ -153,6 +153,165 @@
 
   /** @type {{table:HTMLElement,tr:HTMLElement,td:HTMLElement}|null} IR 表格右键命中的单元格 */
   let irCtxHit = null;
+  /** @type {HTMLElement|null} IR 代码块右键命中的块级包装元素（.vditor-ir__node 等） */
+  let irCtxCode = null;
+
+  /** 在目标块级元素前插入一个空段落（修复「表格/代码块作为首元素时无法在其前插入内容」）。
+   *  IR 模式下 top-level 块统一带 `data-block="0"`（表格即 <table data-block="0">，
+   *  代码块为 <div data-block="0" class="vditor-ir__node">），用 closest 归一化到块根，
+   *  在这些块根之前 `insertAdjacentHTML('beforebegin', <p data-block="0">ZWSP<wbr></p>)`，
+   *  再以 <wbr> 锚定光标；vditor 的 getValue 实时由 ir.element.innerHTML 推导，改完即可回传宿主。
+   * @param {HTMLElement} blockEl 命中块内的任意元素（表格/代码块）
+   * 作者: 火 冰 */
+  function irInsertAbove(blockEl) {
+    if (!vdInst || !blockEl) return;
+    const v = vdInst.vditor;
+    // 归一到带 data-block="0" 的块根；无则用原元素兜底
+    const root = (typeof blockEl.closest === 'function' && blockEl.closest('[data-block="0"]')) || blockEl;
+    const p = document.createElement('p');
+    p.setAttribute('data-block', '0');
+    p.appendChild(document.createTextNode('\u200b')); // ZWSP：保证空段占位非空、序列化后为空行
+    const wbr = document.createElement('wbr');
+    p.appendChild(wbr);
+    root.parentNode.insertBefore(p, root);
+    // 光标定位到新空段（vditor IR 以 <wbr> 锚定光标）；失败则仅聚焦，用户可点击进入
+    try {
+      const range = document.createRange();
+      range.setStart(wbr, 0);
+      range.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      if (v.ir && v.ir.element) v.ir.element.focus();
+    } catch (_) { /* 忽略光标异常 */ }
+    try { sync2Host(vdInst.getValue()); } catch (_) { /* 忽略同步异常 */ }
+  }
+
+  /** 判断一个块级元素是否为「空行」（段落 p 且去掉 ZWSP 后无可见文本、无嵌套块）。
+   *  空行即 irInsertAbove 插入的 `<p data-block="0">ZWSP<wbr></p>`，Backspace/Delete 上应删除整行。
+   * @param {HTMLElement|null} el 待判元素
+   * @returns {boolean} 是否为空行
+   * 作者: 火 冰 */
+  function isEmptyLine(el) {
+    if (!el || el.nodeType !== 1 || el.tagName !== 'P') return false;
+    if (el.querySelector('[data-block="0"]')) return false; // 含嵌套块不是空行
+    return (el.textContent || '').replace(/\u200b/g, '').trim() === '';
+  }
+
+  /** 取光标位置所在的最顶层块根（带 `data-block="0"`），无则返回原元素兜底。
+   * @param {Node} node 光标起点（文本节点或元素）
+   * @returns {HTMLElement|null} 块根
+   * 作者: 火 冰 */
+  function blockRootOf(node) {
+    if (!node) return null;
+    let n = node;
+    while (n && n.nodeType === 1) {
+      if (n.getAttribute('data-block') === '0') return n;
+      n = n.parentNode;
+    }
+    return null;
+  }
+
+  /** 判断光标是否位于块的最前面（块首可见文本之前，忽略 ZWSP）。
+   * @param {HTMLElement} root 块根
+   * @param {Range} range 当前选区
+   * @returns {boolean} 光标是否在块最前
+   * 作者: 火 冰 */
+  function caretAtBlockStart(root, range) {
+    try {
+      const r2 = document.createRange();
+      r2.setStartBefore(root.firstChild || root);
+      r2.setEnd(range.startContainer, range.startOffset);
+      return r2.toString().replace(/\u200b/g, '').trim() === '';
+    } catch (_) { return false; }
+  }
+
+  /** 把选区光标放置到某块内（末尾或开头），并聚焦编辑区。
+   * @param {HTMLElement} block 目标块
+   * @param {boolean} atEnd true=末尾 | false=开头
+   * 作者: 火 冰 */
+  function placeCaret(block, atEnd) {
+    if (!block || block.nodeType !== 1 || !vdInst || !vdInst.vditor.ir) return;
+    try {
+      const r = document.createRange();
+      r.selectNodeContents(block);
+      r.collapse(atEnd);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      vdInst.vditor.ir.element.focus();
+    } catch (_) { /* 忽略光标异常 */ }
+  }
+
+  /** 删除一个空行块，并把光标定位到相邻块（Backspace→上一块末尾，Delete→下一块开头）；
+   *  若未占位到相邻块则聚焦编辑区让用户自行点击；保证删除后编辑器至少留一个块。
+   * @param {HTMLElement} root  空行块根
+   * @param {string} key  触发的按键（'Backspace' | 'Delete'）
+   * 作者: 火 冰 */
+  function removeEmptyLine(root, key) {
+    if (!vdInst || !root) return;
+    const v = vdInst.vditor;
+    const prev = root.previousElementSibling;
+    const next = root.nextElementSibling;
+    root.remove();
+    // 防止编辑器被完全清空（vditor 需要一个占位块）
+    if (!v.ir.element.firstChild) {
+      v.ir.element.insertAdjacentHTML('afterbegin', '<p data-block="0">\u200b<wbr></p>');
+    }
+    const target = (key === 'Backspace') ? prev : next;
+    if (target && target.nodeType === 1) placeCaret(target, key !== 'Backspace');
+    else if (v.ir.element) { try { v.ir.element.focus(); } catch (_) { /* 忽略 */ } }
+    try { sync2Host(v.getValue()); } catch (_) { /* 忽略同步异常 */ }
+  }
+
+  /** 捕获阶段 Backspace/Delete 处理器：修正 IR 模式空行与块前跳转。
+   *  规则一：光标在空行上，Backspace/Delete 都删除该空行。
+   *  规则二：光标在块（表格/代码块等）最前面按 Backspace，若上一行是空行则删除空行；
+   *          若非空行则放行给 vditor 原生（其会跳到上一元素末尾）。
+   *  以捕获阶段拦截并在命中时 preventDefault，避免与 vditor 原生 keydown 冲突。
+   * @param {KeyboardEvent} e 键盘事件
+   * 作者: 火 冰 */
+  function handleIrDeleteKeydown(e) {
+    const key = e.key;
+    if (key !== 'Backspace' && key !== 'Delete') return;
+    if (!vdInst || vdMode !== 'ir') return;
+    const v = vdInst.vditor;
+    const el = v && v.ir ? v.ir.element : null;
+    if (!el || !el.contains(e.target)) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount !== 1) return;
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed) return; // 有选区交给 vditor 原生处理删除
+    const root = blockRootOf(range.startContainer);
+    if (!root) return;
+    // 规则一：空行删除
+    if (isEmptyLine(root)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      removeEmptyLine(root, key);
+      return;
+    }
+    // 规则二：块最前 Backspace，上一行是空行则删除之
+    if (key === 'Backspace' && caretAtBlockStart(root, range)) {
+      const prev = root.previousElementSibling;
+      if (prev && isEmptyLine(prev)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        prev.remove();
+        if (v.ir && v.ir.element) { try { v.ir.element.focus(); } catch (_) { /* 忽略 */ } }
+        try { sync2Host(v.getValue()); } catch (_) { /* 忽略同步异常 */ }
+      }
+    }
+  }
+
+  /* 暴露纯 DOM 块级插入/删除助手到 window.__vdBlock（jsdom 回归断言用），不改业务路径 */
+  window.__vdBlock = {
+    irInsertAbove: irInsertAbove,
+    isEmptyLine: isEmptyLine,
+    blockRootOf: blockRootOf,
+    caretAtBlockStart: caretAtBlockStart,
+    handleIrDeleteKeydown: handleIrDeleteKeydown,
+  };
 
   /** 取单元格在其所在行中的列索引
    * @param {HTMLElement} row   行元素（tr）
@@ -266,7 +425,7 @@
     return item;
   }
 
-  /** 关闭 IR 表格右键菜单 */
+  /** 关闭 IR 右键菜单（表格/代码块共用同一菜单容器元素） */
   function closeIrTableMenu() {
     const menu = document.getElementById('ed-ir-table-menu');
     if (menu) menu.remove();
@@ -274,30 +433,18 @@
     if (backdrop) backdrop.remove();
   }
 
-  /** 显示 IR 表格右键菜单（靠近边缘自动翻转防溢出）
+  /** 通用 IR 右键菜单展示（定位 + 遮罩 + 图标刷新；靠近边缘自动翻转防溢出）
    * @param {number} x 鼠标 X
    * @param {number} y 鼠标 Y
-   * @param {boolean} isHeader 是否光标在表头行（表头行不提供「上方插入行」「删除该行」） */
-  function showIrTableMenu(x, y, isHeader) {
+   * @param {Array<{label:string,icon:string,action:Function}>} items 菜单项 */
+  function showIrMenu(x, y, items) {
     closeIrTableMenu();
     const menu = document.createElement('div');
     menu.id = 'ed-ir-table-menu';
-    menu.style.cssText = 'position:fixed;z-index:180;min-width:150px;padding:6px;'
+    menu.style.cssText = 'position:fixed;z-index:180;min-width:160px;padding:6px;'
       + 'background:var(--note-surface-2,#fff);border:1px solid var(--note-border,#e0e0e0);'
       + 'border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.16);';
-    const defs = [
-      ['在上方插入行', 'arrow-up', 'row', 'before'],
-      ['在下方插入行', 'arrow-down', 'row', 'after'],
-      ['在左侧插入列', 'arrow-left', 'col', 'before'],
-      ['在右侧插入列', 'arrow-right', 'col', 'after'],
-      ['删除该行', 'unlink', 'row', 'delete'],
-      ['删除该列', 'columns', 'col', 'delete'],
-    ];
-    defs.forEach(function (d) {
-      if (isHeader && (d[2] + ':' + d[3] === 'row:before')) return; // 表头行不可在上方插入
-      if (isHeader && (d[2] + ':' + d[3] === 'row:delete')) return; // 表头行不可删除
-      menu.appendChild(irTableMenuItem(d[0], d[1], function () { irTableBarAction(d[2], d[3]); }));
-    });
+    items.forEach(function (it) { menu.appendChild(irTableMenuItem(it.label, it.icon, it.action)); });
     document.body.appendChild(menu);
     const r = menu.getBoundingClientRect();
     menu.style.left = Math.min(Math.max(8, x), Math.max(8, window.innerWidth - r.width)) + 'px';
@@ -311,6 +458,40 @@
     overlay.addEventListener('scroll', closeIrTableMenu, true);
     document.body.appendChild(overlay);
     if (typeof refreshIcons === 'function') { try { refreshIcons(); } catch (_) { /* 忽略 */ } }
+  }
+
+  /** 显示 IR 表格右键菜单（靠近边缘自动翻转防溢出）
+   * @param {number} x 鼠标 X
+   * @param {number} y 鼠标 Y
+   * @param {boolean} isHeader 是否光标在表头行（表头行不提供「上方插入行」「删除该行」） */
+  function showIrTableMenu(x, y, isHeader) {
+    const items = [];
+    const defs = [
+      ['在表格上方插入空行', 'arrow-up-to-line', 'block', 'before'],
+      ['在上方插入行', 'arrow-up', 'row', 'before'],
+      ['在下方插入行', 'arrow-down', 'row', 'after'],
+      ['在左侧插入列', 'arrow-left', 'col', 'before'],
+      ['在右侧插入列', 'arrow-right', 'col', 'after'],
+      ['删除该行', 'unlink', 'row', 'delete'],
+      ['删除该列', 'columns', 'col', 'delete'],
+    ];
+    defs.forEach(function (d) {
+      if (isHeader && (d[2] + ':' + d[3] === 'row:before')) return; // 表头行不可在上方插入
+      if (isHeader && (d[2] + ':' + d[3] === 'row:delete')) return; // 表头行不可删除
+      items.push({ label: d[0], icon: d[1], action: function () { irTableBarAction(d[2], d[3]); } });
+    });
+    showIrMenu(x, y, items);
+  }
+
+  /** 显示 IR 代码块右键菜单（当前仅「在代码块上方插入空行」）
+   * @param {number} x 鼠标 X
+   * @param {number} y 鼠标 Y */
+  function showIrCodeMenu(x, y) {
+    showIrMenu(x, y, [{
+      label: '在代码块上方插入空行',
+      icon: 'arrow-up-to-line',
+      action: function () { irInsertAbove(irCtxCode); },
+    }]);
   }
 
   /** 右键命中探测：落在 ir 编辑区某表格单元格内
@@ -328,12 +509,32 @@
     return table ? { table: table, tr: tr, td: td } : null;
   }
 
+  /** 右键命中探测：落在 ir 编辑区某代码块（.vditor-ir__node 包装的 <pre><code>）内
+   * @param {Event}  e 右键事件
+   * @param {Object} v vditor 内部对象（vdInst.vditor）
+   * @returns {HTMLElement|null} 代码块块级元素 */
+  function irCodeAtRightClick(e, v) {
+    const node = e.target;
+    if (!node || !v.ir || !v.ir.element || !v.ir.element.contains(node)) return null;
+    const el = (node.nodeType === 1) ? node : (node.parentElement || null);
+    if (!el || typeof el.closest !== 'function') return null;
+    const pre = el.closest('pre');
+    if (!pre || !v.ir.element.contains(pre)) return null;
+    // 归一到带 data-block="0" 的代码块包装节点（vditor IR 用 <div class="vditor-ir__node">）
+    return pre.closest('[data-block="0"]') || pre;
+  }
+
   /** 执行行/列操作并同步保存（右键菜单动作）
-   * @param {string} axis 'row'|'col'
+   * @param {string} axis 'row'|'col'|'block'
    * @param {string} op   'before'|'after'|'delete' */
   function irTableBarAction(axis, op) {
     if (!irCtxHit || !vdInst) return;
     const hit = irCtxHit;
+    if (axis === 'block') {
+      irCtxHit = null;
+      irInsertAbove(hit.table);   // 在表格上方插入空行（含同步保存）
+      return;
+    }
     const v = vdInst.vditor;
     const idx = irTableCellIndex(hit.tr, hit.td);
     if (axis === 'row') {
@@ -349,18 +550,30 @@
     if (v.ir && v.ir.element) { try { v.ir.element.focus(); } catch (_) { /* 忽略 */ } }
   }
 
-  /* IR 表格右键：落在表格单元格内时拦截默认菜单，弹表格操作菜单；切非 IR 或非表格时放行默认 */
+  /* IR 右键：落在表格单元格内弹表格菜单；落在代码块内弹代码块菜单；其余（切 IR 或非块）放行默认 */
   document.addEventListener('contextmenu', function (e) {
-    if (!vdInst || vdMode !== 'ir') { irCtxHit = null; return; }
+    if (!vdInst || vdMode !== 'ir') { irCtxHit = null; irCtxCode = null; return; }
     const v = vdInst.vditor;
     const hit = irTableAtRightClick(e, v);
-    if (!hit) { irCtxHit = null; return; }
-    e.preventDefault();
-    irCtxHit = hit;
-    const isHeader = hit.tr && hit.tr.parentNode && hit.tr.parentNode.nodeName === 'THEAD';
-    showIrTableMenu(e.clientX, e.clientY, isHeader);
+    if (hit) {
+      e.preventDefault();
+      irCtxHit = hit; irCtxCode = null;
+      const isHeader = hit.tr && hit.tr.parentNode && hit.tr.parentNode.nodeName === 'THEAD';
+      showIrTableMenu(e.clientX, e.clientY, isHeader);
+      return;
+    }
+    const code = irCodeAtRightClick(e, v);
+    if (code) {
+      e.preventDefault();
+      irCtxCode = code; irCtxHit = null;
+      showIrCodeMenu(e.clientX, e.clientY);
+      return;
+    }
+    irCtxHit = null; irCtxCode = null;
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeIrTableMenu(); });
+  // 捕获阶段拦截 IR 光标下的 Backspace/Delete，修正「空行删不掉」与「块前删除空行」问题
+  document.addEventListener('keydown', handleIrDeleteKeydown, true);
 
   /** 构建 vditor 实例（核心装配）。在 vdInst 存在时先销毁保留内容。
    * 说明：edit/split/preview 用 setPreviewMode 切换，无需重建；仅 ir↔sv 切换才重建。 */

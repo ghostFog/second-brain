@@ -406,6 +406,18 @@ function testVditorLocalCdn() {
   });
 }
 
+/* ---- Bug: Tailwind v4 `border-b/t/l/r` 单类不显示实线 ----
+ * Tailwind v4 browser 版中，`border-b` 仅生成 `border-bottom-style: var(--tw-border-style)`，
+ * 若 `--tw-border-style` 未定义，回退到 none → 不显示边框。修复：在 base.css :root 默认`--tw-border-style:solid`。
+ * 断言：base.css 根含该变量默认值。
+ * 作者: 火 冰 */
+function testDefaultBorderStyle() {
+  const css = fs.readFileSync(path.join(__dirname, 'css', 'base.css'), 'utf8');
+  assert(css.indexOf('--tw-border-style') !== -1
+    && /--tw-border-style:\s*solid/.test(css),
+    'base.css :root 默认 --tw-border-style: solid，解决 border-b/t/l/r 单类边框消失问题');
+}
+
 /* ---- Bug-030b: openNote 异步装载间隙，edCurrent 不得提前指向新文件 ----
  * openNote 的 noteStore.read 是异步 await；若 edCurrent=path 在函数开头同步设置，
  * 则「点击新文件」到「新内容渲染进 vditor」之间编辑器仍显示旧文件，此时 vditor 的
@@ -572,14 +584,121 @@ function testIrTableBarHelpers() {
   assert(hdrDel.querySelectorAll('thead tr').length === 1, 'IR表: 表头行不可删除');
 }
 
+/* ---- Bug: IR 模式「表格/代码块前无法插入新行」→ __vdBlock.irInsertAbove ----
+ * 表格/代码块作为文档第一个元素时，光标无法落到块前，此前没有插入入口。
+ * 修复：右键表格/代码块弹菜单「在上方插入空行」，在带 data-block="0" 的块根前
+ *       插入 `<p data-block="0">ZWSP<wbr></p>`，再同步保存。
+ * 断言：暴露 __vdBlock.irInsertAbove 助手，且其以 insertBefore 插 <p>、用 [data-block="0"]
+ *       归一表格/代码块根，右侧菜单含表格/代码块两项「上方插入空行」。
+ * 作者: 火 冰 */
+function testIrBlockAbove() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  W.document.head.appendChild(s);
+  assert(W.__vdBlock && typeof W.__vdBlock.irInsertAbove === 'function',
+    'editor-vditor.js 暴露 __vdBlock 块级插入助手');
+
+  const src = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  assert(/root\.parentNode\.insertBefore/.test(src) && /closest\(['"]\[data-block="0"\]/.test(src),
+    '上方插入空行：以 [data-block="0"] 归一表格/代码块根，并 insertBefore 插 <p data-block="0">');
+  assert(src.indexOf('在代码块上方插入空行') !== -1 && src.indexOf('在表格上方插入空行') !== -1,
+    '右侧菜单含「上方插入空行」（表格与代码块各一项）：提供了块前插入的 UI 入口');
+}
+
+/* ---- Bug: 有序列表序号丢失（Tailwind preflight 重置 ol/ul，vditor 未恢复 ol）----
+ * Tailwind preflight 将 ol/ul/menu 统一 list-style:none，vditor index.css 只恢复了 ul，
+ * 未恢复 ol，导致有序列表 1. 2. 3. 序号消失。
+ * 修复：app.css 在 #ed-vditor 作用域恢复 ol 的 decimal。
+ * 断言：app.css 含该恢复规则（防 preflight 注入再次吞掉 ol 序号）。
+ * 作者: 火 冰 */
+function testOrderedListCss() {
+  const css = fs.readFileSync(path.join(__dirname, 'css', 'app.css'), 'utf8');
+  const hasRestore = css.indexOf('#ed-vditor .vditor-reset ol') !== -1
+    && /list-style-type:\s*decimal/.test(css);
+  assert(hasRestore, '有序列表: app.css 恢复 #ed-vditor 内 ol 的 decimal 序号样式');
+}
+
+/* ---- Bug: 待办列表切换视图/重渲染后不得退化为字面 ".[]" / "[]" ----
+ * 复现点：Lute 的 IR(WYSIWYG) 转换必须把 `- [ ]` 输出为带 vditor-task 的 <input type="checkbox">，
+ *         且 VditorIRDOM2Md 往返仍保留待办标记，否则重开后会渲染成普通列表的 "[ ]" 文本。
+ * 经实机复测：当前解析器在插入/切预览/切所见即所得/重渲染下均保持 checkbox，此处以 Lute
+ * 序列化往返作确定性门禁，防后续 misconfigure 导致退化。
+ * 作者: 火 冰 */
+function testTaskListRoundTrip() {
+  const vm = require('vm');
+  const fm = require('fs');
+  const ctx = { require: require, console: console, process: process };
+  ctx.global = ctx;
+  ctx.addEventListener = function () {};
+  ctx.setTimeout = function () { return 0; };
+  ctx.clearTimeout = function () {};
+  vm.createContext(ctx);
+  try {
+    vm.runInContext(fm.readFileSync(
+      path.join(__dirname, 'node_modules', 'vditor', 'dist', 'js', 'lute', 'lute.min.js'), 'utf8'), ctx);
+  } catch (e) {
+    assert(false, '待办往返: 无法加载 lute.min.js: ' + e.message);
+    return;
+  }
+  const lute = ctx.Lute.New();
+  const ir = lute.Md2VditorIRDOM('- [ ] 任务A\n- [x] 完成B');
+  const hasCheckbox = /vditor-task/.test(ir) && /<input type="checkbox"/.test(ir);
+  const back = lute.VditorIRDOM2Md(ir);
+  const keepsTask = /\[[ xX]\]/.test(back);
+  assert(hasCheckbox, '待办往返: Lute IR 转换输出 vditor-task + checkbox（不会渲染成字面 [ ]）');
+  assert(keepsTask, '待办往返: IR→MD 序列化保留待办标记 [ ]（重开后仍为待办）');
+}
+
+/* ---- Bug: IR 模式空行删不掉 / 块前 Backspace 不删上一空行 ----
+ * vditor 对 `<p data-block="0">ZWSP<wbr></p>` 空行按 Backspace 只删 ZWSP 字符、不删整行；
+ * 表格/代码块在最前面无法在其上删除空行。新增 isEmptyLine/blockRootOf/caretAtBlockStart/
+ * removeEmptyLine/handleIrDeleteKeydown，捕获阶段拦截 Backspace/Delete：
+ * 规则一：空行上 Backspace/Delete 删除整行；规则二：块最前 Backspace 且上一行是空行则删除之，
+ * 非空行放行给 vditor 原生跳转。
+ * 断言：暴露上述助手，isEmptyLine 正确识别 ZWSP 空段落。
+ * 作者: 火 冰 */
+function testIrEmptyLineDelete() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  W.document.head.appendChild(s);
+  assert(W.__vdBlock && typeof W.__vdBlock.isEmptyLine === 'function'
+    && typeof W.__vdBlock.handleIrDeleteKeydown === 'function',
+    'IR空行: __vdBlock 暴露 isEmptyLine/handleIrDeleteKeydown');
+
+  // isEmptyLine 空段落识别（用 jsdom window 内的元素测试，避免污染 Node 全局）
+  const p = W.document.createElement('p');
+  p.setAttribute('data-block', '0');
+  p.appendChild(W.document.createTextNode('\u200b')); // ZWSP 空行
+  p.appendChild(W.document.createElement('wbr'));
+  assert(W.__vdBlock.isEmptyLine(p) === true, 'IR空行: ZWSP 空段落 isEmptyLine=true');
+  p.appendChild(W.document.createTextNode('x'));
+  assert(W.__vdBlock.isEmptyLine(p) === false, 'IR空行: 含文本段落 isEmptyLine=false');
+
+  const src = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  assert(src.indexOf('块最前 Backspace') !== -1, 'IR空行: 源码含块最前 Backspace 删除上一空行逻辑');
+  assert(/addEventListener\(['"]keydown['"],\s*handleIrDeleteKeydown,\s*true\)/.test(src),
+    'IR空行: 捕获阶段绑定 handleIrDeleteKeydown 拦截 Backspace/Delete');
+}
+
 testLogBadge();
 testPluginLoad();
 testCodeLangGhost();
 testThemeSavedSnapshot();
 testVditorLocalCdn();
+testDefaultBorderStyle();
 testVditorToolbarValid();
 testFullscreenDevtoolsKeybinds();
 testIrTableBarHelpers();
+testIrBlockAbove();
+testOrderedListCss();
+testTaskListRoundTrip();
+testIrEmptyLineDelete();
 testVditorBridge();
 Promise.all([
   testCodeHighlightCopyBtn(),

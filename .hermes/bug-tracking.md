@@ -64,6 +64,9 @@
 | CD-21 | 必须 | Electron 桌面应用必须配置 `app.requestSingleInstanceLock()`：未获得锁的实例直接 `app.quit()`（不并发建窗），获得锁的实例监听 `second-instance` 恢复既有窗口；且 `whenReady` 开头用 `if (!gotTheLock) return;` 守卫。否则托盘常驻/残留后再次启动会与旧实例并发，渲染进程争用资源造成「再启动十几秒卡顿」 | Bug-033 |
 | CD-22 | 必须 | 第三方编辑器（vditor 等）资源优先用 **npm 运行时依赖 + `cdn` 直接指向 `node_modules/<pkg>`**（npm 包自带官方 `dist/` 结构、electron-builder 随分发），**禁止在仓库内手动 vendor 复制大体积 `dist`**：手工复制必然伴随「把仓库文件搬进 dist」这类迁移，git 会把它识别为删除旧路径 + 新增全新文件，历史无法 `--follow` 追溯、又造成新旧布局双重占库；静态 vendor 副本与 npm 包重复冗余易脱节。资源必须本地化，不得依赖 unpkg 等外网 CDN | Bug-031 |
 | CD-23 | 必须 | 注入 `<head>` 的自定义主题/覆盖 CSS，选择器特异度必须 ≥ 第三方编辑器（vditor 等）自带规则（如加 `html body` 前缀），或每次应用把注入 `<style>` 重挂到 `<head>` 末尾——否则会被引擎运行时**动态后加载**的同特异度样式覆盖，覆盖失效（编辑器落回默认纯白、主题不统一） | Bug-034 |
+| CD-24 | 必须 | 引入 Tailwind 等 preflight（全局重置样式）时，凡它重置掉的排版默认值（`ol/ul` 的 `list-style` 等），第三方编辑器（vditor 等）自带 CSS 未恢复的必须按容器作用域显式恢复（如 `#ed-vditor .vditor-reset ol{list-style-type:decimal}`），并补回归断言；对待办列表类渲染以 Lute 序列化往返 + 各编辑模式实机作门禁，防退化为普通 `[ ]` 文本 | Bug-035 / Bug-036 / Bug-037 |
+| CD-25 | 必须 | 自定义第三方编辑器（vditor 等）键盘行为（Backspace/Delete/Enter 等）时，用捕获阶段监听（`document.addEventListener('keydown', h, true)`）并在命中场景 `preventDefault`+`stopImmediatePropagation`，不与引擎自身 keydown/undo 冲突；对 ZWSP 空段落（`<p data-block="0">ZWSP<wbr></p>`）的删除须按「整行」语义处理（删段落并定位光标到相邻块），而非仅删文本节点 | Bug-038 |
+| CD-26 | 必须 | 使用 Tailwind v4 browser 版的方向性边界类 `border-b/t/l/r` 时，须确保 `--tw-border-style` 有全局默认值（如 `:root{--tw-border-style:solid}`）或同时上 `border-solid` 类，否则 `border-*-style` 解成 `var()` 未定义→回退 none 不显示边框 | Bug-039 |
 
 ## 维护要求
 

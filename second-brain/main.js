@@ -1222,6 +1222,12 @@ ipcMain.handle('ai:listIndex', async () => await aiEngine.listIndex());
 /* 获取当前提供方可用的生成模型列表 */
 ipcMain.handle('ai:listModels', () => aiEngine.listModels());
 
+/* 从 Ollama 服务拉取已安装模型列表（添加/编辑生成模型时选择用） */
+ipcMain.handle('ai:listOllamaModels', (_e, baseUrl) => aiEngine.listOllamaModels(baseUrl));
+
+/* 管理 Ollama 模型：加载/卸载/上下文长度（keep_alive + num_ctx） */
+ipcMain.handle('ai:manageOllamaModel', (_e, p) => aiEngine.manageOllamaModel(p || {}));
+
 /* 加载本地嵌入模型（返回最新状态） */
 ipcMain.handle('ai:loadEmbedding', async () => {
   await aiEngine.loadEmbedding();
