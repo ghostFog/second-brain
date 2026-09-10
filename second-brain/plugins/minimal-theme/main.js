@@ -84,6 +84,8 @@
   var btnBound = false;
   /** 悬浮延迟隐藏定时器 */
   var hideTimer = null;
+  /** 插件自身在切换宿主明暗（setHostTheme）时的忙标志，供宿主明暗观察者区分「插件操作」与「外部(设置-外观)变更」 */
+  var mtHostBusy = false;
 
   /**
    * 读取插件设置；优先用宿主 PluginAPI.getSetting，缺失时回退 localStorage
@@ -270,6 +272,10 @@
     return [
       // 壳：背景/表面/文字 —— 数值映射当前主题色
       'html body .vditor, html body .vditor .vditor-content, html body .vditor .vditor-sv, html body .vditor .vditor-ir, html body .vditor .vditor-wysiwyg, html body .vditor .vditor-preview, html body .vditor .vditor-reset { background-color: var(--note-background); color: var(--note-ink); }',
+      // 覆盖 vditor 自己的边框变量：.vditor--dark 内 --border-color 固定近黑(#141414)，
+      // 会让编辑器外框(1px solid var(--border-color))在浅色配皮下呈黑框且不受主题控制。
+      // 这里把它挂到主题 --note-border，深浅配色下均随主题走。作者: 火 冰
+      'html body .vditor { --border-color: var(--note-border); --resize-icon-color: var(--note-border); }',
       'html body .vditor .vditor-toolbar { background-color: var(--note-surface); border-bottom-color: var(--note-border); }',
       'html body .vditor-toolbar__item { color: var(--note-ink-3); }',
       'html body .vditor-toolbar__item:hover, html body .vditor-toolbar__item--active { background-color: var(--note-surface-2); color: var(--note-brand); }',
@@ -359,6 +365,10 @@
     // 先清掉所有主题 class（mt-theme-1..4 + mt-theme-custom）与自定义内联变量
     for (var i = 1; i <= PRESET_COUNT; i++) root.classList.remove(CLASS_PREFIX + i);
     root.classList.remove(CLASS_PREFIX + 'custom');
+    // 清掉残留的配色内联变量（内联优先级高于宿主 .dark/.light 类规则）：
+    // 切到宿主明暗档（深/浅/跟随系统，id='0'）或停用时若不清理，旧配色变量仍占位，
+    // 会盖死宿主外观深浅切换——即「设置-外观-主题模式没反应」的根因。作者: 火 冰
+    clearCustomVars();
     var applied = applyThemeVars(id);
     if (id >= '1' && id <= String(PRESET_COUNT)) {
       root.classList.add(CLASS_PREFIX + id);
@@ -406,7 +416,8 @@
   function setHostTheme(mode) {
     localStorage.setItem(CYCLE_STEP_KEY, mode);
     if (PluginAPI && PluginAPI.theme && typeof PluginAPI.theme.set === 'function') {
-      try { PluginAPI.theme.set(mode); } catch (_) { /* 忽略异常 */ }
+      mtHostBusy = true;
+      try { PluginAPI.theme.set(mode); } finally { mtHostBusy = false; }
     }
   }
 
@@ -461,7 +472,23 @@
   }
 
   /**
-   * 惰性构建下拉面板（首次悬浮时创建，后续复用）
+   * 生成下拉面板完整 HTML（主题分组 + 宿主明暗三态 + 配色列表）。每次显示时重建，
+   * 保证「当前选中」的对勾位置始终与实时状态一致（排它单选、选中打钩）。作者: 火 冰
+   * @returns {string} HTML
+   */
+  function dropdownHTML() {
+    var colorItems = THEMES.map(function (t) { return itemHTML(t.id, t.name); });
+    readCustoms().forEach(function (t) { colorItems.push(itemHTML(t.id, t.name)); });
+    return '<div style="padding:6px 10px;font-weight:600;color:var(--note-ink-3,#888);' +
+      'border-bottom:1px solid var(--note-border,#eee);margin-bottom:4px;">Theme</div>' +
+      '<div style="padding:4px 10px;font-size:12px;color:var(--note-ink-3,#888);">Host 明暗</div>' +
+      HOST_THEMES.map(function (t) { return hostItemHTML(t.mode, t.name, t.icon); }).join('') +
+      '<div style="padding:4px 10px;font-size:12px;color:var(--note-ink-3,#888);margin-top:4px;">配色</div>' +
+      colorItems.join('');
+  }
+
+  /**
+   * 惰性构建下拉面板（首次悬浮时创建，后续复用外壳；内容在每次显示时刷新）
    * @returns {Element} 下拉面板元素
    */
   function ensureDropdown() {
@@ -474,14 +501,7 @@
       'border:1px solid var(--note-border, #ddd);border-radius:10px;' +
       'box-shadow:var(--note-shadow-2, 0 8px 24px -8px rgba(0,0,0,0.2));' +
       'font-size:13px;line-height:1.4;';
-    var colorItems = THEMES.map(function (t) { return itemHTML(t.id, t.name); });
-    readCustoms().forEach(function (t) { colorItems.push(itemHTML(t.id, t.name)); });
-    el.innerHTML = '<div style="padding:6px 10px;font-weight:600;color:var(--note-ink-3,#888);' +
-      'border-bottom:1px solid var(--note-border,#eee);margin-bottom:4px;">Theme</div>' +
-      '<div style="padding:4px 10px;font-size:12px;color:var(--note-ink-3,#888);">Host 明暗</div>' +
-      HOST_THEMES.map(function (t) { return hostItemHTML(t.mode, t.name, t.icon); }).join('') +
-      '<div style="padding:4px 10px;font-size:12px;color:var(--note-ink-3,#888);margin-top:4px;">配色</div>' +
-      colorItems.join('');
+    el.innerHTML = dropdownHTML();
     document.body.appendChild(el);
     // 面板内悬浮也保持打开：离开按钮进入面板不关闭
     el.addEventListener('mouseenter', cancelHide);
@@ -534,6 +554,8 @@
   function showDropdown(btn) {
     if (!hoverEnabled()) return;
     var el = ensureDropdown();
+    // 每次显示都重建内容：让「当前选中」对勾紧随实时主题（深/浅/跟随系统与配色的排它单显）作者: 火 冰
+    el.innerHTML = dropdownHTML();
     el.style.display = 'block';
     var r = btn.getBoundingClientRect();
     var w = el.offsetWidth || 180;
@@ -996,4 +1018,21 @@
     }
   }
   function injectGalleryLater() { injectSettingsGallery(document); }
+
+  /* 宿主「外观-主题模式」变更（设置-外观主题卡片 / 宿主 toggle）→ 遵循排它：清掉插件钉住的配色内联变量，
+   * 保证深/浅/跟随系统真正生效。根因：配色内联变量写进 <html>，优先级高于宿主 .dark/.light 类规则，
+   * 会盖死宿主明暗；而「设置-外观」走宿主 setTheme 不经插件 applyTheme，需在此兜底清理。
+   * 仅观察 data-theme / data-theme-mode 属性（宿主题模式变更才写），配色应用不触碰，故不会误清。
+   * 作者: 火 冰 */
+  if (typeof MutationObserver !== 'undefined' && document.documentElement) {
+    var hostRoot = document.documentElement;
+    var hostObs = new MutationObserver(function () {
+      if (mtHostBusy) return; // 插件自身 setHostTheme 已按流程清配色，忽略本次属性变化
+      clearCustomVars();
+      for (var i2 = 1; i2 <= PRESET_COUNT; i2++) hostRoot.classList.remove(CLASS_PREFIX + i2);
+      hostRoot.classList.remove(CLASS_PREFIX + 'custom');
+      localStorage.removeItem(LS_KEY);
+    });
+    hostObs.observe(hostRoot, { attributes: true, attributeFilter: ['data-theme', 'data-theme-mode'] });
+  }
 })();

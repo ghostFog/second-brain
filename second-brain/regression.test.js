@@ -476,6 +476,20 @@ function testThemeSavedSnapshot() {
   assert(html.indexOf("plugin:minimal-theme:defaultTheme") !== -1
     && html.indexOf("localStorage.getItem('note-app:minimal-theme')") < html.indexOf("plugin:minimal-theme:defaultTheme"),
     'Bug-045: 首帧 head 读取默认配色方案兜底（一次渲染，插件不再二次设置）');
+
+  // vditor 黑边框：.vditor--dark 内 --border-color 固定近黑(#141414)，会让编辑器外框(1px solid var(--border-color))
+  // 在浅色配皮下呈黑框且不受主题控制。插件须把它挂到主题 --note-border。/作者: 火 冰
+  assert(pjs45.indexOf('html body .vditor { --border-color: var(--note-border)') !== -1,
+    '编辑器外观：插件注入样式覆盖 vditor --border-color → 边框随主题配色，不再出现黑框');
+
+  // 外观-主题模式：宿主「设置-外观」的深色/浅色/跟随系统走 setTheme，不经插件 applyTheme；
+  // 而配色内联变量写进 <html> 内联优先级高于宿主 .dark/.light 类规则，会盖死宿主明暗切换。
+  // 插件须监听宿主明暗属性(data-theme/data-theme-mode)变化时清掉钉住的配色变量，宿主明暗才真正生效。
+  const obsAt = pjs45.indexOf('new MutationObserver(function () {');
+  const obsBody = obsAt >= 0 ? pjs45.slice(obsAt) : '';
+  assert(/attributeFilter:\s*\['data-theme', 'data-theme-mode'\]/.test(pjs45)
+    && obsAt >= 0 && obsBody.indexOf('clearCustomVars()') !== -1,
+    '外观-主题模式：插件监听宿主 data-theme 变更并清配色内联变量，宿主明暗不被配色盖死');
 })();
 
 /* ---- Bug-029: vditor 资源本地化，避免弱网下 unpkg CDN 拖慢编辑区渲染 ----

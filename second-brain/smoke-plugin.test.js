@@ -424,9 +424,12 @@ function testMinimalTheme() {
   assert(!V.document.documentElement.classList.contains('mt-theme-custom'), '点击宿主明暗项同时停用配色（主题二选一）');
   assert(dd.style.display === 'none', '点击宿主明暗项后面板隐藏');
 
-  // 重新悬浮以复用同一面板
+  // 重新悬浮以复用同一面板（showDropdown 会重建内容）——验证对勾跟随实时选中、且宿主三态排它单选
   btn.dispatchEvent(new V.MouseEvent('mouseenter'));
-  dd.style.display = 'block';
+  V.document.querySelector('.mt-theme-dropdown').style.display = 'block';
+  const hostChecked = () => Array.from(V.document.querySelectorAll('.mt-theme-item[data-mt-mode]'))
+    .filter(it => !it.querySelector('.mt-check').style.display.includes('none')).map(it => it.getAttribute('data-mt-mode'));
+  assert(hostChecked().join(',') === 'light', '重显后宿主明暗对勾跟随实时选中（浅色打钩，排它单选）');
 
   dd.querySelector('.mt-theme-item[data-mt-id="custom"]').click();
   const root = V.document.documentElement;
@@ -448,6 +451,8 @@ function testMinimalTheme() {
   V.__api.actions['cycle-theme']();                                     // 自定义 → 宿主深色（停配色）
   assert(V.__hostMode === 'dark', 'cycle 自定义→宿主深色（同一序列切宿主明暗）');
   assert(!V.document.documentElement.classList.contains('mt-theme-custom'), 'cycle 切宿主明暗同时停用配色');
+  assert(V.document.documentElement.style.getPropertyValue('--note-ink') === '',
+    'cycle 切宿主明暗清掉配色内联变量（宿主 .dark/.light 可接管外观，修复外观-主题模式无效果）');
   V.__api.actions['cycle-theme']();                                     // 深色 → 浅色
   assert(V.__hostMode === 'light', 'cycle 宿主深色→浅色（档位延续，不再回跳配色）');
   V.__api.actions['cycle-theme']();                                     // 浅色 → 跟随系统
