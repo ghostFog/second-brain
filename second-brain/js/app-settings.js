@@ -120,6 +120,8 @@
 
   /* 各分类面板 HTML */
   function settingsPanelHtml(cat) {
+    // 是否具备 Ollama 运行状态管理能力（桌面桥接才有），用于生成模型刷新频率等 UI
+    const canManage = typeof (window.noteDesktop && window.noteDesktop.ai && window.noteDesktop.ai.manageOllamaModel) === 'function';
     if (cat === '常规') {
       return settingsPanel(cat, CATS[cat],
         '<section class="settings-group">'
@@ -212,7 +214,10 @@
         + '</section>'
         + '<section class="settings-group" id="ai-sec-gen">'
         + '<div class="flex items-center justify-between mb-3"><h3 class="text-body font-semibold" style="color:var(--note-ink);">生成模型</h3>'
-        + '<button class="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[12px] font-medium" data-ai-saction="add" style="background:var(--note-brand-600); color:#FFFFFF;"><i data-lucide="plus" class="w-3.5 h-3.5"></i>添加模型</button></div>'
+        + '<div class="flex items-center gap-2">'
+        + (canManage ? '<label class="flex items-center gap-1 text-[11px] shrink-0" style="color:var(--note-ink-3);" title="自动刷新各组模型的运行状态（加载/卸载按钮随状态显示）">刷新频率<input type="number" min="1" max="3600" data-ai-cfg="modelRefreshSec" class="w-14 px-1.5 py-1 text-[11px] nums text-center rounded-md outline-none" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);">秒</label>' : '')
+        + '<button class="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[12px] font-medium" data-ai-saction="add" style="background:var(--note-brand-600); color:#FFFFFF;"><i data-lucide="plus" class="w-3.5 h-3.5"></i>添加模型</button>'
+        + '</div></div>'
         + '<div id="ai-model-list" class="rounded-lg border divide-y" style="border-color:var(--note-border);"></div>'
         + '<p class="text-caption mt-2" style="color:var(--note-ink-3);">支持配置多个生成模型（本地 Ollama / 远程 OpenAI 兼容），在问答页顶部切换。列表展示供应商与模型名称。</p>'
         + '</section>'
@@ -229,9 +234,7 @@
         + '</div></div>'
         + '<button class="flex items-center justify-center gap-1.5 py-2.5 rounded-md text-[13px] font-medium w-full" data-ai-saction="rebuild" style="background:var(--note-brand-600); color:#FFFFFF;"><i data-lucide="refresh-cw" class="w-4 h-4"></i>重建索引</button>'
         + '<button class="flex items-center justify-center gap-1.5 py-2.5 rounded-md text-[13px] font-medium w-full border mt-2" data-ai-saction="save" style="border-color:var(--note-border); color:var(--note-ink-2); background:var(--note-surface-2);"><i data-lucide="save" class="w-4 h-4"></i>保存配置</button>'
-        + '</section>'
-        // 底部占位：保证「知识库索引」等靠后区块可被侧边栏二级菜单滚动对齐到容器顶部
-        + '<div class="h-96" aria-hidden="true"></div>');
+        + '</section>');
     }
     return '';
   }
@@ -311,9 +314,14 @@
     const idxEl = document.getElementById('ai-index-status');
     let aiModels = [];        // 生成模型列表状态
     let currentModelId = '';  // 当前选中模型 id
+    // Ollama 运行状态表：key = baseUrl + '\u0000' + model 名，value=true 表示正在运行
+    // 由 refreshOne/refreshAllGroups 按刷新频率（modelRefreshSec）轮询 /api/ps 更新
+    let runningMap = {};
     const PROV_LABEL = { ollama: '本地 Ollama', openai: '远程大模型' };
     // 是否具备 Ollama 加载/卸载/上下文管理能力（桌面桥接才有）
     const canManage = typeof ai.manageOllamaModel === 'function';
+    // 是否具备运行状态查询能力（桌面桥接才有）
+    const canTrack = typeof ai.listRunningModels === 'function';
 
     const collectLocal = function () {
       const cfg = {};
@@ -358,15 +366,18 @@
       const rowHtml = function (m) {
         const active = m.id === currentModelId;
         const isOllama = m.provider === 'ollama';
+        // 运行中：显示 卸载 按钮；未运行：显示 加载 按钮（由 /api/ps 轮询驱动 runningMap）
+        const isRunning = isOllama && !!runningMap[String(m.baseUrl || '') + '\u0000' + m.model];
         return '<div class="ai-model-row flex items-center gap-2 px-3 py-2.5" draggable="true" data-mid="' + esc(m.id) + '" style="border-color:var(--note-border); cursor:grab;">'
           + '<i data-lucide="grip-vertical" class="w-4 h-4 shrink-0" style="color:var(--note-ink-3);"></i>'
-          + '<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:' + (active ? 'var(--state-success)' : 'var(--note-ink-3)') + ';"></span>'
+          + '<span class="w-1.5 h-1.5 rounded-full shrink-0" title="' + (isRunning ? '运行中' : (active ? '当前使用' : '')) + '" style="background:' + ((isRunning || active) ? 'var(--state-success)' : 'var(--note-ink-3)') + ';"></span>'
           + '<div class="flex-1 min-w-0"><div class="text-[13px] truncate" style="color:var(--note-ink);">' + esc(m.model) + '</div>'
-          + '<div class="text-caption truncate" style="color:var(--note-ink-3);">' + (PROV_LABEL[m.provider] || m.provider) + '</div></div>'
+          + '<div class="text-caption truncate" style="color:var(--note-ink-3);">' + (PROV_LABEL[m.provider] || m.provider) + (isRunning ? ' · 运行中' : '') + '</div></div>'
           + (active ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style="background:rgba(124,58,237,0.15); color:var(--note-brand-400);">当前</span>' : '')
           + (isOllama && canManage ? '<input type="number" min="0" class="ai-model-ctx w-16 px-1 py-1 text-[11px] nums text-center rounded-md outline-none shrink-0" draggable="false" data-mid="' + esc(m.id) + '" value="' + (m.numCtx ? Number(m.numCtx) : '') + '" placeholder="ctx" title="上下文长度 num_ctx（留空=模型默认）" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink-3);">'
-            + '<button class="ai-model-load w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" draggable="false" data-mid="' + esc(m.id) + '" title="加载模型（常驻内存）"><i data-lucide="play" class="w-3.5 h-3.5"></i></button>'
-            + '<button class="ai-model-unload w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" draggable="false" data-mid="' + esc(m.id) + '" title="卸载模型（释放内存）"><i data-lucide="power" class="w-3.5 h-3.5"></i></button>'
+            + (isRunning
+                ? '<button class="ai-model-unload w-7 h-7 flex items-center justify-center rounded-md shrink-0" draggable="false" data-mid="' + esc(m.id) + '" title="卸载模型（释放内存）" style="color:#FFFFFF; background:var(--state-warning, #d97706);"><i data-lucide="power" class="w-3.5 h-3.5"></i></button>'
+                : '<button class="ai-model-load w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" draggable="false" data-mid="' + esc(m.id) + '" title="加载模型（常驻内存）"><i data-lucide="play" class="w-3.5 h-3.5"></i></button>')
             : '')
           + '<button class="ai-model-copy w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" draggable="false" data-mid="' + esc(m.id) + '" title="复制"><i data-lucide="copy" class="w-3.5 h-3.5"></i></button>'
           + '<button class="ai-model-edit w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" draggable="false" data-mid="' + esc(m.id) + '" title="编辑"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>'
@@ -377,11 +388,54 @@
         return '<div class="ai-model-group">'
           + '<div class="ai-model-group-head flex items-center justify-between px-3 py-1.5 text-[11px] font-medium" style="background:var(--note-surface-2); color:var(--note-ink-3); border-color:var(--note-border);">'
           + '<span class="truncate"><i data-lucide="server" class="w-3 h-3 inline mr-1"></i>' + esc(g.key) + '</span>'
-          + '<span class="nums shrink-0 ml-2">' + g.items.length + ' 个模型</span></div>'
+          + '<span class="flex items-center shrink-0 ml-2"><span class="nums">' + g.items.length + ' 个模型</span>'
+          + (canTrack && g.items.some(function (x) { return x.provider === 'ollama'; })
+              ? '<button class="ai-model-refresh w-6 h-6 flex items-center justify-center rounded hover:opacity-80" data-base-url="' + esc(g.key) + '" title="手动刷新该组运行状态"><i data-lucide="refresh-cw" class="w-3 h-3"></i></button>' : '')
+          + '</span></div>'
           + g.items.map(rowHtml).join('')
           + '</div>';
       }).join('');
       if (window.lucide && window.lucide.createIcons) window.lucide.createIcons({});
+    };
+
+    /* ---------- Ollama 运行状态刷新（按 baseUrl 分组轮询 GET /api/ps） ---------- */
+    /* 查询单个 Ollama 服务运行中的模型并更新 runningMap；服务不可达返回 false（保留旧状态） */
+    const refreshOne = function (baseUrl) {
+      if (!baseUrl || !canTrack) return Promise.resolve(false);
+      return ai.listRunningModels(baseUrl).then(function (r) {
+        const list = (r && Array.isArray(r.models)) ? r.models : [];
+        // 先清空该组旧状态，再按本次结果标记
+        const prefix = String(baseUrl) + '\u0000';
+        Object.keys(runningMap).forEach(function (k) { if (k.indexOf(prefix) === 0) delete runningMap[k]; });
+        list.forEach(function (md) { if (md && md.name) runningMap[prefix + md.name] = true; });
+        return true;
+      }).catch(function () { return false; }); // 服务不可达/超时：保留旧状态，静默
+    };
+    /* 刷新全部 Ollama 组（去重 baseUrl），完成后若列表仍挂载则重绘（运行中→卸载/未运行→加载） */
+    const refreshAllGroups = function () {
+      const urls = [];
+      aiModels.forEach(function (m) {
+        if (m.provider === 'ollama' && m.baseUrl && urls.indexOf(m.baseUrl) === -1) urls.push(m.baseUrl);
+      });
+      if (!urls.length) return Promise.resolve();
+      return Promise.all(urls.map(refreshOne)).then(function () {
+        if (document.getElementById('ai-model-list')) renderModelList();
+      });
+    };
+    /* 启动/重启自动刷新定时器（频率 = modelRefreshSec 秒，默认 10）；面板切走后自动停止 */
+    const startAutoRefresh = function () {
+      if (window.__aiRefreshTimer) { clearInterval(window.__aiRefreshTimer); window.__aiRefreshTimer = null; }
+      const sec = Math.max(1, parseInt(document.querySelector('[data-ai-cfg="modelRefreshSec"]').value, 10) || 10);
+      const tick = function () {
+        if (!document.getElementById('ai-model-list')) { // 已切到其他分类：停止轮询
+          clearInterval(window.__aiRefreshTimer);
+          window.__aiRefreshTimer = null;
+          return;
+        }
+        refreshAllGroups();
+      };
+      tick(); // 进入面板立即刷新一次
+      window.__aiRefreshTimer = setInterval(tick, sec * 1000);
     };
 
     /* 持久化：本地字段 + 模型列表 + 当前模型 */
@@ -743,6 +797,8 @@
       aiModels = (cfg.models && cfg.models.slice()) || [];
       currentModelId = cfg.currentModelId || (aiModels.length ? aiModels[0].id : '');
       renderModelList();
+      // 配置加载完成（含持久化的刷新频率）后重启自动轮询定时器
+      if (canTrack) startAutoRefresh();
       // 「自动加载」开关：切换时即时加载/卸载嵌入模型（持久化 + 立即生效）
       const autoEl = root.querySelector('[data-ai-cfg="autoLoadEmbedding"]');
       if (autoEl) {
@@ -784,23 +840,42 @@
         persist().then(function () { showToast('上下文长度已更新'); }).catch(function () { showToast('保存失败'); });
       });
       listBox.addEventListener('click', function (e) {
+        const refBtn = e.target.closest('.ai-model-refresh');
         const loadBtn = e.target.closest('.ai-model-load');
         const unloadBtn = e.target.closest('.ai-model-unload');
         const copyBtn = e.target.closest('.ai-model-copy');
         const editBtn = e.target.closest('.ai-model-edit');
         const delBtn = e.target.closest('.ai-model-del');
-        if (loadBtn) {
+        if (refBtn) {
+          const key = refBtn.dataset.baseUrl;
+          const baseUrl = key === '(未设置地址)' ? '' : key;
+          if (!baseUrl) { showToast('该组未设置接口地址'); return; }
+          refreshOne(baseUrl).then(function (ok) {
+            if (ok) {
+              showToast('已刷新运行状态');
+              if (document.getElementById('ai-model-list')) renderModelList();
+            } else {
+              showToast('刷新失败，请检查接口地址');
+            }
+          });
+        } else if (loadBtn) {
           const it = aiModels.find(function (m) { return m.id === loadBtn.dataset.mid; });
           if (!it) return;
           showToast('正在加载模型：' + it.model + '…');
           ai.manageOllamaModel({ baseUrl: it.baseUrl, model: it.model, action: 'load', numCtx: it.numCtx })
-            .then(function (r) { showToast((r && r.action === 'load' ? '模型已加载（常驻内存）' : '模型加载完成') + '：' + it.model); })
+            .then(function (r) {
+              showToast((r && r.action === 'load' ? '模型已加载（常驻内存）' : '模型加载完成') + '：' + it.model);
+              refreshOne(it.baseUrl).then(function () { if (document.getElementById('ai-model-list')) renderModelList(); });
+            })
             .catch(function (e) { showToast('加载失败：' + ((e && e.message) || e)); });
         } else if (unloadBtn) {
           const it = aiModels.find(function (m) { return m.id === unloadBtn.dataset.mid; });
           if (!it) return;
           ai.manageOllamaModel({ baseUrl: it.baseUrl, model: it.model, action: 'unload' })
-            .then(function () { showToast('模型已卸载（释放内存）：' + it.model); })
+            .then(function () {
+              showToast('模型已卸载（释放内存）：' + it.model);
+              refreshOne(it.baseUrl).then(function () { if (document.getElementById('ai-model-list')) renderModelList(); });
+            })
             .catch(function (e) { showToast('卸载失败：' + ((e && e.message) || e)); });
         } else if (copyBtn) {
           duplicateModel(copyBtn.dataset.mid);
@@ -874,6 +949,18 @@
         }
       });
     });
+
+    // 刷新频率变更：重启自动刷新定时器（值随「保存配置」按钮持久化到配置）
+    const freqInp = root.querySelector('[data-ai-cfg="modelRefreshSec"]');
+    if (freqInp) {
+      freqInp.addEventListener('change', function () {
+        const v = Math.max(1, parseInt(this.value, 10) || 10);
+        this.value = v;
+        startAutoRefresh();
+      });
+    }
+    // 进入 AI 问答面板：立即刷新并启动自动轮询（无运行状态查询能力时跳过）
+    if (canTrack) startAutoRefresh();
   }
 
   /* 外观面板控件绑定 */
@@ -1368,25 +1455,33 @@
     // 初始分类高亮：视图标记 data-active="1" 的分类默认选中（无则不高亮任何分类）
     document.querySelectorAll('.settings-cat[data-active="1"]').forEach(c => c.classList.add('active'));
 
-    // 分类切换：含子菜单的分类点击时展开/收起二级菜单（箭头随 sub-open 旋转），其余分类点击时收起已展开的子菜单
+    // 分类切换：未激活分类点击 → 切换面板并展开其子菜单（若有）；已激活分类再点击 → 仅展开/收起二级菜单，不刷新内容
     document.querySelectorAll('.settings-cat').forEach(cat => {
       cat.addEventListener('click', function () {
-        document.querySelectorAll('.settings-cat').forEach(c => c.classList.remove('active'));
-        document.querySelectorAll('.settings-subcat').forEach(s => s.classList.remove('active'));
-        this.classList.add('active');
+        const isActive = this.classList.contains('active');
         const subs = document.querySelectorAll('.settings-subcat[data-cat="' + this.dataset.cat + '"]');
-        if (subs.length) {
+        if (!isActive) {
+          document.querySelectorAll('.settings-cat').forEach(c => c.classList.remove('active'));
+          document.querySelectorAll('.settings-subcat').forEach(s => s.classList.remove('active'));
+          this.classList.add('active');
+          // 切换时收起其余分类已展开的子菜单
+          document.querySelectorAll('.settings-cat.sub-open').forEach(c => {
+            if (c !== this) {
+              document.querySelectorAll('.settings-subcat[data-cat="' + c.dataset.cat + '"]').forEach(s => s.classList.add('hidden'));
+              c.classList.remove('sub-open');
+            }
+          });
+          if (subs.length) {
+            subs.forEach(s => s.classList.remove('hidden'));
+            this.classList.add('sub-open');
+          }
+          switchSettings(this.dataset.cat);
+        } else if (subs.length) {
+          // 已激活且含子菜单：仅 toggle 展开/收起，不重复渲染内容区
           const anyVisible = [...subs].some(s => !s.classList.contains('hidden'));
           subs.forEach(s => s.classList.toggle('hidden', anyVisible));
           this.classList.toggle('sub-open', !anyVisible);
         }
-        document.querySelectorAll('.settings-cat.sub-open').forEach(c => {
-          if (c !== this) {
-            document.querySelectorAll('.settings-subcat[data-cat="' + c.dataset.cat + '"]').forEach(s => s.classList.add('hidden'));
-            c.classList.remove('sub-open');
-          }
-        });
-        switchSettings(this.dataset.cat);
       });
     });
 
@@ -1402,22 +1497,27 @@
         document.querySelectorAll('.settings-subcat[data-cat="' + this.dataset.cat + '"]').forEach(s => s.classList.remove('hidden'));
         if (main) main.classList.add('sub-open');
         switchSettings(this.dataset.cat);
-        // 定位到锚点区块：直接按容器滚动偏移瞬时定位（不受异步内容填充/平滑动画打断），
-        // 并以 200ms 间隔循环校正直至区块贴近容器顶部（最多 12 次，覆盖内容异步撑高）
+        // 定位到锚点区块：目标区块上方可滚动空间足够（区块下方剩余高度 ≥ 可视高度）则对齐区块顶部；
+        // 剩余不足则滚到底（scrollTop = 全部高度 - 可视高度），不依赖底部占位撑高。
+        // 以 200ms 间隔持续校正（共 12 次 ≈2.4s，覆盖内容异步撑高）；滚到底或已贴近顶部即提前结束
         const scrollToTarget = function () {
           const target = document.getElementById(sub.dataset.scroll);
           const cont = document.getElementById('settings-content');
           if (!target || !cont) return false;
+          const maxScrollTop = cont.scrollHeight - cont.clientHeight;
           const y = target.getBoundingClientRect().top - cont.getBoundingClientRect().top + cont.scrollTop;
-          cont.scrollTop = Math.max(0, y - 32);
+          const want = Math.max(0, y - 32); // 区块对齐容器顶部所需滚动偏移（32 = 内容顶部 padding）
+          if (want >= maxScrollTop) { cont.scrollTop = maxScrollTop; return true; } // 剩余不足 → 滚到底
+          cont.scrollTop = want;
           const top = target.getBoundingClientRect().top - cont.getBoundingClientRect().top;
           return top >= 0 && top < 60;
         };
         scrollToTarget();
         let retry = 0;
         const timer = setInterval(function () {
-          if (++retry >= 12) { clearInterval(timer); return; }
-          if (scrollToTarget()) clearInterval(timer);
+          retry++;
+          if (scrollToTarget()) { clearInterval(timer); return; }
+          if (retry >= 12) clearInterval(timer);
         }, 200);
       });
     });

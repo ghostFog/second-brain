@@ -25,6 +25,8 @@ const DEFAULT_CONFIG = {
   // 生成模型列表：{ id, provider:'ollama'|'openai', baseUrl, apiKey, model }
   models: [],
   currentModelId: '',
+  // 设置页「生成模型」各组运行状态自动刷新频率（秒）
+  modelRefreshSec: 10,
   // 应用启动时是否自动加载嵌入模型
   autoLoadEmbedding: false,
   // 索引分块全局默认：块大小（字符）与相邻重叠（字符）；未单独设置的笔记按此生成
@@ -1281,6 +1283,33 @@ class AiEngine {
     if (!resp.ok) throw new Error('Ollama 操作失败 ' + resp.status);
     const j = await resp.json();
     return { done: !!j.done, action: isLoad ? 'load' : 'unload' };
+  }
+
+  /**
+   * 获取 Ollama 正在运行的模型列表（GET /api/ps），供「生成模型」列表按运行状态显示 加载/卸载 按钮。
+   * @param {string} baseUrl Ollama 服务地址（如 http://127.0.0.1:11434）
+   * @returns {Promise<{models: Array<{name: string, size: number, sizeVram: number, expiresAt: string}>}>}
+   * @throws {Error} 服务不可达或返回非 2xx
+   * @author 火 冰
+   */
+  async listRunningModels(baseUrl) {
+    const base = String(baseUrl || '').replace(/\/+$/, '');
+    const resp = await fetch(base + '/api/ps', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!resp.ok) throw new Error('Ollama 获取运行模型失败 ' + resp.status);
+    const j = await resp.json();
+    const models = Array.isArray(j.models) ? j.models : [];
+    return {
+      models: models.map(m => ({
+        name: m.name || m.model || '',
+        size: m.size || 0,
+        sizeVram: m.size_vram || 0,
+        expiresAt: m.expires_at || '',
+      })),
+    };
   }
 }
 

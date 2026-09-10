@@ -387,6 +387,9 @@ body.resizing { user-select: none; }
  * 辅助可见性工具
  * ============================================ */
 .hidden-el { display: none !important; }
+/* 全局 hidden 工具类：此前未定义导致所有 classList.toggle('hidden') 切换失效
+ * （.settings-subcat 等 display:flex 元素不会被隐藏）。与 [hidden] 属性互补。 */
+.hidden { display: none !important; }
 
 /* ---------- 减少动画：根元素标记 data-reduce-motion 时全局禁用过渡与动画 ---------- */
 html[data-reduce-motion] *, html[data-reduce-motion] *::before, html[data-reduce-motion] *::after {

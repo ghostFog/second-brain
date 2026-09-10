@@ -1228,6 +1228,9 @@ ipcMain.handle('ai:listOllamaModels', (_e, baseUrl) => aiEngine.listOllamaModels
 /* 管理 Ollama 模型：加载/卸载/上下文长度（keep_alive + num_ctx） */
 ipcMain.handle('ai:manageOllamaModel', (_e, p) => aiEngine.manageOllamaModel(p || {}));
 
+/* 获取 Ollama 正在运行的模型列表（生成模型按运行状态显示 加载/卸载 按钮） */
+ipcMain.handle('ai:listRunningModels', (_e, baseUrl) => aiEngine.listRunningModels(baseUrl));
+
 /* 加载本地嵌入模型（返回最新状态） */
 ipcMain.handle('ai:loadEmbedding', async () => {
   await aiEngine.loadEmbedding();

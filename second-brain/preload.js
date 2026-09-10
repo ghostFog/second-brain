@@ -91,6 +91,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     listOllamaModels: (baseUrl) => ipcRenderer.invoke('ai:listOllamaModels', baseUrl),
     /** 管理 Ollama 模型：加载/卸载/上下文长度（{baseUrl, model, action:'load'|'unload', numCtx}） */
     manageOllamaModel: (p) => ipcRenderer.invoke('ai:manageOllamaModel', p),
+    /** 获取 Ollama 正在运行的模型列表（返回 {models:[{name,size,sizeVram,expiresAt}]}） */
+    listRunningModels: (baseUrl) => ipcRenderer.invoke('ai:listRunningModels', baseUrl),
     /** 加载本地嵌入模型 */
     loadEmbedding: () => ipcRenderer.invoke('ai:loadEmbedding'),
     /** 重建知识库索引（进度经 onProgress 推送） */
