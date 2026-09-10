@@ -872,6 +872,32 @@ globalThis.PluginAPI = {
       },
     },
   },
+
+  /** 宿主外观主题抽象：深色/浅色/跟随系统。插件经此读写宿主整体明暗，
+   * 内部统一收口到宿主 setTheme / toggleTheme（与设置页「外观」主题卡片是同一套操作），
+   * 插件不直接改 <html> class 或 localStorage。mode 取值 'dark'|'light'|'auto'。作者: 火 冰 */
+  theme: {
+    /** 取当前主题模式（'dark'|'light'|'auto'），未设置回退 'dark' */
+    get: function () {
+      return (typeof __savedTheme !== 'undefined' && __savedTheme) ||
+        localStorage.getItem('note-app:theme') || 'dark';
+    },
+    /** 设置主题模式（持久化到 'note-app:theme'），并刷新图标 */
+    set: function (mode) {
+      const m = (mode === 'light') ? 'light' : ((mode === 'auto') ? 'auto' : 'dark');
+      if (typeof setTheme === 'function') setTheme(m, true);
+      if (typeof refreshIcons === 'function') refreshIcons();
+    },
+    /** 深 ↔ 浅 循环切换 */
+    toggle: function () {
+      if (typeof toggleTheme === 'function') toggleTheme();
+      else if (typeof setTheme === 'function') {
+        const light = document.documentElement.classList.contains('light');
+        setTheme(light ? 'dark' : 'light', true);
+      }
+      if (typeof refreshIcons === 'function') refreshIcons();
+    },
+  },
 };
 
 /* ============================

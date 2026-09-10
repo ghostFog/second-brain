@@ -379,6 +379,65 @@ function testThemeSavedSnapshot() {
   assert(W.__savedFontMono === 'Fira Code', 'Bug-028: 代码字体同步 __savedFontMono 快照（同根因）');
 }
 
+/* ---- Bug-041: 首屏主题不再闪烁（FOUC）----
+ * 根因1（HTML 层）: index.html 的 <html> 曾硬编码 data-theme="dark" 且无首屏同步脚本，
+ *       导致即使持久化为浅色，首帧仍按深色渲染，直到 setTheme('light') 才变浅。
+ * 根因2（主进程窗口层）: main.js 创建 BrowserWindow 时未设 show:false，窗口一创建即用
+ *       backgroundColor:'#1E1E2E'（深色）填充显示，抢在页面浅色 body 渲染完成前露出 → 仍「先深后浅」。
+ * 修复: HTML 层移除硬编码并在 head CSS 之前插入同步脚本；主进程层 show:false +
+ *       ready-to-show 后再 show()，首帧渲染完成后才显示窗口。
+ * 回归门禁（静态）：<html> 不得再含 data-theme="dark"，且首帧同步脚本位于 CSS 引用之前；
+ *       main.js 不得在浅色 body 就绪前直接显示深色窗口。 */
+(() => {
+  const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const scriptIdx = html.indexOf('note-app:theme');
+  const cssIdx = html.indexOf('css/base.css');
+  assert(html.indexOf('data-theme="dark"') === -1, 'Bug-041: index.html <html> 不再硬编码 data-theme="dark"');
+  assert(scriptIdx !== -1 && scriptIdx < cssIdx, 'Bug-041: 首屏同步主题脚本位于 CSS 引用之前（消除深→浅闪烁）');
+  assert(html.indexOf("'auto' && prefersDark") !== -1, 'Bug-041: 首屏脚本处理「跟随系统」时按系统明暗取值');
+
+  // 主进程窗口层门禁：窗口须 show:false，且存在 ready-to-show 后显示与超时兜底，避免深色背景抢显
+  const mainJs = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+  assert(/\bshow:\s*false\b/.test(mainJs), 'Bug-041: main.js 创建窗口 show:false（不提前露深色背景）');
+  assert(mainJs.indexOf('ready-to-show') !== -1, 'Bug-041: main.js 在 ready-to-show 后才显示窗口');
+  assert(mainJs.indexOf('isVisible') !== -1 && mainJs.indexOf('setTimeout') !== -1,
+    'Bug-041: main.js 有超时兜底强制显示，避免渲染异常导致白窗');
+})();
+
+/* ---- Bug-043: 自定义/内置配色首屏不再闪默认色；删除「停用」配色档 ----
+ * 根因: minimal-theme 配色（mt-theme-N / custom 变量）挂在 body，宿主 head 首屏脚本只恢复宿主明暗，
+ *       配色要等插件异步加载后才应用 → 自定义配色首帧用默认色、插件加载后再突变（闪烁）。
+ * 修复: ①配色应用目标统一到 <html>（documentElement），与首屏前置恢复同一元素，可正确清理不残留；
+ *       ②index.html head 在 CSS 引用之前内联还原 minimal 配色（内置 4 套 + custom）到 <html>；
+ *       ③删除「停用」配色档（悬浮列表/循环/disable 动作/manifest 默认）。
+ * 回归门禁（静态）：首屏 minimal 恢复在 CSS 之前；插件配色挂 <html> 而非 body；manifest 无停用。 */
+(() => {
+  const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const mtIdx = html.indexOf("localStorage.getItem('note-app:minimal-theme')");
+  const mtCssIdx = html.indexOf('css/base.css');
+  assert(mtIdx !== -1 && mtIdx < mtCssIdx, 'Bug-043: 首屏 minimal 配色恢复位于 CSS 引用之前（自定义配色不再闪默认色）');
+
+  const pjs = fs.readFileSync(path.join(__dirname, 'plugins', 'minimal-theme', 'main.js'), 'utf8');
+  assert(!/document\.body\.classList/.test(pjs) && pjs.indexOf('document.documentElement') !== -1,
+    'Bug-043: 配色 class 挂到 <html>（documentElement），与首屏前置恢复同元素、可清理不残留');
+  assert(pjs.indexOf("itemHTML('0', '停用')") === -1, 'Bug-043: 悬浮列表已删除「停用」配色项');
+  assert(pjs.indexOf('applyBuiltinVars') !== -1 && pjs.indexOf('SB.BUILTIN') !== -1,
+    'Bug-043: 插件内置配色走共享 SB_PALETTES 内联，不依赖异步 styles.css（消除首帧闪宿主默认色）');
+
+  const mani = JSON.parse(fs.readFileSync(path.join(__dirname, 'plugins', 'minimal-theme', 'manifest.json'), 'utf8'));
+  const dt = mani.settings.find(s => s.key === 'defaultTheme');
+  assert(dt && dt.options.indexOf('停用') === -1 && dt.default === '纸白', 'Bug-043: 默认配色下拉已无「停用」，默认回退「纸白」');
+  assert(html.indexOf('js/theme-palettes.js') !== -1 && html.indexOf('js/theme-palettes.js') < mtCssIdx,
+    'Bug-043: head 前置加载共享主题数据源 theme-palettes.js（早于 CSS，渲染前内联内置配色）');
+
+  // Bug-043-编辑器: 首屏 vditor 构建时若 minimal-theme 插件解析器尚未异步注册，宿主 resolveVdTheme 的
+  // fallback 不能盲从宿主暗色（否则先闪 vditor--dark 再由插件 flip 回浅色）。须按 minimal 配色编辑器深浅推导。
+  const ejs = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  assert(ejs.indexOf('minimalThemeEditorMode') !== -1 && /note-app:minimal-theme/.test(ejs)
+    && /plugin:minimal-theme:/.test(ejs) && /'浅色'/.test(ejs) && /'深色'/.test(ejs),
+    'Bug-043-编辑器: resolveVdTheme fallback 按 minimal 配色编辑器深浅(edThemeN,默认浅色)推导, 不盲从宿主暗色');
+})();
+
 /* ---- Bug-029: vditor 资源本地化，避免弱网下 unpkg CDN 拖慢编辑区渲染 ----
  * 确定性复现点：editor-vditor.js 若把 cdn 指回 unpkg.com（或本地资源被删除/缺失），
  * 编辑区会重新陷入十几秒空白。此处做静态门禁：

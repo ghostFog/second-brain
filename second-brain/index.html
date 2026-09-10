@@ -1,9 +1,41 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>第二脑</title>
+    <!-- 首屏同步恢复外观主题（在 CSS 渲染前设置 html class），避免「设置浅色 / 跟随系统」开机前几秒先闪深色（FOUC）。作者: 火 冰 -->
+    <script>
+      (function () {
+        var t = 'dark';
+        try { t = localStorage.getItem('note-app:theme') || 'dark'; } catch (_) {}
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var dark = (t === 'dark') || (t === 'auto' && prefersDark);
+        var html = document.documentElement;
+        html.classList.add(dark ? 'dark' : 'light');
+        html.setAttribute('data-theme', dark ? 'dark' : 'light');
+        html.setAttribute('data-theme-mode', t);
+      })();
+    </script>
+    <!-- 主题配色统一数据源（head 与 minimal-theme 插件共用，阻塞提前加载，供下面首屏脚本同步读取）作者: 火 冰 -->
+    <script src="js/theme-palettes.js"></script>
+    <!-- 首屏前置恢复 minimal-theme 配色：把内置/自定义配色内联到 <html>（渲染前生效，不依赖插件异步注入的 styles.css），
+        与插件加载后在 <html> 上刷新一致，避免内置/自定义配色在首帧闪宿主默认色。作者: 火 冰 -->
+    <script>
+      (function () {
+        var SB = typeof window !== 'undefined' ? window.SB_PALETTES : null;
+        var root = document.documentElement;
+        var mt = '0';
+        try { mt = localStorage.getItem('note-app:minimal-theme') || '0'; } catch (_) {}
+        function setVars(map) { Object.keys(map).forEach(function (k) { root.style.setProperty(k, map[k]); }); }
+        if (mt === 'custom') {
+          if (SB) { root.classList.add('mt-theme-custom'); setVars(SB.buildCustomVars(SB.readCustomColors())); }
+        } else if (SB && SB.BUILTIN && SB.BUILTIN[mt]) {
+          root.classList.add('mt-theme-' + mt);
+          setVars(SB.BUILTIN[mt]);
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/app.css?v=9">
     <!-- vditor 编辑器引擎样式：放在我们覆盖样式之前，便于 #ed-vditor 作用域覆盖 -->

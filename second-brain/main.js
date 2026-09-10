@@ -96,6 +96,7 @@ function createWindow() {
     minHeight: 600,
     title: '第二脑',
     backgroundColor: '#1E1E2E',
+    show: false,             // 待首帧渲染完成后才显示窗口，避免先露出深色窗口背景（Bug-041 消除首屏闪烁）
     frame: false,            // 移除系统标题栏，由前端自绘 Windows 风格标题栏
     titleBarStyle: 'hidden',
     // 统一应用图标：窗口/托盘同源脑图标（assets/icon | tray.png），大小不同而已
@@ -113,6 +114,18 @@ function createWindow() {
 
   // 通过自定义协议加载首页，相对 fetch 自动沿用 note:// 协议
   mainWin.loadURL('note://local/index.html');
+
+  // 窗口就绪后再显示：后台加载渲染完成首帧后才 show()，
+  // 不再让深色 backgroundColor 抢在浅色 body（首屏同步脚本已设 html.light）之前露出（Bug-041 窗口层根因）。
+  // 作者: 火 冰
+  mainWin.once('ready-to-show', function () {
+    if (mainWin && !mainWin.isDestroyed()) mainWin.show();
+  });
+  // 兜底：渲染异常/过慢时强制显示，避免白窗/黑屏卡死；首帧渲染完成即取消兜底
+  var _sbShowTimer = setTimeout(function () {
+    if (mainWin && !mainWin.isDestroyed() && !mainWin.isVisible()) mainWin.show();
+  }, 4000);
+  mainWin.webContents.once('did-finish-load', function () { clearTimeout(_sbShowTimer); });
 
   // 保留 Ctrl+Shift+I 全局开/关开发者工具（不参与快捷键注册表，作为标准兜底）。
   // F12 已纳入用户可重绑的「设置-快捷键」注册表（cmd:devtools），由渲染进程 keydown → IPC 路由，

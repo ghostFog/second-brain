@@ -386,6 +386,7 @@ function testMinimalTheme() {
     setSetting: (pid, key, v) => { V.__api.store[pid + ':' + key] = String(v); },
     registerEditorThemeResolver: (fn) => { if (typeof fn !== 'function') return () => {}; V.__api.resolvers = (V.__api.resolvers || []); V.__api.resolvers.push(fn); return () => {}; },
     editor: { theme: { get: () => ({ theme: 'light', extraCss: '' }), sync: () => { V.__synced = (V.__synced || 0) + 1; } } },
+    theme: { get: () => V.__savedHostMode || 'dark', set: (m) => { V.__hostMode = m; V.__savedHostMode = m; } },
   };
   const s = V.document.createElement('script');
   s.textContent = fs.readFileSync(path.join(__dirname, 'plugins', 'minimal-theme', 'main.js'), 'utf8');
@@ -407,12 +408,23 @@ function testMinimalTheme() {
   const dd = V.document.querySelector('.mt-theme-dropdown');
   assert(!!dd, '悬浮顶栏按钮弹出主题列表下拉');
   assert(dd.style.display === 'block', '下拉面板处于显示态');
-  assert(!!dd.querySelector('.mt-theme-item[data-mt-id="custom"]') && !!dd.querySelector('.mt-theme-item[data-mt-id="0"]'), '下拉包含自定义配色与停用项');
+  assert(!!dd.querySelector('.mt-theme-item[data-mt-id="custom"]'), '下拉包含自定义配色项');
+  assert(!dd.querySelector('.mt-theme-item[data-mt-id="0"]'), '已删除「停用」配色项（无停用入口）');
+  assert(dd.querySelectorAll('.mt-theme-item[data-mt-mode]').length === 3, '下拉包含宿主明暗三态（深色/浅色/跟随系统）');
+
+  dd.querySelector('.mt-theme-item[data-mt-mode="light"]').click();
+  assert(V.__hostMode === 'light', '点击宿主明暗项经 PluginAPI.theme 切换（与设置同一套操作）');
+  assert(!V.document.documentElement.classList.contains('mt-theme-custom'), '点击宿主明暗项同时停用配色（主题二选一）');
+  assert(dd.style.display === 'none', '点击宿主明暗项后面板隐藏');
+
+  // 重新悬浮以复用同一面板
+  btn.dispatchEvent(new V.MouseEvent('mouseenter'));
+  dd.style.display = 'block';
 
   dd.querySelector('.mt-theme-item[data-mt-id="custom"]').click();
-  const body = V.document.body;
-  assert(body.classList.contains('mt-theme-custom'), '点击自定义项套用 mt-theme-custom');
-  assert(body.style.getPropertyValue('--note-ink') === '#123456', '自定义主文字色写入 body 内联变量');
+  const root = V.document.documentElement;
+  assert(root.classList.contains('mt-theme-custom'), '点击自定义项套用 mt-theme-custom');
+  assert(root.style.getPropertyValue('--note-ink') === '#123456', '自定义主文字色写入 <html> 内联变量（首屏前置生效）');
   assert(dd.style.display === 'none', '选择主题后面板隐藏');
   assert(V.__synced >= 1, '配色变更后通知宿主重算 vditor 主题（theme.sync 被调用）');
   const rCustom = V.__api.resolvers[0]({ dark: true });
@@ -427,6 +439,21 @@ function testMinimalTheme() {
     assert(rCustom.extraCss.indexOf('border-top-color: var(--note-line') >= 0, '映射补全：分隔线(hr)→行线');
   }
 
-  dd.querySelector('.mt-theme-item[data-mt-id="0"]').click();
-  assert(!body.classList.contains('mt-theme-custom') && body.style.getPropertyValue('--note-ink') === '', '切换停用后清除自定义 class 与内联变量');
+  // 快捷键/顶栏 cycle：统一主题列表（宿主明暗 + 配色）线性轮换，已删除停用档
+  V.__hostMode = undefined; V.__savedHostMode = 'light';
+  V.localStorage.setItem('note-app:minimal-theme:cycle-step', 'auto'); // 初始档：跟随系统
+  V.__api.actions['cycle-theme']();                                    // auto → 纸白
+  assert(V.document.documentElement.classList.contains('mt-theme-1'), 'cycle 跟随系统→纸白（进入配色档）');
+  assert(V.__hostMode === undefined, 'cycle 切配色不改宿主明暗');
+  for (let i = 0; i < 4; i++) V.__api.actions['cycle-theme']();         // 亚麻→冷灰→墨绿→自定义
+  assert(V.document.documentElement.classList.contains('mt-theme-custom'), 'cycle 推进到自定义配色');
+  V.__api.actions['cycle-theme']();                                     // 自定义 → 宿主深色（停配色）
+  assert(V.__hostMode === 'dark', 'cycle 自定义→宿主深色（同一序列切宿主明暗）');
+  assert(!V.document.documentElement.classList.contains('mt-theme-custom'), 'cycle 切宿主明暗同时停用配色');
+  V.__api.actions['cycle-theme']();                                     // 深色 → 浅色
+  assert(V.__hostMode === 'light', 'cycle 宿主深色→浅色（档位延续，不再回跳配色）');
+  V.__api.actions['cycle-theme']();                                     // 浅色 → 跟随系统
+  assert(V.__hostMode === 'auto', 'cycle 宿主浅色→跟随系统');
+  V.__api.actions['cycle-theme']();                                     // 跟随系统 → 纸白（回到配色段开头）
+  assert(V.document.documentElement.classList.contains('mt-theme-1') && V.localStorage.getItem('note-app:minimal-theme:cycle-step') === '1', 'cycle 跟随系统→纸白（回到配色段开头，不再有停用档）');
 }

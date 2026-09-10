@@ -67,12 +67,14 @@
 | CD-24 | 必须 | 引入 Tailwind 等 preflight（全局重置样式）时，凡它重置掉的排版默认值（`ol/ul` 的 `list-style` 等），第三方编辑器（vditor 等）自带 CSS 未恢复的必须按容器作用域显式恢复（如 `#ed-vditor .vditor-reset ol{list-style-type:decimal}`），并补回归断言；对待办列表类渲染以 Lute 序列化往返 + 各编辑模式实机作门禁，防退化为普通 `[ ]` 文本 | Bug-035 / Bug-036 / Bug-037 |
 | CD-25 | 必须 | 自定义第三方编辑器（vditor 等）键盘行为（Backspace/Delete/Enter 等）时，用捕获阶段监听（`document.addEventListener('keydown', h, true)`）并在命中场景 `preventDefault`+`stopImmediatePropagation`，不与引擎自身 keydown/undo 冲突；对 ZWSP 空段落（`<p data-block="0">ZWSP<wbr></p>`）的删除须按「整行」语义处理（删段落并定位光标到相邻块），而非仅删文本节点 | Bug-038 |
 | CD-26 | 必须 | 使用 Tailwind v4 browser 版的方向性边界类 `border-b/t/l/r` 时，须确保 `--tw-border-style` 有全局默认值（如 `:root{--tw-border-style:solid}`）或同时上 `border-solid` 类，否则 `border-*-style` 解成 `var()` 未定义→回退 none 不显示边框 | Bug-039 |
+| CD-28 | 必须 | 首屏恢复持久化外观/主题须双层处理避免明暗闪烁：①HTML 层在 `<head>` 的 CSS 引用之前放首帧同步脚本，按 `localStorage` 预置 `<html>` class（light/dark，`auto` 用 `matchMedia`），且 `<html>` 不得硬编码与用户设置冲突的主题属性；②主进程 `BrowserWindow` 设了 `backgroundColor` 时，必须 `show:false` + 监听 `ready-to-show` 后再 `show()` 并留超时兜底（防渲染异常白窗），否则窗口背景会抢在页面浅色首帧前露出深色 | Bug-041 |
+| CD-29 | 必须 | 首屏「渲染前恢复主题」须覆盖所有主题维度（宿主明暗 + 插件配色），前置到 head 且挂在同一元素 `<html>`；任何配色的变量取值应落在宿主同步资源（如 `js/theme-palettes.js` 的 `window.SB_PALETTES`）并在 head 同步引用，不得依赖插件异步注入的样式（styles.css 常晚于插件 js 执行），否则「清 head 前置变量→样式未就绪→闪宿主默认色」再闪回 | Bug-043 |
 
 ## 维护要求
 
-- 新 Bug 按编号追加到 `doc/历史Bug记录.md` 记录区，不删除历史记录。
+- 新 Bug 在 `doc/bugs/Bug-NNN.md` 中新建（编号递增、复用记录模板字段），并在 `doc/历史Bug记录.md`（Bug 索引）与 `doc/bugs/index.md` 同步登记一行摘要+状态；不删除历史记录，不改变既有编号。
 
-- **相邻 Bug 记录之间须空一行**（用空行或 `- <br />` 分隔），便于阅读与逐条去重。
+- `doc/历史Bug记录.md` 仅作**索引**，不再承载完整正文；完整记录落点在 `doc/bugs/Bug-NNN.md`（每条独立成文，无需空行分隔）。
 
-- 问题定位、处理、验证每推进一档，同步回填「状态」「原因」「处理方法」「验证结果」。
+- 问题定位、处理、验证每推进一档，同步回填子文件中的「状态」「原因」「处理方法」「验证结果」。
 

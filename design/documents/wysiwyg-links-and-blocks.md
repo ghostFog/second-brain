@@ -21,7 +21,7 @@
 - `d:\project\aiCode\second-brain\second-brain\js\app-editor-ctx.js` —— 右键菜单差分、链接操作、块后插入、插入表格
 - `d:\project\aiCode\second-brain\second-brain\js\app-editor.js` —— WYSIWYG 渲染末尾空行补段
 - `d:\project\aiCode\second-brain\second-brain\smoke-plugin.test.js` —— 新增断言
-- 文档登记：`doc/历史Bug记录.md`、`doc/进度-编辑器.md`
+- 文档登记：历史 Bug `doc/bugs/`（索引 `doc/历史Bug记录.md`）、进度 `doc/进度/进度-编辑器.md`
 
 ## 实现步骤
 
