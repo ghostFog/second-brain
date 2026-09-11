@@ -418,19 +418,43 @@ function testMinimalTheme() {
   assert(dd.style.display === 'block', '下拉面板处于显示态');
   assert(!!dd.querySelector('.mt-theme-item[data-mt-id="custom"]'), '下拉包含自定义配色项');
   assert(!dd.querySelector('.mt-theme-item[data-mt-id="0"]'), '已删除「停用」配色项（无停用入口）');
-  assert(dd.querySelectorAll('.mt-theme-item[data-mt-mode]').length === 3, '下拉包含宿主明暗三态（深色/浅色/跟随系统）');
+  assert(dd.querySelectorAll('.mt-theme-item[data-mt-mode]').length === 2, '下拉宿主明暗不含「跟随系统」（只显示深色/浅色）');
+  assert(!dd.querySelector('.mt-theme-item[data-mt-mode="auto"]'), '下拉不渲染「跟随系统」项');
+  assert(!!dd.querySelector('.mt-theme-item .mt-item-set'), '每个主题项有「设置」按钮');
+  dd.querySelector('.mt-theme-item[data-mt-id="custom"] .mt-item-set').click();
+  assert(!!V.document.getElementById('mt-theme-overlay'), '点击主题项「设置」按钮弹出主题设置弹框');
+  // 可编辑弹框：改颜色 → 实际主题全局颜色实时变化（documentElement 内联 --note-* 立即更新，不止弹框内控件）
+  var colorInput = V.document.querySelector('#mt-theme-overlay input[type="color"][data-mt-f="cBg"]');
+  colorInput.value = '#123456';
+  colorInput.dispatchEvent(new V.window.Event('input', { bubbles: true }));
+  assert(V.document.documentElement.style.getPropertyValue('--note-background') === '#123456',
+    '编辑弹框改颜色 → 实际主题背景色实时全局更新（--note-background 内联同步）');
+  V.document.getElementById('mt-theme-overlay').querySelector('.mt-form-close').click();
+  assert(!V.document.getElementById('mt-theme-overlay'), '弹框关闭按钮可关闭设置弹框');
 
   dd.querySelector('.mt-theme-item[data-mt-mode="light"]').click();
   assert(V.__hostMode === 'light', '点击宿主明暗项经 PluginAPI.theme 切换（与设置同一套操作）');
   assert(!V.document.documentElement.classList.contains('mt-theme-custom'), '点击宿主明暗项同时停用配色（主题二选一）');
   assert(dd.style.display === 'none', '点击宿主明暗项后面板隐藏');
 
-  // 重新悬浮以复用同一面板（showDropdown 会重建内容）——验证对勾跟随实时选中、且宿主三态排它单选
+  // 重新悬浮以复用同一面板（showDropdown 会重建内容）——验证对勾跟随实时选中、且宿主深/浅排它单选
   btn.dispatchEvent(new V.MouseEvent('mouseenter'));
   V.document.querySelector('.mt-theme-dropdown').style.display = 'block';
   const hostChecked = () => Array.from(V.document.querySelectorAll('.mt-theme-item[data-mt-mode]'))
     .filter(it => !it.querySelector('.mt-check').style.display.includes('none')).map(it => it.getAttribute('data-mt-mode'));
   assert(hostChecked().join(',') === 'light', '重显后宿主明暗对勾跟随实时选中（浅色打钩，排它单选）');
+
+  // 响应式：下拉保持打开时，数据变了视图也实时更新（notifyThemeChanged 重渲染），对勾不残留旧档
+  V.localStorage.setItem('note-app:minimal-theme:cycle-step', 'light');
+  V.__api.actions['cycle-theme']();                                   // light → 纸白（配色段；宿主循环不含跟随系统）
+  assert(hostChecked().join(',') === '', '配色激活时宿主明暗项不打勾（配色与宿主明暗排它，不打勾）');
+  assert(V.document.querySelector('.mt-theme-dropdown').style.display !== 'none', '下拉不因数据变化而关闭');
+
+  // 配色激活 → 「设置-常规-主题模式」卡片不打勾、不选中（先造卡片，随后点配色即触发 clearThemeCards）
+  const pc = V.document.createElement('div');
+  pc.className = 'theme-card'; pc.setAttribute('data-theme-mode', 'dark'); pc.innerHTML = '<span class="theme-card-check" style="display:block"></span>';
+  V.document.body.appendChild(pc);
+  assert(pc.querySelector('.theme-card-check').style.display === 'block', '主题卡片初始为选中态（对勾显示）');
 
   dd.querySelector('.mt-theme-item[data-mt-id="custom"]').click();
   const root = V.document.documentElement;
@@ -440,24 +464,32 @@ function testMinimalTheme() {
   assert(V.__synced >= 1, '配色变更后通知宿主重算 vditor 主题（theme.sync 被调用）');
   const rCustom = V.__api.resolvers[0]({ dark: true });
   assert(rCustom.theme === 'dark' && /var\(--note-card|var\(--note-brand/.test(rCustom.extraCss), '自定义配色 → 编辑器按宿主明暗套 dark 主题，并把自定义配色数值映射注入编辑器');
+  assert(pc.querySelector('.theme-card-check').style.display === 'none' && !pc.classList.contains('active'),
+    '配色激活时「设置-常规-主题模式」卡片不选中、不打勾（排它）');
 
-  // 快捷键/顶栏 cycle：统一主题列表（宿主明暗 + 配色）线性轮换，已删除停用档
+  // 快捷键/顶栏 cycle：统一主题列表（宿主明暗 dark/light + 配色，不含跟随系统）线性轮换，已删除停用档
   V.__hostMode = undefined; V.__savedHostMode = 'light';
-  V.localStorage.setItem('note-app:minimal-theme:cycle-step', 'auto'); // 初始档：跟随系统
-  V.__api.actions['cycle-theme']();                                    // auto → 纸白
-  assert(V.document.documentElement.classList.contains('mt-theme-1'), 'cycle 跟随系统→纸白（进入配色档）');
-  assert(V.__hostMode === undefined, 'cycle 切配色不改宿主明暗');
-  for (let i = 0; i < 4; i++) V.__api.actions['cycle-theme']();         // 亚麻→冷灰→墨绿→自定义
-  assert(V.document.documentElement.classList.contains('mt-theme-custom'), 'cycle 推进到自定义配色');
-  V.__api.actions['cycle-theme']();                                     // 自定义 → 宿主深色（停配色）
-  assert(V.__hostMode === 'dark', 'cycle 自定义→宿主深色（同一序列切宿主明暗）');
+  // 前一步已套自定义，active=自定义；cycle 从自定义后一档开始 → 宿主深色（先停配色）
+  V.__api.actions['cycle-theme']();                                    // 自定义 → 宿主深色（停配色）
+  assert(V.__hostMode === 'dark', 'cycle 自定义→宿主深色（停配色，回到宿主深色开头）');
   assert(!V.document.documentElement.classList.contains('mt-theme-custom'), 'cycle 切宿主明暗同时停用配色');
   assert(V.document.documentElement.style.getPropertyValue('--note-ink') === '',
     'cycle 切宿主明暗清掉配色内联变量（宿主 .dark/.light 可接管外观，修复外观-主题模式无效果）');
+  btn.dispatchEvent(new V.MouseEvent('mouseenter'));                    // 重新展开下拉，验证宿主档打勾
+  assert(hostChecked().join(',') === 'dark', '宿主档激活时宿主明暗项打勾（深色）');
   V.__api.actions['cycle-theme']();                                     // 深色 → 浅色
-  assert(V.__hostMode === 'light', 'cycle 宿主深色→浅色（档位延续，不再回跳配色）');
-  V.__api.actions['cycle-theme']();                                     // 浅色 → 跟随系统
-  assert(V.__hostMode === 'auto', 'cycle 宿主浅色→跟随系统');
-  V.__api.actions['cycle-theme']();                                     // 跟随系统 → 纸白（回到配色段开头）
-  assert(V.document.documentElement.classList.contains('mt-theme-1') && V.localStorage.getItem('note-app:minimal-theme:cycle-step') === '1', 'cycle 跟随系统→纸白（回到配色段开头，不再有停用档）');
+  assert(V.__hostMode === 'light', 'cycle 宿主深色→浅色（档位延续）');
+  btn.dispatchEvent(new V.MouseEvent('mouseenter'));                    // 重新展开下拉，验证浅色打勾
+  assert(hostChecked().join(',') === 'light', '宿主档浅色激活时浅色项打勾（排它单选）');
+  V.__api.actions['cycle-theme']();                                     // 浅色 → 纸白（配色段，宿主循环不含跟随系统）
+  assert(V.document.documentElement.classList.contains('mt-theme-1') && V.localStorage.getItem('note-app:minimal-theme:cycle-step') === '1',
+    'cycle 浅色→纸白（进入配色段开头，宿主循环不含跟随系统）');
+  assert(V.__hostMode === 'light', 'cycle 切配色不改宿主明暗');
+  for (let i = 0; i < 4; i++) V.__api.actions['cycle-theme']();         // 亚麻→冷灰→墨绿→自定义
+  assert(V.document.documentElement.classList.contains('mt-theme-custom'), 'cycle 推进到自定义配色');
+  V.__api.actions['cycle-theme']();                                     // 自定义 → 宿主深色（回到宿主段开头）
+  assert(V.__hostMode === 'dark' && !V.document.documentElement.classList.contains('mt-theme-custom'),
+    'cycle 自定义→宿主深色（循环闭合，宿主明暗只含深/浅，不含跟随系统）');
+  assert(V.document.documentElement.style.getPropertyValue('--note-ink') === '',
+    'cycle 回到宿主段清掉配色内联变量');
 }

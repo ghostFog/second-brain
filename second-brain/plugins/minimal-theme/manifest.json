@@ -90,6 +90,13 @@
       "default": "#E8E1D4"
     },
     {
+      "key": "cEditorBg",
+      "label": "自定义·编辑器激活背景",
+      "type": "color",
+      "sub": "编辑器（vditor）聚焦/激活态编辑区背景色",
+      "default": "#E8E1D4"
+    },
+    {
       "key": "cInk2",
       "label": "自定义·中级文字",
       "type": "color",

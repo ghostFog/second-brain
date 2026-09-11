@@ -489,6 +489,9 @@ function testThemeSavedSnapshot() {
   // 在浅色配皮下呈黑框且不受主题控制。插件须把它挂到主题 --note-border。/作者: 火 冰
   assert(pjs45.indexOf('html body .vditor { --border-color: var(--note-border)') !== -1,
     '编辑器外观：插件注入样式覆盖 vditor --border-color → 边框随主题配色，不再出现黑框');
+  assert(pjs45.indexOf('--textarea-background-color: var(--note-editor-bg, var(--note-surface-2))') !== -1
+    && pjs45.indexOf("'--note-editor-bg'") !== -1 && pjs45.indexOf('--textarea-background-color: var(--note-surface-2)') === -1,
+    '编辑器激活背景：独立字段 --note-editor-bg（内置无此字段时 CSS 兜底回落 --note-surface-2），随主题管理不再跳 vditor 默认色');
 
   // 外观-主题模式：宿主「设置-外观」的深色/浅色/跟随系统走 setTheme，不经插件 applyTheme；
   // 而配色内联变量写进 <html> 内联优先级高于宿主 .dark/.light 类规则，会盖死宿主明暗切换。
@@ -498,6 +501,31 @@ function testThemeSavedSnapshot() {
   assert(/attributeFilter:\s*\['data-theme', 'data-theme-mode'\]/.test(pjs45)
     && obsAt >= 0 && obsBody.indexOf('clearCustomVars()') !== -1,
     '外观-主题模式：插件监听宿主 data-theme 变更并清配色内联变量，宿主明暗不被配色盖死');
+
+  // 需求：画廊激活高亮实时刷新 + 弹框实时预览(关闭还原) + 独立编辑器激活背景字段
+  assert(pjs45.indexOf('function refreshGalleryActive()') !== -1
+    && pjs45.indexOf('notifyThemeChanged()') !== -1 && pjs45.indexOf('refreshGalleryActive();') !== -1,
+    '主题画廊：notifyThemeChanged 刷新「当前使用」高亮框，点切主题后选中实时跟随');
+  assert(pjs45.indexOf('function applyPreviewVars(fields)') !== -1
+    && pjs45.indexOf('ov.__mtPreviewed') !== -1 && pjs45.indexOf('applyTheme(preOpenId)') !== -1,
+    '主题弹框：配色字段实时预览(applyPreviewVars)，关闭/保存/删除统一还原当前激活主题(非刷新)');
+  assert(/key:\s*'cEditorBg'/.test(pjs45) && /default:\s*'#E8E1D4'/.test(pjs45)
+    && pjs45.indexOf("'--note-editor-bg'") !== -1
+    && JSON.parse(fs.readFileSync(path.join(__dirname, 'plugins', 'minimal-theme', 'manifest.json'), 'utf8'))
+      .settings.some(function (s) { return s.key === 'cEditorBg'; }),
+    '编辑器激活背景：独立字段 cEditorBg 已加入弹框字段定义与 manifest');
+  assert(pjs45.indexOf("hdr.addEventListener('pointerdown'") !== -1
+    && pjs45.indexOf('dlg.style.position = \'fixed\'') !== -1
+    && pjs45.indexOf('.mt-form-close') !== -1 && pjs45.indexOf('pointerup') !== -1,
+    '主题弹框：支持拖拽（按住标题区移动窗口，关闭按钮不抢）');
+  assert(pjs45.indexOf('function previewDialog()') !== -1
+    && pjs45.indexOf('ov.__mtExtraStyle') !== -1 && pjs45.indexOf('function clearPreviewStyle(ov)') !== -1
+    && pjs45.indexOf('cExtraCss') !== -1,
+    '主题弹框：实时预览含自定义编辑器CSS（临时 style 注入，关闭/保存/删除统一清理），编辑器界面可见效果');
+  assert(pjs45.indexOf('function themeSettingButton(') !== -1
+    && pjs45.indexOf("closest('.mt-item-set')") !== -1 && pjs45.indexOf('relookThemeDialog') === -1
+    && pjs45.indexOf('function openSettingsFromMenu(') !== -1,
+    '顶栏下拉：每个主题项带「设置」按钮（内置只读/自建可编辑），点击开弹框且不触发主题切换');
 })();
 
 /* ---- Bug-029: vditor 资源本地化，避免弱网下 unpkg CDN 拖慢编辑区渲染 ----

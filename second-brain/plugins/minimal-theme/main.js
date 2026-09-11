@@ -48,6 +48,7 @@
     { key: 'cCardForeground',label: '卡片前景',   type: 'color', default: '#3D3D3D' },
     { key: 'cSurface',       label: '表面',       type: 'color', default: '#F2EDE3' },
     { key: 'cSurface2',      label: '表面次级',   type: 'color', default: '#E8E1D4' },
+    { key: 'cEditorBg',      label: '编辑器激活背景', type: 'color', default: '#E8E1D4' },
     { key: 'cPopover',       label: '弹层背景',   type: 'color', default: '#F2EDE3' },
     { key: 'cPopoverForeground', label: '弹层前景', type: 'color', default: '#3D3D3D' },
     { key: 'cMuted',         label: '弱化背景',   type: 'color', default: '#F2EDE3' },
@@ -89,7 +90,7 @@
     '--note-brand-300', '--note-brand-400', '--note-brand-500', '--note-brand-600',
     '--note-brand-700', '--note-brand-800', '--note-brand-900', '--note-brand-950',
     '--note-primary', '--note-primary-foreground', '--note-brand-ink', '--note-line-active',
-    '--note-shadow-1', '--note-shadow-2'
+    '--note-editor-bg', '--note-shadow-1', '--note-shadow-2'
   ];
 
   /** 下拉面板元素（首次显示时惰性创建） */
@@ -147,6 +148,8 @@
       '--note-card-foreground': c.cCardForeground,
       '--note-surface': c.cSurface,
       '--note-surface-2': c.cSurface2,
+      // 编辑器激活背景：独立字段 cEditorBg；旧自建主题无该字段时（含人为空）回退到 cSurface2
+      '--note-editor-bg': (c.cEditorBg && String(c.cEditorBg)) || (c.cSurface2 && String(c.cSurface2)) || '#E8E1D4',
       '--note-popover': c.cPopover,
       '--note-popover-foreground': c.cPopoverForeground,
       '--note-muted': c.cMuted,
@@ -302,6 +305,12 @@
       // 会让编辑器外框(1px solid var(--border-color))在浅色配皮下呈黑框且不受主题控制。
       // 这里把它挂到主题 --note-border，深浅配色下均随主题走。作者: 火 冰
       'html body .vditor { --border-color: var(--note-border); --resize-icon-color: var(--note-border); }',
+      // 映射 vditor 的编辑区背景变量到主题：未聚焦用 --note-background、**聚焦/激活态用 --note-editor-bg**（独立字段）。
+      // vditor 的 .vditor-sv/.vditor-ir/.vditor-wysiwyg 在 :focus 时切换背景到 --textarea-background-color
+      // （.vditor--dark 里被 vditor 自己硬编码成 #2f363d 等），若不动它，点击进编辑区背景会跳成 vditor 默认色、
+      // 不随主题精细配色走。这里把两者挂到主题变量；自建主题已由 buildCustomVars 设 --note-editor-bg，
+      // 内置主题无此变量时 CSS 兜底回落其 --note-surface-2（内置色板均已定义），不硬编码固定色值。作者: 火 冰
+      'html body .vditor { --panel-background-color: var(--note-background); --textarea-background-color: var(--note-editor-bg, var(--note-surface-2)); }',
       'html body .vditor .vditor-toolbar { background-color: var(--note-surface); border-bottom-color: var(--note-border); }',
       'html body .vditor-toolbar__item { color: var(--note-ink-3); }',
       'html body .vditor-toolbar__item:hover, html body .vditor-toolbar__item--active { background-color: var(--note-surface-2); color: var(--note-brand); }',
@@ -400,16 +409,19 @@
       root.classList.add(CLASS_PREFIX + id);
       localStorage.setItem(LS_KEY, String(id));
       if (!silent) toast('Minimal Theme: ' + themeName(id));
+      clearThemeCards(); // 配色接管颜色 → 设置-常规-主题模式卡片不再选中（排它）
     } else if (applied) {
       root.classList.add(CLASS_PREFIX + 'custom');
       localStorage.setItem(LS_KEY, id);
       if (!silent) toast('Minimal：' + themeName(id));
+      clearThemeCards(); // 配色接管颜色 → 设置-常规-主题模式卡片不再选中（排它）
     } else {
       // 无该配色 → 停用（此分支仅由切换宿主明暗档（applyStep）停用配色时触发）
       localStorage.removeItem(LS_KEY);
     }
     // 配色变更 → 通知宿主重算 vditor 主题（编辑器深浅 + 注入 CSS 跟随）
     syncEditorTheme();
+    notifyThemeChanged(); // 响应式：数据变 → 已打开下拉重渲染，对勾实时更新
   }
 
   /**
@@ -422,6 +434,19 @@
     if (typeof v === 'string' && /^c\d+$/.test(v)) return v;
     var n = Number(v);
     return (n >= 1 && n <= PRESET_COUNT) ? String(n) : '0';
+  }
+
+  /**
+   * 清除「设置-常规-主题模式」主题卡片的选中态（active 类 + 对勾）。
+   * 当插件配色主题激活、颜色被配色接管时调用，令宿主明暗卡片不作选中（配色与宿主明暗排它二选一）。
+   * 切回宿主档时由宿主 setTheme 自行恢复卡片选中，此处不越界。作者: 火 冰
+   */
+  function clearThemeCards() {
+    document.querySelectorAll('.theme-card').forEach(function (c) {
+      c.classList.remove('active');
+      var chk = c.querySelector('.theme-card-check');
+      if (chk) chk.style.display = 'none';
+    });
   }
 
   /** 读取当前宿主外观主题模式（'dark'|'light'|'auto'），优先走 PluginAPI.theme 抽象 */
@@ -445,6 +470,7 @@
       mtHostBusy = true;
       try { PluginAPI.theme.set(mode); } finally { mtHostBusy = false; }
     }
+    notifyThemeChanged(); // 响应式：宿主明暗数据变 → 已打开下拉重渲染，对勾实时更新
   }
 
   /** 返回当前 Minimal 主题 id（'0'=停用 / '1'-'4' / 自建主题 id） */
@@ -453,6 +479,36 @@
     var id = normalizeId(v);
     // 自建主题被删除后，其 id 落入 '0' 之外时落地为空
     return (id === v) ? id : '0';
+  }
+
+  /**
+   * 响应式通知：主题数据已变化 → 已打开的下拉实时重渲染（对勾紧随实时选中，数据变即视图更新，类似 Vue）。
+   * 凡是会改动「当前主题」数据的入口（applyTheme / setHostTheme / 宿主明暗观察者）都必须调用本函数收口。
+   * 作者: 火 冰
+   */
+  function notifyThemeChanged() {
+    if (dropdownEl && dropdownEl.style && dropdownEl.style.display !== 'none') {
+      dropdownEl.innerHTML = dropdownHTML();
+      if (typeof window.refreshIcons === 'function') window.refreshIcons();
+    }
+    refreshGalleryActive(); // 主题数据变 → 画廊「当前使用」高亮框实时跟随
+  }
+
+  /**
+   * 刷新主题画廊的「当前使用」高亮：按激活主题 id 给对应圆形块加高亮边框，其余清除。
+   * 由 notifyThemeChanged 调用，保证在设置页点切主题后选中框实时更新。作者: 火 冰
+   */
+  function refreshGalleryActive() {
+    var sec = findSettingsSection();
+    if (!sec) return;
+    var wrap = sec.querySelector('[data-mt-gallery]');
+    if (!wrap) return;
+    var cur = activeThemeId();
+    wrap.querySelectorAll('.mt-swatch').forEach(function (sw) {
+      var on = sw.getAttribute('data-mt-id') === cur;
+      sw.style.boxShadow = on ? '0 0 0 2px var(--note-brand,#7C6A52)' : '';
+      sw.style.borderColor = on ? 'var(--note-brand,#7C6A52)' : '';
+    });
   }
 
   /**
@@ -469,12 +525,13 @@
 
   /**
    * 循环切换统一主题列表（顶栏按钮 / 快捷键 cycle-theme）：
-   * 深色 → 浅色 → 跟随系统 → 内置4套 → 自建主题们 → 深色 …
-   * 配色/自建档不改宿主明暗；宿主明暗档（深/浅/跟随）会停用配色——列表二选一，循环干净不冲突。
+   * 深色 → 浅色 → 内置4套 → 自建主题们 → 深色 …
+   * 列表不含「跟随系统」（宿主明暗只取深/浅两档，配色用 CSS 变量覆盖深浅不冲突）。
+   * 配色/自建档不改宿主明暗；宿主明暗档（深/浅）会停用配色——列表二选一，循环干净不冲突。作者: 火 冰
    */
   function cycleTheme() {
     var colorOrder = ['1', '2', '3', '4'].concat(readCustoms().map(function (t) { return t.id; }));
-    var order = ['dark', 'light', 'auto'].concat(colorOrder);
+    var order = ['dark', 'light'].concat(colorOrder);
     // 用记录的当前档位定位；无记录时按现状推断
     var last = localStorage.getItem(CYCLE_STEP_KEY);
     var idx = order.indexOf(last);
@@ -508,7 +565,7 @@
     return '<div style="padding:6px 10px;font-weight:600;color:var(--note-ink-3,#888);' +
       'border-bottom:1px solid var(--note-border,#eee);margin-bottom:4px;">Theme</div>' +
       '<div style="padding:4px 10px;font-size:12px;color:var(--note-ink-3,#888);">Host 明暗</div>' +
-      HOST_THEMES.map(function (t) { return hostItemHTML(t.mode, t.name, t.icon); }).join('') +
+      HOST_THEMES.filter(function (t) { return t.mode !== 'auto'; }).map(function (t) { return hostItemHTML(t.mode, t.name, t.icon); }).join('') +
       '<div style="padding:4px 10px;font-size:12px;color:var(--note-ink-3,#888);margin-top:4px;">配色</div>' +
       colorItems.join('');
   }
@@ -532,6 +589,14 @@
     // 面板内悬浮也保持打开：离开按钮进入面板不关闭
     el.addEventListener('mouseenter', cancelHide);
     el.addEventListener('mouseleave', scheduleHide);
+    // 主题项右侧「设置」按钮：点击开弹框直接设置，stopPropagation 不触发主题切换、不关闭下拉
+    el.addEventListener('click', function (e) {
+      var set = e.target && e.target.closest ? e.target.closest('.mt-item-set') : null;
+      if (!set) return;
+      e.stopPropagation();
+      e.preventDefault();
+      openSettingsFromMenu(set.getAttribute('data-mt-set'), set.getAttribute('data-mt-default') === '1');
+    });
     dropdownEl = el;
     return el;
   }
@@ -552,7 +617,38 @@
       'color:' + (isCustom ? 'var(--note-brand,#7C6A52)' : 'var(--note-ink-3,#888)') + ';"></i>' +
       '<span style="flex:1;">' + name + '</span>' +
       '<i data-lucide="check" class="mt-check" style="width:14px;height:14px;flex:none;color:var(--note-brand,#7C6A52);' + active + '"></i>' +
+      themeSettingButton(id, isCustom) +
       '</div>';
+  }
+
+  /**
+   * 生成下拉主题项右侧的「设置」按钮 HTML。
+   * 自建主题可编辑（settings 图标 → 编辑弹框）；内置主题只读（eye 图标 → 只读查看弹框）。作者: 火 冰
+   * @param {string} id 主题 id
+   * @param {boolean} isCustom 是否为自建主题（可编辑）
+   * @returns {string} HTML
+   */
+  function themeSettingButton(id, isCustom) {
+    var tip = isCustom ? '主题设置' : '查看主题';
+    return '<span class="mt-item-set" role="button" aria-label="' + tip + '" data-mt-set="' + id + '"'
+      + ' data-mt-default="' + (isCustom ? '0' : '1') + '" title="' + tip + '"'
+      + ' style="width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;'
+      + 'border-radius:5px;cursor:pointer;flex:none;color:var(--note-ink-3,#888);">'
+      + '<i data-lucide="' + (isCustom ? 'settings' : 'eye') + '" style="width:13px;height:13px;"></i></span>';
+  }
+
+  /**
+   * 从下拉设置按钮打开主题弹框：内置只读查看，自建可编辑。
+   * @param {string} id 主题 id
+   * @param {boolean} isDefault 是否为内置（只读）
+   */
+  function openSettingsFromMenu(id, isDefault) {
+    if (isDefault) {
+      openThemeDialog({ id: id, name: themeName(id), isDefault: true, readonly: true }, true);
+    } else {
+      var t = findCustom(id);
+      if (t) openThemeDialog(t, false);
+    }
   }
 
   /**
@@ -563,8 +659,10 @@
    * @returns {string} HTML
    */
   function hostItemHTML(mode, name, icon) {
-    var cur = getHostMode();
-    var active = (String(mode) === String(cur)) ? '' : ' display:none;';
+    // 仅当「宿主明暗档」激活（activeThemeId()==='0'，即未用配色接管颜色）时才给宿主项打勾；
+    // 切换到任一配色主题时，宿主明暗项一律不打勾（排它：配色与宿主明暗二选一）。作者: 火 冰
+    var hostActive = (String(activeThemeId()) === '0');
+    var active = (hostActive && String(mode) === String(getHostMode())) ? '' : ' display:none;';
     return '<div class="mt-theme-item" data-mt-mode="' + mode + '" style="display:flex;align-items:center;gap:8px;' +
       'padding:7px 10px;border-radius:6px;cursor:pointer;color:var(--note-ink,#333);white-space:nowrap;">' +
       '<i data-lucide="' + icon + '" style="width:14px;height:14px;flex:none;color:var(--note-ink-3,#888);"></i>' +
@@ -781,6 +879,8 @@
     if (heading && heading.nextSibling) sec.insertBefore(gal, heading.nextSibling);
     else sec.insertBefore(gal, sec.firstChild);
     bindGallery(gal);
+    // 配色激活时清「主题模式」卡片选中：内置配色由宿主 head 首屏恢复、不经 applyTheme，需在面板渲染时兜底清除
+    if (String(activeThemeId()) !== '0') clearThemeCards();
   }
 
   /**
@@ -842,6 +942,19 @@
   }
 
   /**
+   * 实时预览：把一组配色字段按 buildCustomVars 计算后内联套用到页面并同步编辑器。
+   * 不写入存储、不改当前激活主题 id（预览是临时的）；弹框关闭时由调用方 applyTheme(preOpenId) 还原。
+   * 作者: 火 冰
+   * @param {Object} fields 配色字段（key→值）
+   */
+  function applyPreviewVars(fields) {
+    var vars = buildCustomVars(fields);
+    clearCustomVars();
+    Object.keys(vars).forEach(function (k) { document.documentElement.style.setProperty(k, vars[k]); });
+    syncEditorTheme();
+  }
+
+  /**
    * 打开主题编辑/查看弹框（遮罩，复用宿主弹层样式）。
    * @param {Object|null} theme 现有主题或 null（新建）
    * @param {boolean} [forceReadonly] 为 true 表示只读查看（内置主题）
@@ -852,7 +965,8 @@
     var ov = document.createElement('div');
     ov.id = 'mt-theme-overlay';
     ov.className = 'fixed inset-0 z-50 flex items-center justify-center';
-    ov.style.cssText = 'background:rgba(0,0,0,0.45);';
+    // 遮罩调浅：编辑/预览时允许看清背后的应用与编辑器，实时预览效果可见（可拖动面板看编辑器细节）
+    ov.style.cssText = 'background:rgba(0,0,0,0.18);';
     var colors = theme ? themeColors(theme) : null;
     var title = isNew ? '添加主题' : (readonly ? '主题设置（默认，仅查看）' : '编辑主题');
     var nameVal = theme ? String(theme.name || '') : '';
@@ -882,8 +996,69 @@
       + '</div></div>';
     document.body.appendChild(ov);
     if (window.lucide && window.lucide.createIcons) window.lucide.createIcons({});
-    // 关闭
-    var close = function () { if (ov.parentNode) ov.parentNode.removeChild(ov); };
+    // 弹框拖拽：按住标题区可拖动整个窗口（关闭按钮除外），桌面/触屏均支持（Pointer 事件）。
+    // 拖拽时改为 fixed 定位并随指针移动，弹框关闭流程不受影响。作者: 火 冰
+    (function () {
+      var dlg = ov.firstElementChild;                       // 弹框主体
+      var hdr = dlg.querySelector('h3').parentElement;      // 标题行（含关闭按钮，作拖拽手柄）
+      var offX = 0, offY = 0, drag = false;
+      hdr.style.cursor = 'move';
+      hdr.style.userSelect = 'none';
+      hdr.style.touchAction = 'none';
+      hdr.addEventListener('pointerdown', function (e) {
+        if (e.target && e.target.closest && e.target.closest('.mt-form-close')) return; // 不抢关闭按钮
+        drag = true;
+        var r = dlg.getBoundingClientRect();
+        dlg.style.position = 'fixed';
+        dlg.style.margin = '0';
+        dlg.style.left = r.left + 'px';
+        dlg.style.top = r.top + 'px';
+        offX = e.clientX - r.left;
+        offY = e.clientY - r.top;
+        try { if (e.target.setPointerCapture) e.target.setPointerCapture(e.pointerId); } catch (_) { }
+        e.preventDefault();
+      });
+      hdr.addEventListener('pointermove', function (e) {
+        if (!drag) return;
+        dlg.style.left = Math.max(0, Math.round(e.clientX - offX)) + 'px';
+        dlg.style.top = Math.max(0, Math.round(e.clientY - offY)) + 'px';
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+      });
+      function endDrag() { drag = false; }
+      hdr.addEventListener('pointerup', endDrag);
+      hdr.addEventListener('pointercancel', endDrag);
+    })();
+    // 记录打开前的激活主题 id：预览过 → 关闭时还原到它（“返回上一步界面”，非刷新）
+    var preOpenId = activeThemeId();
+    ov.__mtPreviewed = false;
+    ov.__mtExtraStyle = null; // 预览用临时 CSS 节点（自定义编辑器CSS，关闭即清）
+    // 实时预览统一收口：收集全部字段（配色 + 自定义编辑器CSS）→ 颜色内联套用并同步编辑器，
+    // 再注入【自定义编辑器CSS】到临时 <style>（应用/编辑器均实时可见，仅预览不写存储、不改激活 id）。作者: 火 冰
+    function previewDialog() {
+      ov.__mtPreviewed = true;
+      var f = {};
+      THEME_FIELD_DEFS.forEach(function (fd) {
+        var e2 = ov.querySelector('[data-mt-f="' + fd.key + '"]');
+        f[fd.key] = (e2 && e2.value) != null ? e2.value : fd.default;
+      });
+      applyPreviewVars(f); // 颜色内联套用 + 同步编辑器
+      var ex = String(f.cExtraCss || '');
+      if (ex) {
+        if (!ov.__mtExtraStyle) { ov.__mtExtraStyle = document.createElement('style'); ov.__mtExtraStyle.id = 'mt-preview-extra'; document.head.appendChild(ov.__mtExtraStyle); }
+        ov.__mtExtraStyle.textContent = ex;
+      } else if (ov.__mtExtraStyle) { ov.__mtExtraStyle.textContent = ''; }
+    }
+    if (!readonly) {
+      ov.querySelectorAll('input[type="color"]').forEach(function (el) { el.addEventListener('input', previewDialog); });
+      var extraTxt = ov.querySelector('[data-mt-f="cExtraCss"]');
+      if (extraTxt) extraTxt.addEventListener('input', previewDialog);
+    }
+    // 关闭：清理预览用临时 CSS 后，预览过则还原到打开前的主题（“返回上一步界面”，非刷新）
+    var close = function () {
+      clearPreviewStyle(ov);
+      if (ov.__mtPreviewed) applyTheme(preOpenId);
+      if (ov.parentNode) ov.parentNode.removeChild(ov);
+    };
     ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
     ov.querySelector('.mt-form-close').addEventListener('click', close);
     var cancelBtn = ov.querySelector('.mt-form-cancel');
@@ -920,9 +1095,10 @@
     list.push(entry);
     writeCustoms(list);
     toast(theme ? '已保存主题：' + name : '已创建主题：' + name);
-    // 若当前正用该主题，保存色值后需重套配色（名称不变，id 仍有效）
-    if (activeThemeId() === id) { applyTheme(id, true); }
-    else if (!theme) { /* 新建主题不自动切换，保持当前主题 */ }
+    // 预览过配色则须收尾：若当前激活正是被保存主题则重套其保存值，否则还原当前激活主题，
+    // 避免预览时的临时配色残留覆盖当前主题（非刷新，仅重套当前激活）。作者: 火 冰
+    if (ov.__mtPreviewed) applyTheme(activeThemeId());
+    clearPreviewStyle(ov);
     if (ov.parentNode) ov.parentNode.removeChild(ov);
     refreshGalleryAndSettings();
   }
@@ -940,9 +1116,24 @@
     if (activeThemeId() === id) {
       // 当前在用被删 → 回退「默认配色方案」
       applyTheme(0);
+    } else if (ov.__mtPreviewed) {
+      // 删除的是非当前主题但预览过：清掉预览临时配色，还原当前激活主题
+      applyTheme(activeThemeId());
     }
+    clearPreviewStyle(ov);
     if (ov.parentNode) ov.parentNode.removeChild(ov);
     refreshGalleryAndSettings();
+  }
+
+  /**
+   * 清理弹框预览期间注入的临时编辑器 CSS（<style id=mt-preview-extra>）。
+   * 关闭/保存/删除统一调用，保证预览的自定义编辑器CSS不残留到下一主题。作者: 火 冰
+   * @param {Element} ov 弹框遮罩元素（携带 __mtExtraStyle 引用）
+   */
+  function clearPreviewStyle(ov) {
+    var el = ov && ov.__mtExtraStyle;
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    if (ov) ov.__mtExtraStyle = null;
   }
 
   /**
@@ -1052,6 +1243,7 @@
       for (var i2 = 1; i2 <= PRESET_COUNT; i2++) hostRoot.classList.remove(CLASS_PREFIX + i2);
       hostRoot.classList.remove(CLASS_PREFIX + 'custom');
       localStorage.removeItem(LS_KEY);
+      notifyThemeChanged(); // 响应式：外部切宿主明暗清配色后，同步已打开下拉的对勾
     });
     hostObs.observe(hostRoot, {
       attributes: true,
