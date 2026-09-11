@@ -40,7 +40,7 @@ const DEFAULT_CONFIG = {
 
 /* 嵌入式模型库：可从 HuggingFace / ModelScope 下载。repo 为远程仓库 id（保留斜杠），
  * 下载落盘到 <modelDir>/<repo>/...（transformers 缓存结构），embedModelPath 指向 <modelDir>/<repo>。
- * 说明/阈值等展示文案由渲染进程 app-settings.js 维护。 */
+ * 说明/阈值等展示文案由渲染进程 js/settings/*.js 维护。 */
 const EMBED_MODEL_LIB = [
   { id: 'paraphrase-multilingual-MiniLM-L12-v2', repo: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2' },
   { id: 'bge-small-zh-v1.5', repo: 'Xenova/bge-small-zh-v1.5' },

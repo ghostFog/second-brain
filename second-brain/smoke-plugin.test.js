@@ -27,7 +27,8 @@ W.showToast = (m) => { W.__toast = m; };
 W.toast = W.showToast;
 
 // 以 <script> 注入加载脚本（函数声明成为 window 全局属性）
-const SCRIPTS = ['app-toolbar.js', 'app-plugins.js', 'app-settings.js', 'file-tree-ctx.js', 'editor/editor-core.js', 'editor/editor-host.js', 'editor/editor-tabs.js', 'editor/editor-filetree.js', 'editor/editor-sidepanel.js', 'editor/editor-md.js', 'editor/editor-ctx.js', 'app-editor-ctx.js'];
+// 设置视图已拆分为 js/settings/*.js 多模块（与 index.html 加载顺序一致）
+const SCRIPTS = ['app-toolbar.js', 'app-plugins.js', 'settings/settings-core.js', 'settings/settings-ai.js', 'settings/settings-appearance.js', 'settings/settings-shortcuts.js', 'settings/settings-plugins.js', 'settings/settings-panels.js', 'settings/settings-main.js', 'file-tree-ctx.js', 'editor/editor-core.js', 'editor/editor-host.js', 'editor/editor-tabs.js', 'editor/editor-filetree.js', 'editor/editor-sidepanel.js', 'editor/editor-md.js', 'editor/editor-ctx.js', 'app-editor-ctx.js'];
 function loadScripts() {
   for (const name of SCRIPTS) {
     const s = W.document.createElement('script');

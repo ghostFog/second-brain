@@ -6,7 +6,7 @@
  *   - 组合键归一化 + 冲突检测（默认键仅在无冲突时占用）
  *   - kbMatch(e) 供全局 keydown 匹配并执行命令
  *   - 用户重绑持久化（saveS('keybind:<id>', combo)）
- * 说明: 依赖全局 saveS/restoreS（app-settings.js）；对 pluginManager 的访问仅在函数内做 typeof 守卫。
+ * 说明: 依赖全局 saveS/restoreS（js/settings/settings-core.js）；对 pluginManager 的访问仅在函数内做 typeof 守卫。
  * ============================================ */
 'use strict';
 
