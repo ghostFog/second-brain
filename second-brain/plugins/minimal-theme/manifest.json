@@ -20,14 +20,6 @@
   ],
   "settings": [
     {
-      "key": "defaultTheme",
-      "label": "默认配色方案",
-      "type": "select",
-      "sub": "应用启动时自动套用的主题配色",
-      "options": ["纸白", "亚麻", "冷灰", "墨绿", "自定义配色"],
-      "default": "纸白"
-    },
-    {
       "key": "hoverToolbar",
       "label": "顶栏按钮悬停展示主题列表",
       "type": "toggle",
@@ -124,6 +116,76 @@
       "type": "color",
       "sub": "提示/说明/次要交互文字颜色",
       "default": "#8A8478"
+    },
+    {
+      "key": "cForeground",
+      "label": "自定义·前景色",
+      "type": "color",
+      "sub": "全局前景文字颜色",
+      "default": "#3D3D3D"
+    },
+    {
+      "key": "cCardForeground",
+      "label": "自定义·卡片前景",
+      "type": "color",
+      "sub": "卡片上的文字颜色",
+      "default": "#3D3D3D"
+    },
+    {
+      "key": "cPopover",
+      "label": "自定义·弹层背景",
+      "type": "color",
+      "sub": "下拉/弹层面板的独立底色",
+      "default": "#F2EDE3"
+    },
+    {
+      "key": "cPopoverForeground",
+      "label": "自定义·弹层前景",
+      "type": "color",
+      "sub": "弹层面板内的文字颜色",
+      "default": "#3D3D3D"
+    },
+    {
+      "key": "cMuted",
+      "label": "自定义·弱化背景",
+      "type": "color",
+      "sub": "弱化/禁用控件的背景色",
+      "default": "#F2EDE3"
+    },
+    {
+      "key": "cInput",
+      "label": "自定义·输入框",
+      "type": "color",
+      "sub": "输入框边框与底色",
+      "default": "#E0DBD0"
+    },
+    {
+      "key": "cLineActive",
+      "label": "自定义·当前行高亮",
+      "type": "color",
+      "sub": "源码模式当前行的高亮底色",
+      "default": "#E9E5DA"
+    },
+    {
+      "key": "cBrandInk",
+      "label": "自定义·强调色文字",
+      "type": "color",
+      "sub": "铺在强调色上的文字颜色（按钮文字等）",
+      "default": "#FFFFFF"
+    },
+    {
+      "key": "cPrimary",
+      "label": "自定义·主操作色",
+      "type": "color",
+      "sub": "主按钮/主操作背景色",
+      "default": "#6B5A44"
+    },
+    {
+      "key": "cPrimaryForeground",
+      "label": "自定义·主操作前景",
+      "type": "color",
+      "sub": "主操作按钮上的文字颜色",
+      "default": "#FFFFFF"
     },
     {
       "key": "injectCss",

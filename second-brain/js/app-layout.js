@@ -277,7 +277,7 @@
     // Ribbon 左侧导航：由 RibbonManager 统一渲染（此前的启动引导缺失了 RibbonManager.init 调用，
     // 导致左侧按钮整列不渲染）；用 safeInit 隔离，失败只记日志不拖垮启动。作者: 火 冰
     if (typeof RibbonManager !== 'undefined' && RibbonManager.init) {
-      safeInit('RibbonManager.init', function () { RibbonManager.init('file'); }, 'ribbon');
+      safeInit('RibbonManager.init', function () { RibbonManager.init('editor'); }, 'ribbon');
     }
 
     // 文件树右键菜单已由 js/file-tree-ctx.js 统一接管（目录/笔记/空白区三套，stopPropagation 阻断），此处不再绑定旧菜单

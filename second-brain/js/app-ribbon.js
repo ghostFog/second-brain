@@ -27,7 +27,7 @@ globalThis.RibbonManager = (function () {
    * @type {Object[]}
    */
   var BUILTIN_BUTTONS = [
-    { id: 'file',     icon: 'file-text', title: '编辑器',     route: '#/editor',          kind: 'built-in' },
+    { id: 'editor',  icon: 'file-text', title: '编辑器',     route: '#/editor',          kind: 'built-in' },
     // { id: 'search',   icon: 'search',    title: '搜索',       action: 'open-command',     kind: 'built-in' },
     { id: 'graph',    icon: 'git-fork',  title: '图谱视图',   route: '#/graph',           kind: 'built-in' },
     { id: 'plugins', icon: 'puzzle',    title: '插件市场',   route: '#/plugins',         kind: 'built-in' },
@@ -205,7 +205,7 @@ globalThis.RibbonManager = (function () {
    */
   function init(navKey) {
     loadConfig();
-    activeNavId = navKey || 'file';
+    activeNavId = navKey || 'editor';
     // 组装 sortableButtons = 内置按钮 + 已有插件按钮（空，插件稍后注册）
     sortableButtons = BUILTIN_BUTTONS.slice();
     restoreOrder();
@@ -217,7 +217,7 @@ globalThis.RibbonManager = (function () {
 
   /**
    * 更新当前激活的导航按钮高亮
-   * @param {string} navKey data-nav-key 值
+   * @param {string} navKey data-nav-key 值（与内置按钮 id 一致，如 editor/graph/plugins/settings/ai）
    */
   function updateActive(navKey) {
     activeNavId = navKey;

@@ -27,17 +27,6 @@
         var root = document.documentElement;
         var mt = '0';
         try { mt = localStorage.getItem('note-app:minimal-theme') || '0'; } catch (_) {}
-        // 未显式选择配色时，回退到插件「默认配色方案」设置（与插件同一份设置数据，head 一次渲染；
-        // 插件启动不再 applyTheme，避免二次设置）。作者: 火 冰
-        if (mt === '0') {
-          try {
-            var def = localStorage.getItem('plugin:minimal-theme:defaultTheme');
-            if (def) {
-              if (def === '自定义配色') { mt = 'custom'; }
-              else { var names = ['纸白', '亚麻', '冷灰', '墨绿']; var di = names.indexOf(def); if (di >= 0) mt = String(di + 1); }
-            }
-          } catch (_) {}
-        }
         function setVars(map) { Object.keys(map).forEach(function (k) { root.style.setProperty(k, map[k]); }); }
         if (mt === 'custom') {
           if (SB) { root.classList.add('mt-theme-custom'); setVars(SB.buildCustomVars(SB.readCustomColors())); }

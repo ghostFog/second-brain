@@ -39,25 +39,36 @@
     { mode: 'auto',  name: '跟随系统', icon: 'monitor' }
   ];
 
-  /** 主题配置字段定义（13 配色字段 + 自定义编辑器CSS）。弹框/自建主题共用同一份口径。 */
+  /** 主题配置字段定义（23 配色字段 + 自定义编辑器CSS = 24 项）。弹框/自建主题共用同一份口径。
+   *  与 base.css 深/浅模式的全部语义色令牌一一对应，使自建主题与内置明暗主题完整度一致。作者: 火 冰 */
   var THEME_FIELD_DEFS = [
-    { key: 'cBg',        label: '背景色',     type: 'color', default: '#FAF7F0' },
-    { key: 'cCard',      label: '卡片背景',   type: 'color', default: '#F2EDE3' },
-    { key: 'cSurface',   label: '表面/弹层',  type: 'color', default: '#F2EDE3' },
-    { key: 'cBorder',    label: '边框/输入',  type: 'color', default: '#E0DBD0' },
-    { key: 'cInk',       label: '主文字色',   type: 'color', default: '#3D3D3D' },
-    { key: 'cInk3',      label: '次要文字',   type: 'color', default: '#9A9488' },
-    { key: 'cLine',      label: '分隔线',     type: 'color', default: '#E0DBD0' },
-    { key: 'cBrand',     label: '强调色',     type: 'color', default: '#7C6A52' },
-    { key: 'cSurface2',  label: '表面次级',   type: 'color', default: '#E8E1D4' },
-    { key: 'cInk2',      label: '中级文字',   type: 'color', default: '#6B6B5E' },
-    { key: 'cGutterBg',  label: '行号列',     type: 'color', default: '#F5F0E8' },
-    { key: 'cRing',      label: '强调环',     type: 'color', default: '#B8A890' },
-    { key: 'cMutedFg',   label: '次要前景',   type: 'color', default: '#8A8478' },
-    { key: 'cExtraCss',  label: '自定义编辑器CSS', type: 'text', default: '' }
+    { key: 'cBg',            label: '背景色',     type: 'color', default: '#FAF7F0' },
+    { key: 'cForeground',    label: '前景色',     type: 'color', default: '#3D3D3D' },
+    { key: 'cCard',          label: '卡片背景',   type: 'color', default: '#F2EDE3' },
+    { key: 'cCardForeground',label: '卡片前景',   type: 'color', default: '#3D3D3D' },
+    { key: 'cSurface',       label: '表面',       type: 'color', default: '#F2EDE3' },
+    { key: 'cSurface2',      label: '表面次级',   type: 'color', default: '#E8E1D4' },
+    { key: 'cPopover',       label: '弹层背景',   type: 'color', default: '#F2EDE3' },
+    { key: 'cPopoverForeground', label: '弹层前景', type: 'color', default: '#3D3D3D' },
+    { key: 'cMuted',         label: '弱化背景',   type: 'color', default: '#F2EDE3' },
+    { key: 'cMutedFg',       label: '弱化前景',   type: 'color', default: '#8A8478' },
+    { key: 'cBorder',        label: '边框',       type: 'color', default: '#E0DBD0' },
+    { key: 'cInput',         label: '输入框',     type: 'color', default: '#E0DBD0' },
+    { key: 'cRing',          label: '强调环',     type: 'color', default: '#B8A890' },
+    { key: 'cGutterBg',      label: '行号列',     type: 'color', default: '#F5F0E8' },
+    { key: 'cInk',           label: '主文字',     type: 'color', default: '#3D3D3D' },
+    { key: 'cInk2',          label: '中等文字',   type: 'color', default: '#6B6B5E' },
+    { key: 'cInk3',          label: '次要文字',   type: 'color', default: '#9A9488' },
+    { key: 'cLine',          label: '分隔线',     type: 'color', default: '#E0DBD0' },
+    { key: 'cLineActive',    label: '当前行高亮', type: 'color', default: '#E9E5DA' },
+    { key: 'cBrand',         label: '强调色',     type: 'color', default: '#7C6A52' },
+    { key: 'cBrandInk',      label: '强调色文字', type: 'color', default: '#FFFFFF' },
+    { key: 'cPrimary',       label: '主操作色',   type: 'color', default: '#6B5A44' },
+    { key: 'cPrimaryForeground', label: '主操作前景', type: 'color', default: '#FFFFFF' },
+    { key: 'cExtraCss',      label: '自定义编辑器CSS', type: 'text', default: '' }
   ];
 
-  /** 配色字段（用于 buildCustomVars 的 13 项），不含 extraCss */
+  /** 配色字段（用于 buildCustomVars 的 23 项），不含 extraCss */
   var COLOR_FIELDS = THEME_FIELD_DEFS.filter(function (f) { return f.type === 'color'; }).map(function (f) { return f.key; });
   /** 全部 per-theme 字段 key（画廊中需隐藏其平铺行） */
   var PER_THEME_KEYS = THEME_FIELD_DEFS.map(function (f) { return f.key; });
@@ -74,7 +85,10 @@
     '--note-surface', '--note-surface-2', '--note-popover', '--note-popover-foreground',
     '--note-muted', '--note-muted-foreground', '--note-border', '--note-input',
     '--note-ring', '--note-gutter-bg', '--note-ink', '--note-ink-2', '--note-ink-3',
-    '--note-line', '--note-brand', '--note-brand-500', '--note-brand-600',
+    '--note-line', '--note-brand', '--note-brand-50', '--note-brand-100', '--note-brand-200',
+    '--note-brand-300', '--note-brand-400', '--note-brand-500', '--note-brand-600',
+    '--note-brand-700', '--note-brand-800', '--note-brand-900', '--note-brand-950',
+    '--note-primary', '--note-primary-foreground', '--note-brand-ink', '--note-line-active',
     '--note-shadow-1', '--note-shadow-2'
   ];
 
@@ -117,23 +131,28 @@
 
   /**
    * 根据配色字段计算派生后的完整 CSS 变量集合
-   * @param {Object} c 配色字段（13 配色 + cExtraCss）
+   * @param {Object} c 配色字段（23 配色 + cExtraCss）
    * @returns {Object} cssVar → 颜色值
    */
   function buildCustomVars(c) {
-    return {
+    // 完整覆盖设计令牌：与 theme-palettes.js 的 buildCustomVars 同源，逐令牌直接映射，
+    // 先派生品牌色阶，再用显式字段覆盖派生的 primary/primary-foreground/brand-ink/line-active。
+    // 派生口径与宿主共享 deriveBrandVars，保持与 setAccent 一致。作者: 火 冰
+    var SB = typeof window !== 'undefined' ? window.SB_PALETTES : null;
+    var brand = (SB && SB.deriveBrandVars) ? SB.deriveBrandVars(c.cBrand) : {};
+    var vars = {
       '--note-background': c.cBg,
-      '--note-foreground': c.cInk,
+      '--note-foreground': c.cForeground,
       '--note-card': c.cCard,
-      '--note-card-foreground': c.cInk,
+      '--note-card-foreground': c.cCardForeground,
       '--note-surface': c.cSurface,
       '--note-surface-2': c.cSurface2,
-      '--note-popover': c.cSurface,
-      '--note-popover-foreground': c.cInk,
-      '--note-muted': c.cCard,
+      '--note-popover': c.cPopover,
+      '--note-popover-foreground': c.cPopoverForeground,
+      '--note-muted': c.cMuted,
       '--note-muted-foreground': c.cMutedFg,
       '--note-border': c.cBorder,
-      '--note-input': c.cBorder,
+      '--note-input': c.cInput,
       '--note-ring': c.cRing,
       '--note-gutter-bg': c.cGutterBg,
       '--note-ink': c.cInk,
@@ -146,6 +165,13 @@
       '--note-shadow-1': '0 1px 2px rgba(120, 110, 90, 0.06)',
       '--note-shadow-2': '0 8px 24px -8px rgba(120, 110, 90, 0.18)'
     };
+    Object.keys(brand).forEach(function (k) { vars[k] = brand[k]; }); // 品牌色阶 + 派生的 primary/brand-ink/line-active
+    // 显式字段覆盖派生值：主操作色/主操作前景/强调色文字/当前行高亮可独立调节
+    vars['--note-primary'] = c.cPrimary;
+    vars['--note-primary-foreground'] = c.cPrimaryForeground;
+    vars['--note-brand-ink'] = c.cBrandInk;
+    vars['--note-line-active'] = c.cLineActive;
+    return vars;
   }
 
   /* 内置配色：从共享 SB_PALETTES 内联该配色全套变量到 <html>（内联优先，值与该配色 class 一致无冲突）。
@@ -719,24 +745,6 @@
   }
 
   /**
-   * 同步「默认配色方案」下拉，把自建主题名补进 options（内置名保持宿主静态）
-   * @param {Element} sec 插件设置 section
-   */
-  function syncDefaultThemeOptions(sec) {
-    var sel = sec && sec.querySelector('[data-pid="minimal-theme"][data-pkey="defaultTheme"]');
-    if (!sel) return;
-    var customNames = readCustoms().map(function (t) { return String(t.name); });
-    var existing = Array.prototype.map.call(sel.options, function (o) { return o.text; });
-    customNames.forEach(function (n) {
-      if (existing.indexOf(n) === -1) {
-        var op = document.createElement('option');
-        op.textContent = n;
-        sel.appendChild(op);
-      }
-    });
-  }
-
-  /**
    * 在「插件设置」区块注入主题画廊：
    *   - 隐藏 per-theme 平铺字段行（13 配色 + extraCss），保留公共设置行
    *   - 在区块顶部插入主题画廊（数组件）
@@ -772,20 +780,27 @@
     gal.innerHTML = galleryHTML();
     if (heading && heading.nextSibling) sec.insertBefore(gal, heading.nextSibling);
     else sec.insertBefore(gal, sec.firstChild);
-    syncDefaultThemeOptions(sec);
     bindGallery(gal);
   }
 
   /**
-   * 绑定画廊交互：点圆块应用主题；双击打开弹框；点「添加」新建
+   * 绑定画廊交互：单击应用主题；双击打开弹框；点「添加」新建。
+   * 单击采用 260ms 延迟判定，若该次点击落入双击（第二次点击）则取消切换并打开弹框，
+   * 保证双击查看/编辑时「第一下点击」不先触发切主题。作者: 火 冰
    * @param {Element} gal 画廊容器
    */
   function bindGallery(gal) {
     var addBtn = gal.querySelector('.mt-gallery-add');
     if (addBtn) addBtn.addEventListener('click', function () { openThemeDialog(null); });
     gal.querySelectorAll('.mt-swatch').forEach(function (sw) {
-      sw.addEventListener('click', function () { applyTheme(sw.getAttribute('data-mt-id')); });
-      sw.addEventListener('dblclick', function () { openThemeDialogForSwatch(sw); });
+      sw.addEventListener('click', function () {
+        clearTimeout(sw.__mtClickTimer);
+        sw.__mtClickTimer = setTimeout(function () { applyTheme(sw.getAttribute('data-mt-id')); }, 260);
+      });
+      sw.addEventListener('dblclick', function () {
+        clearTimeout(sw.__mtClickTimer);
+        openThemeDialogForSwatch(sw);
+      });
     });
   }
 
@@ -797,6 +812,33 @@
     var isDefault = sw.getAttribute('data-mt-default') === '1';
     if (isDefault) { openThemeDialog({ id: id, name: themeName(id), isDefault: true, readonly: true }, true); }
     else { var theme = findCustom(id); if (theme) openThemeDialog(theme, false); }
+  }
+
+  /**
+   * 生成弹框内单个配色字段单元格（label 在上、控件在下）。
+   * 颜色字段每四个一组（网格四列），文本字段（自定义编辑器CSS）占整行。
+   * @param {Object} f THEME_FIELD_DEFS 中的字段定义
+   * @param {Object|null} colors 当前配色值（缺失用默认）
+   * @param {boolean} readonly 只读态
+   * @returns {string} HTML
+   */
+  function fieldCellHTML(f, colors, readonly) {
+    var val = colors ? String(colors[f.key]) : String(f.default || '');
+    var ctrl;
+    if (f.type === 'color') {
+      ctrl = '<input type="color" data-mt-f="' + f.key + '" value="' + val + '"'
+        + (readonly ? ' disabled' : '')
+        + ' style="width:100%;height:30px;padding:2px;background:var(--note-surface-2,#eee);border:1px solid var(--note-border,#ddd);border-radius:6px;cursor:pointer;box-sizing:border-box;">';
+    } else {
+      ctrl = '<input type="text" data-mt-f="' + f.key + '" value="' + val + '"'
+        + (readonly ? ' disabled' : '')
+        + ' placeholder="如 .vditor { font-family: serif; }"'
+        + ' style="width:100%;min-width:0;padding:6px 8px;border-radius:6px;font-size:12px;outline:none;background:var(--note-surface-2,#eee);border:1px solid var(--note-border,#ddd);color:var(--note-ink,#333);box-sizing:border-box;">';
+    }
+    var span = (f.type === 'color') ? '' : 'grid-column:1/-1;';
+    return '<div class="mt-field-cell" style="display:flex;flex-direction:column;gap:5px;min-width:0;' + span + '">'
+      + '<span style="font-size:11px;color:var(--note-ink-3,#888);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + f.label + '</span>'
+      + ctrl + '</div>';
   }
 
   /**
@@ -814,26 +856,11 @@
     var colors = theme ? themeColors(theme) : null;
     var title = isNew ? '添加主题' : (readonly ? '主题设置（默认，仅查看）' : '编辑主题');
     var nameVal = theme ? String(theme.name || '') : '';
-    var fieldsHtml = THEME_FIELD_DEFS.map(function (f) {
-      var val = colors ? String(colors[f.key]) : String(f.default || '');
-      var ctrl;
-      if (f.type === 'color') {
-        ctrl = '<input type="color" data-mt-f="' + f.key + '" value="' + val + '"'
-          + (readonly ? ' disabled' : '')
-          + ' style="width:44px;height:28px;padding:2px;background:var(--note-surface-2,#eee);border:1px solid var(--note-border,#ddd);border-radius:6px;cursor:pointer;">';
-      } else {
-        ctrl = '<input type="text" data-mt-f="' + f.key + '" value="' + val + '"'
-          + (readonly ? ' disabled' : '')
-          + ' placeholder="如 .vditor { font-family: serif; }"'
-          + ' style="flex:1;min-width:0;padding:6px 8px;border-radius:6px;font-size:12px;outline:none;background:var(--note-surface-2,#eee);border:1px solid var(--note-border,#ddd);color:var(--note-ink,#333);">';
-      }
-      return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">'
-        + '<span style="font-size:12px;color:var(--note-ink,#333);white-space:nowrap;">' + f.label + '</span>'
-        + ctrl + '</div>';
-    }).join('<span style="height:8px;"></span>');
+    // 字段用网格一次铺开（颜色四列一组、文本占整行），替代原先一行一个的冗长布局
+    var fieldsHtml = THEME_FIELD_DEFS.map(function (f) { return fieldCellHTML(f, colors, readonly); }).join('');
     var canDelete = !isNew && !readonly;
     ov.innerHTML =
-      '<div style="width:400px;max-width:92vw;max-height:84vh;overflow:auto;border-radius:12px;'
+      '<div style="width:540px;max-width:94vw;max-height:84vh;overflow:auto;border-radius:12px;'
       + 'border:1px solid var(--note-border,#ddd);padding:16px;'
       + 'background:var(--note-surface,#fff);color:var(--note-ink,#333);'
       + 'box-shadow:0 12px 40px rgba(0,0,0,0.35);">'
@@ -847,11 +874,11 @@
       + ' placeholder="输入主题名称"'
       + ' style="flex:1;min-width:0;padding:6px 8px;border-radius:6px;font-size:12px;outline:none;background:var(--note-surface-2,#eee);border:1px solid var(--note-border,#ddd);color:var(--note-ink,#333);">'
       + '</div>'
-      + '<div style="display:flex;flex-direction:column;gap:8px;">' + fieldsHtml + '</div>'
+      + '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px 12px;">' + fieldsHtml + '</div>'
       + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">'
       + (canDelete ? '<button type="button" class="mt-form-del" style="margin-right:auto;padding:6px 12px;border-radius:6px;font-size:12px;color:#EF4444;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.35);cursor:pointer;">删除</button>' : '')
       + (readonly ? '' : '<button type="button" class="mt-form-cancel" style="padding:6px 12px;border-radius:6px;font-size:12px;color:var(--note-ink-2,#555);background:var(--note-surface-2,#eee);border:1px solid var(--note-border,#ddd);cursor:pointer;">取消</button>')
-      + (!readonly && '<button type="button" class="mt-form-save" style="padding:6px 16px;border-radius:6px;font-size:12px;color:#FFF;background:var(--note-brand-600,#6B5A44);border:none;cursor:pointer;font-weight:600;">' + (isNew ? '创建' : '保存') + '</button>')
+      + (readonly ? '' : '<button type="button" class="mt-form-save" style="padding:6px 16px;border-radius:6px;font-size:12px;color:#FFF;background:var(--note-brand-600,#6B5A44);border:none;cursor:pointer;font-weight:600;">' + (isNew ? '创建' : '保存') + '</button>')
       + '</div></div>';
     document.body.appendChild(ov);
     if (window.lucide && window.lucide.createIcons) window.lucide.createIcons({});
@@ -919,7 +946,7 @@
   }
 
   /**
-   * 重建画廊（刷新圆形色块与默认配色下拉）。设置面板可能在重建中，容错：找不到 section 就算了。
+   * 重建画廊。设置面板可能在重建中，容错：找不到 section 就算了。
    */
   function refreshGalleryAndSettings() {
     var sec = findSettingsSection();
@@ -932,7 +959,6 @@
     gal.style.cssText = 'padding-top:6px;';
     gal.innerHTML = galleryHTML();
     wrap.parentNode.replaceChild(gal, wrap);
-    syncDefaultThemeOptions(sec);
     bindGallery(gal);
   }
 
@@ -953,8 +979,8 @@
     var k = d.key || '';
     // 编辑器主题配置（注入开关/自定义css）变更 → 通知宿主重算 vditor 主题
     if (k === 'injectCss' || k === 'extraCss') { syncEditorTheme(); return; }
-    // 公共设置行（defaultTheme/hoverToolbar）无额外即时侧效
-    if (k === 'hoverToolbar' || k === 'defaultTheme') return;
+    // 公共设置行（hoverToolbar）无额外即时侧效
+    if (k === 'hoverToolbar') return;
     // 其余均属 per-theme 字段（旧单自定义 / 弹框已转自建商店，平铺行已隐藏），若当前在用自建主题则忽略
     if (!findCustom(activeThemeId())) {
       // 旧兼容：仅在活动档为旧 'custom' 时按字段重套
@@ -964,18 +990,6 @@
       }
     }
   });
-
-  /**
-   * 把「默认配色方案」下拉值映射为主题 id（内置/自建）
-   * @param {string} label 下拉值（纸白/亚麻/冷灰/墨绿/自建主题名）
-   * @returns {string} 主题 id
-   */
-  function mapDefaultToId(label) {
-    for (var i = 0; i < THEMES.length; i++) if (THEMES[i].name === label) return THEMES[i].id;
-    var list = readCustoms();
-    for (var j = 0; j < list.length; j++) if (String(list[j].name) === label) return list[j].id;
-    return '0';
-  }
 
   // 首屏主题由 index.html head 同步脚本「按 localStorage 读取数据渲染一次」完成（宿主明暗 + 配色），
   // 插件启动**不再自动套用主题**（不开 restore/applyTheme），避免与首帧渲染重复、二次设置。
@@ -1023,16 +1037,26 @@
    * 保证深/浅/跟随系统真正生效。根因：配色内联变量写进 <html>，优先级高于宿主 .dark/.light 类规则，
    * 会盖死宿主明暗；而「设置-外观」走宿主 setTheme 不经插件 applyTheme，需在此兜底清理。
    * 仅观察 data-theme / data-theme-mode 属性（宿主题模式变更才写），配色应用不触碰，故不会误清。
-   * 作者: 火 冰 */
+   * 注意：宿主「设置」面板打开时会用 setTheme(savedTheme,false) 重写这两个属性（即便值相同），
+   * 因此用 attributeOldValue 对比「仅当值确已变化」才清理，避免把「重开设置」误判为切换明暗而清掉自定义配色。作者: 火 冰 */
   if (typeof MutationObserver !== 'undefined' && document.documentElement) {
     var hostRoot = document.documentElement;
-    var hostObs = new MutationObserver(function () {
+    var hostObs = new MutationObserver(function (muts) {
       if (mtHostBusy) return; // 插件自身 setHostTheme 已按流程清配色，忽略本次属性变化
+      // 属性值没变的写入（如设置面板重开重应用同主题）不清理，自定义配色得以保留
+      var changed = muts.some(function (m) {
+        return m.oldValue !== m.target.getAttribute(m.attributeName);
+      });
+      if (!changed) return;
       clearCustomVars();
       for (var i2 = 1; i2 <= PRESET_COUNT; i2++) hostRoot.classList.remove(CLASS_PREFIX + i2);
       hostRoot.classList.remove(CLASS_PREFIX + 'custom');
       localStorage.removeItem(LS_KEY);
     });
-    hostObs.observe(hostRoot, { attributes: true, attributeFilter: ['data-theme', 'data-theme-mode'] });
+    hostObs.observe(hostRoot, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'data-theme-mode'],
+      attributeOldValue: true
+    });
   }
 })();

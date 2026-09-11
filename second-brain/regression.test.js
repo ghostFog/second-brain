@@ -425,8 +425,9 @@ function testThemeSavedSnapshot() {
     'Bug-043: 插件内置配色走共享 SB_PALETTES 内联，不依赖异步 styles.css（消除首帧闪宿主默认色）');
 
   const mani = JSON.parse(fs.readFileSync(path.join(__dirname, 'plugins', 'minimal-theme', 'manifest.json'), 'utf8'));
-  const dt = mani.settings.find(s => s.key === 'defaultTheme');
-  assert(dt && dt.options.indexOf('停用') === -1 && dt.default === '纸白', 'Bug-043: 默认配色下拉已无「停用」，默认回退「纸白」');
+  assert(!mani.settings.some(s => s.key === 'defaultTheme'), '默认配色方案已移除（改由宿主「常规-主题设置」决定，不设插件独立默认配色）');
+  assert(mani.settings.some(s => s.key === 'hoverToolbar') && mani.settings.some(s => s.key === 'injectCss'),
+    'manifest 保留 hoverToolbar/injectCss 等公共设置项');
   assert(html.indexOf('js/theme-palettes.js') !== -1 && html.indexOf('js/theme-palettes.js') < mtCssIdx,
     'Bug-043: head 前置加载共享主题数据源 theme-palettes.js（早于 CSS，渲染前内联内置配色）');
 
@@ -467,15 +468,22 @@ function testThemeSavedSnapshot() {
     && !/location\.hash === btn\.route/.test(rjs44),
     'Bug-044-2: Ribbon 点击按视图 key 比较，点击当前激活按钮不重渲染装载区');
 
+  // Bug-047-1: 内置「编辑器」Ribbon 按钮 id 直接用 'editor'（与路由 key 一致），
+  // updateActive 直接匹配即可高亮，不再需要 'file' 与 editor→file 归一化。
+  assert(/id: 'editor'/.test(rjs44)
+    && /navKey \|\| 'editor'/.test(rjs44)
+    && /dataset\.ribbonBtn === navKey/.test(rjs44)
+    && !/=== 'editor'\)\s*\?\s*'file'/.test(rjs44),
+    'Bug-047-1: Ribbon 编辑器按钮 id 统一为 editor，切回编辑器时高亮正常');
+
   // Bug-045: 主题「一次设置、一次渲染」——启动主题由 index.html head 读取 localStorage 一次性渲染；
   // 插件启动不再自动 applyTheme（restore），head 需含「默认配色方案」兜底，避免二次设置。
   const pjs45 = fs.readFileSync(path.join(__dirname, 'plugins', 'minimal-theme', 'main.js'), 'utf8');
   assert(!/\(function restore\(\)/.test(pjs45) && !/applyIfReady\(/.test(pjs45)
     && !/var saved = localStorage\.getItem\(LS_KEY\);/.test(pjs45),
     'Bug-045: minimal-theme 插件启动不再 restore/applyTheme 自动套用主题');
-  assert(html.indexOf("plugin:minimal-theme:defaultTheme") !== -1
-    && html.indexOf("localStorage.getItem('note-app:minimal-theme')") < html.indexOf("plugin:minimal-theme:defaultTheme"),
-    'Bug-045: 首帧 head 读取默认配色方案兜底（一次渲染，插件不再二次设置）');
+  assert(html.indexOf("plugin:minimal-theme:defaultTheme") === -1,
+    'Bug-045: 已移除「默认配色方案」首屏兜底，配色完全由 note-app:minimal-theme 决定、深浅跟随宿主，一次渲染不再二次设置');
 
   // vditor 黑边框：.vditor--dark 内 --border-color 固定近黑(#141414)，会让编辑器外框(1px solid var(--border-color))
   // 在浅色配皮下呈黑框且不受主题控制。插件须把它挂到主题 --note-border。/作者: 火 冰
