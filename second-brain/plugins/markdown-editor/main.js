@@ -64,5 +64,33 @@ try {
     'mde-delete': function () { fireAction('delete-note'); },
     /* 打开当前笔记（命令面板调用） */
     'mde-open': function () { if (typeof openCurrentNote === 'function') openCurrentNote(); },
+    /* 链接：浏览器打开 */
+    'mde-link-open': function () {
+      const link = document.querySelector('a[href]:hover') || document.activeElement.closest('a[href]');
+      if (link && link.getAttribute('href') && /^https?:\/\//i.test(link.getAttribute('href'))) {
+        window.open(link.getAttribute('href'), '_blank');
+      }
+    },
+    /* 链接：取消链接 */
+    'mde-link-unlink': function () {
+      const link = document.querySelector('a[href]:hover') || document.activeElement.closest('a[href]');
+      if (link && typeof mdeUnlinkAtCaret === 'function') {
+        mdeUnlinkAtCaret(link);
+      }
+    },
+    /* 图片：下载 */
+    'mde-img-download': function () {
+      const img = document.querySelector('img:hover') || document.activeElement.closest('img');
+      if (img && typeof mdeDownloadImage === 'function') {
+        mdeDownloadImage(img.getAttribute('src') || '');
+      }
+    },
+    /* 图片：设置尺寸 */
+    'mde-img-size': function () {
+      const img = document.querySelector('img:hover') || document.activeElement.closest('img');
+      if (img && typeof mdeOpenImageSizeDialog === 'function') {
+        mdeOpenImageSizeDialog(img);
+      }
+    },
   });
 } catch (_) { /* 装配异常由宿主沙箱兜底 */ }

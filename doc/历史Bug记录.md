@@ -61,6 +61,7 @@
 | Bug-047 | 已修复（测试完成） | 主界面激活编辑器时 Ribbon「编辑器」按钮未高亮：内置按钮 id 用了 `file` 而路由 key 为 `editor`，匹配不到；已统一为 `editor`。 | [查看](bugs/Bug-047.md) |
 | Bug-048 | 已修复（测试完成） | 编辑器区右键菜单永不弹出：`onEditorContextMenu` 命中判定用了不存在的 `vdInst.element`（恒 undefined）做 `contains`，判定恒假；改用 `vdInst.vditor.element`。 | [查看](bugs/Bug-048.md) |
 | Bug-049 | 已修复（测试完成） | IR 通用右键菜单不弹出（WYSIWYG 正常）：IR 整区被 `<pre>` 包裹，代码块判定误用 `closest('pre')` 致普通文字被短路；改用 `[data-type="code-block"]`。 | [查看](bugs/Bug-049.md) |
+| Bug-050 | 已修复（测试完成） | 打开软件编辑器「闪烁→空白」，切 Ribbon 再切回才恢复：启动多次构建 vditor，旧实例异步 after 乱序抢占共享 `vdPending`，当前实例补渲落空；加构建序号令 after 仅最新实例消费。 | [查看](bugs/Bug-050.md) |
 
 > 说明（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——代码块语言选择器(chip)显隐保留为 Bug-011，编辑器链接弹框 `docButton` 那条纠正为 Bug-042。
 

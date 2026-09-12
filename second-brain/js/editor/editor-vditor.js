@@ -29,6 +29,8 @@
   let vdReady = false;
   /** @type {string|null} 待 vditor 异步渲染完成后补渲的内容（启动/快速切换时序缓冲） */
   let vdPending = null;
+  /** @type {number} 构建序号自增：标记「当前最新一次 buildVditor」，供异步 after 判断是否本实例，防止旧实例乱序抢占 */
+  let vdBuildSeq = 0;
   /** @type {string[]} 工具栏精简项：承接原自研格式/表格/代码/数学能力，含原生搜索、大纲、导出；
    *  upload 为 vditor 内置上传按钮，支持图片与附件（accept/上传逻辑见 buildVditor 的 upload 配置） */
   const VDTOOLBAR = [
@@ -553,9 +555,17 @@
     return document.getElementById('ed-vditor');
   }
 
+  /** 安全取当前实例内容：实例未就绪（异步首帧渲染未完成）或 getValue 内部抛错时返回 undefined，
+   *  由调用方回退暂存缓冲 vdBuffer。修复 fixValue 崩溃见 Bug 登记，作者: 火 冰 */
+  function safeGetValue() {
+    if (!vdInst) return undefined;
+    try { return vdInst.getValue(); } catch (_) { return undefined; /* 忽略未就绪异常 */ }
+  }
+
   /** 取当前实例内容：有实例用 getValue，否则用暂存缓冲 */
   function vdGetValue() {
-    return vdInst ? vdInst.getValue() : vdBuffer;
+    const v = vdInst ? safeGetValue() : vdBuffer;
+    return (v === undefined) ? vdBuffer : v;
   }
 
   /** 内容变更回传给宿主：vditor input/blur 回调统一入口
@@ -987,7 +997,11 @@
    * 说明：edit/split/preview 用 setPreviewMode 切换，无需重建；仅 ir↔sv 切换才重建。 */
   function buildVditor() {
     const el = vdEl();
-    const value = vdInst ? vdInst.getValue() : vdBuffer;
+    // 重建前保底取当前内容：实例存在时 try 取 getValue，失败（异步首帧未完成/销毁中途，此时
+    // vditor 内部 this.Vditor 尚未就绪，IR 下 getValue 访问 VditorIRDOM2Md 会抛 Undefined，
+    // 导致启动/快速重建时编辑区空白）则回退暂存缓冲 vdBuffer。作者: 火 冰
+    const cur = vdInst ? safeGetValue() : undefined;
+    const value = (cur != null) ? cur : vdBuffer;
     if (vdInst) { try { vdInst.destroy(); } catch (_) { /* 忽略销毁异常 */ } }
     vdInst = null;
     vdReady = false;   // 重建后视为未就绪，待 after 回调确认首帧渲染完成
@@ -998,6 +1012,7 @@
     /* 闭包捕获待创建实例：vditor 的 after 回调是平调用（this 不指向实例），
      * 且可能在 new 返回前触发，故用 inst 变量在构造后立即填充，供回调取用。 */
     let inst = null;
+    const seq = ++vdBuildSeq;   // 本次构建序号：after 据此识别是否为当前最新实例，防并发乱序
     const opts = {
       mode: vdMode,
       value: value,
@@ -1026,6 +1041,11 @@
        * 注意回调内 this 不指向实例，必须用 inst/vdInst 显式引用。
        * 作者: 火 冰 */
       after: function () {
+        // 仅最新一次构建的实例才消费暂存内容/接管显隐：启动/快速切换时 vdInit 先以
+        // 默认 IR 构建一次，恢复记忆模式（如 WYSIWYG）再重建一次，两次异步 after 可能乱序。
+        // 若旧实例的 after 先触发，会抢占共享 vdPending 并把内容 setValue 到已销毁实例上，
+        // 使当前活动实例渲染后空白（Bug-050 启动编辑器闪烁后空白）。故 seq 不匹配旧实例则放行。
+        if (seq !== vdBuildSeq) return;
         vdReady = true;
         const target = inst || vdInst;
         const pending = (vdPending != null) ? vdPending : '';

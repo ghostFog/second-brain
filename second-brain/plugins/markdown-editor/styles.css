@@ -5,6 +5,13 @@
  *       由 manifest.styles 声明、桌面版插件加载时自动注入 <head>。
  * ============================================ */
 
+/* ---------- 图片选中样式（点击显示边框 + 拖拽手柄） ---------- */
+.mde-img-selected {
+  outline: 2px solid var(--note-brand-600, #7C3AED);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 /* ---------- 所见即所得：代码块语言选择器（右下角 chip + 下拉筛选） ---------- */
 .mde-code-lang {
   position: fixed;

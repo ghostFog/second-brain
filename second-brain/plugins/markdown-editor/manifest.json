@@ -5,10 +5,10 @@
   "icon": "file-text",
   "color": "#7C3AED",
   "cat": "editor",
-  "desc": "Markdown 编辑器增强（vditor 底座由宿主承载）：注册 .md/.markdown 后缀，提供编辑/预览/分屏、右侧边面板（属性/大纲/反向链接/标签），并承载 markdown 专属增强——往返序列化、代码块语言选择器、WYSIWYG 块编辑、右键「插入图片/上传附件/在上方插入空行」。桌面版目录插件加载，网页版回落宿主薄壳。",
-  "version": "1.0.0",
+  "desc": "Markdown 编辑器增强（vditor 底座由宿主承载）：注册 .md/.markdown 后缀，提供编辑/预览/分屏、右侧边面板（属性/大纲/反向链接/标签），并承载 markdown 专属增强——往返序列化、代码块语言选择器、WYSIWYG 块编辑、右键「插入图片/上传附件/在上方插入空行」、链接右键「浏览器打开/取消链接」、图片右键「下载/设置尺寸」、图片点击选中与拖拽调整尺寸。桌面版目录插件加载，网页版回落宿主薄壳。",
+  "version": "1.0.1",
   "main": "main.js",
-  "scripts": ["md-serialize.js", "md-blocks.js", "md-context.js"],
+  "scripts": ["md-serialize.js", "md-blocks.js", "md-context.js", "md-enhance.js"],
   "styles": "styles.css",
   "permissions": ["ui.editor"],
   "editor": {
@@ -36,6 +36,18 @@
     ]
   },
   "commands": [
-    { "icon": "file-text", "label": "Markdown: 打开当前笔记", "actionKey": "mde-open" }
-  ]
+    { "icon": "file-text", "label": "Markdown: 打开当前笔记", "actionKey": "mde-open" },
+    { "icon": "link", "label": "链接: 浏览器打开", "actionKey": "mde-link-open" },
+    { "icon": "unlink", "label": "链接: 取消链接", "actionKey": "mde-link-unlink" },
+    { "icon": "download", "label": "图片: 下载", "actionKey": "mde-img-download" },
+    { "icon": "image", "label": "图片: 设置尺寸", "actionKey": "mde-img-size" }
+  ],
+  "contextMenus": {
+    "editor": [
+      { "label": "浏览器打开", "icon": "external-link", "actionKey": "mde-link-open" },
+      { "label": "取消链接", "icon": "unlink", "actionKey": "mde-link-unlink" },
+      { "label": "下载图片", "icon": "download", "actionKey": "mde-img-download" },
+      { "label": "设置图片尺寸", "icon": "image", "actionKey": "mde-img-size" }
+    ]
+  }
 }

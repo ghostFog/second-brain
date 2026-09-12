@@ -214,12 +214,24 @@ function testVditorBridge() {
   const providers = [];
   W.registerEditorProvider = function (p) { providers.push(p); };
   W.restoreS = function () { return true; };
-  const calls = { previewModes: [], initModes: [] };
+  const calls = { previewModes: [], initModes: [], instancesOld: [] };
   // 桩 vditor：记录构造 mode 与 setPreviewMode，setValue/getValue 维护内部 _val
   const StubVditor = function (el, opts) {
     this._val = opts.value || '';
     this.mode = opts.mode;
+    this._after = opts.after;      // 记录首帧渲染完成回调，供 Bug-050 回归断言按乱序手动触发
+    // mock .vditor 视图容器，使 applyVdVisibility 在 after 触发时可通过（不崩）
+    this.vditor = {
+      currentMode: 'ir',          // 常量非 'sv'：令 applyVdOrRebuild 在 split/preview/edit 时均重建实例，匹配既有断言；
+                                  // （applyVdVisibility 不读 currentMode，仅用视图容器显隐）
+      sv: { element: { style: {} } },
+      ir: { element: { style: {}, parentElement: { style: {} }, querySelectorAll: function () { return []; } } },
+      wysiwyg: { element: { style: {}, parentElement: { style: {} }, querySelectorAll: function () { return []; } } },
+      preview: { element: { style: {} } },
+      render: function () {},
+    };
     calls.initModes.push(opts.mode);
+    calls.instancesOld.push(this);   // 记录每次构建的实例（含 after 引用），供 Bug-050 回归按乱序触发
   };
   StubVditor.prototype.getValue = function () { return this._val; };
   StubVditor.prototype.setValue = function (v) { this._val = v; };
@@ -259,6 +271,41 @@ function testVditorBridge() {
   W.vdSetMode('edit');
   assert(JSON.stringify(calls.initModes) === JSON.stringify(['sv', 'sv', 'ir']),
     '迁移: vdSetMode 映射 split→sv、preview→sv、edit→ir 重建（实际 ' + calls.initModes.join(',') + '）');
+
+  // 回归：实例未就绪（异步首帧未完成时 vditor 内部 this.Vditor 尚缺，IR 下 getValue 访问
+  // VditorIRDOM2Md 会抛 Undefined）重建取内容须安全回退缓冲，不得中断重建导致编辑区空白。
+  W.vdSetValue('line1\nline2');                       // 同时写入实例与缓冲
+  const realGetValue = StubVditor.prototype.getValue; // 暂存真实实现，断言末尾还原
+  StubVditor.prototype.getValue = function () {
+    throw new TypeError("Cannot read properties of undefined (reading 'VditorIRDOM2Md')");
+  };
+  let vdCrash = false;
+  try {
+    W.vdSetMode('split');   // 重建到 sv，重建前 getValue 保留内容（桩抛错）→ 应回退缓冲
+    W.vdSetMode('edit');    // 退回编辑重建，同样在取内容处触发
+  } catch (_) { vdCrash = true; }
+  StubVditor.prototype.getValue = realGetValue;      // 还原真实实现，避免污染后续断言
+  assert(!vdCrash, 'Bug-fix: 实例未就绪 getValue 抛错时重建不中断（回退缓冲），编辑区不空白');
+  // 重建后缓冲/实例读写链路仍正常（成功重建会把 vdBuffer 清空为取实例内容，属既有设计；回填后应往返一致）
+  W.vdSetValue('line1\nline2');
+  assert(W.vdGetValue() === 'line1\nline2', 'Bug-fix: 抛错重建后缓冲/实例读写链路正常，无损坏');
+
+  // Bug-050 回归：启动/快速切换时 vdInit 先建 IR 实例、恢复记忆模式再重建（如 WYSIWYG），
+  // 两次异步 after 可能乱序——若旧实例 after 先触发会抢占共享 vdPending 并把内容塞到已销毁
+  // 实例上，最终导致当前实例渲染后空白（打开软件闪烁→空白）。须由最新实例的 after 消费补渲。
+  const oldInst = calls.instancesOld[calls.instancesOld.length - 1]; // 当前 vdInst（既有实例）
+  const oldAfter = oldInst._after;
+  oldInst._val = 'old-content';
+  W.vdSetEditorNode('wysiwyg');                                        // 记忆 ir→wysiwyg：重建出新实例
+  const newInst = calls.instancesOld[calls.instancesOld.length - 1];
+  newInst._val = '';                                                   // 新实例异步渲染未完成，内容为空
+  W.vdSyncValue('Bug-050 content');                                    // 未就绪 → 暂存 vdPending
+  oldAfter();                                                          // 旧实例 after 乱序先返回
+  assert(newInst._val !== 'Bug-050 content', 'Bug-050-前: 旧实例 after 后新实例未被误塞（pending 未抢占）');
+  newInst._after();                                                    // 新实例 after 后返回：应消费 pending 补渲
+  assert(newInst._val === 'Bug-050 content',
+    'Bug-050: 最新实例 after 消费 vdPending 补渲内容，编辑区非空白（旧抢占不得清空 pending）');
+  assert(W.vdGetValue() === 'Bug-050 content', 'Bug-050: 补渲后 getValue 返回最新内容');
 }
 
 /* ---- ED-11 迁移: 文件树「重命名」右键 / 双击文件名（renameNoteFile）----
