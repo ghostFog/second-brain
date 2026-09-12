@@ -43,16 +43,14 @@
   let _toastTimer = null;
   function showToast(msg) {
     let t = document.getElementById('set-toast');
-    if (!t) {
-      t = document.createElement('div');
-      t.id = 'set-toast';
-      t.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:999;padding:8px 16px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;background:var(--note-ink);color:var(--note-background);box-shadow:0 4px 16px rgba(0,0,0,.25);';
-      document.body.appendChild(t);
-    }
+    if (t) t.remove();
+    t = document.createElement('div');
+    t.id = 'set-toast';
+    t.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:999;padding:8px 16px;border-radius:8px;font-size:13px;opacity:1;transition:opacity .2s;background:var(--note-ink);color:var(--note-background);box-shadow:0 4px 16px rgba(0,0,0,.25);';
     t.textContent = msg;
-    t.style.opacity = '1';
+    document.body.appendChild(t);
     clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(function () { t.style.opacity = '0'; }, 1800);
+    _toastTimer = setTimeout(function () { t.remove(); }, 1800);
   }
 
   /* 设置项副作用映射：返回已应用文案，无副作用返回 null */
