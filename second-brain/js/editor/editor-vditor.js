@@ -287,7 +287,7 @@
   function sbUploadAccept(type) {
     return (typeof window.sbUploadAccept === 'function')
       ? window.sbUploadAccept(type)
-      : (type === 'image' ? 'image/*' : '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.html,.htm,.md,.txt,.sh,.bat,.cmd,.ps1,.csv,.zip,.rar,.7z');
+      : (type === 'image' ? 'image/*' : '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.html,.htm,.md,.txt,.sh,.bat,.cmd,.ps1,.csv,.zip,.rar,.7z,.asc');
   }
 
   /** 弹出文件选择，选中文件经 handleVdUpload 在光标处上传并插入（复用上传/落盘与分流逻辑）。
