@@ -201,6 +201,8 @@
       if (w > 0 && h > 0) {
         img.style.width = w + 'px';
         img.style.height = h + 'px';
+        /* 同步尺寸到 URL 参数 */
+        syncImageSizeToUrl(img, w, h);
       }
       closeImageSizeDialog();
     });
@@ -222,6 +224,81 @@
     document.body.appendChild(overlay);
   }
 
+  /* ---------- 图片 URL 尺寸参数工具 ---------- */
+
+  /** 从图片 URL 中解析尺寸参数 ?w=xxx&h=xxx
+   *  @param {string} src 图片 URL
+   *  @returns {{baseUrl:string, w:number, h:number}} 解析结果，w/h 为 0 表示无参数
+   *  @author 火 冰 */
+  function parseImageUrlSize(src) {
+    var result = { baseUrl: src || '', w: 0, h: 0 };
+    if (!src) return result;
+    var qi = src.indexOf('?');
+    if (qi < 0) return result;
+    result.baseUrl = src.slice(0, qi);
+    var query = src.slice(qi + 1);
+    var params = query.split('&');
+    for (var i = 0; i < params.length; i++) {
+      var kv = params[i].split('=');
+      if (kv[0] === 'w' || kv[0] === 'width') result.w = parseInt(kv[1], 10) || 0;
+      if (kv[0] === 'h' || kv[0] === 'height') result.h = parseInt(kv[1], 10) || 0;
+    }
+    return result;
+  }
+
+  /** 构建带尺寸参数的图片 URL
+   *  @param {string} baseUrl 基础 URL（不含尺寸参数）
+   *  @param {number} w 宽度（px）
+   *  @param {number} h 高度（px）
+   *  @returns {string} 带 ?w=&h= 参数的 URL
+   *  @author 火 冰 */
+  function buildImageUrlSize(baseUrl, w, h) {
+    if (!baseUrl) return '';
+    if (w > 0 && h > 0) return baseUrl + '?w=' + w + '&h=' + h;
+    return baseUrl;
+  }
+
+  /** 从图片 URL 中提取尺寸并应用到 img.style
+   *  @param {HTMLImageElement} img 图片元素
+   *  @author 火 冰 */
+  function applyImageSizeFromUrl(img) {
+    if (!img) return;
+    var src = img.getAttribute('src') || '';
+    var info = parseImageUrlSize(src);
+    if (info.w > 0 && info.h > 0) {
+      img.style.width = info.w + 'px';
+      img.style.height = info.h + 'px';
+    }
+  }
+
+  /** 同步图片尺寸到 URL 参数（修改 IR/WYSIWYG DOM 并触发 input 事件）
+   *  @param {HTMLImageElement} img 图片元素
+   *  @param {number} w 宽度（px）
+   *  @param {number} h 高度（px）
+   *  @author 火 冰 */
+  function syncImageSizeToUrl(img, w, h) {
+    if (!img || w <= 0 || h <= 0) return;
+    var src = img.getAttribute('src') || '';
+    var info = parseImageUrlSize(src);
+    var newUrl = buildImageUrlSize(info.baseUrl, w, h);
+
+    /* IR 模式：更新 .vditor-ir__marker--link 中的 URL 文本 */
+    var irContainer = img.closest('[data-type="img"]');
+    if (irContainer) {
+      var linkEl = irContainer.querySelector('.vditor-ir__marker--link');
+      if (linkEl) linkEl.textContent = newUrl;
+    }
+
+    /* 更新 img 的 src（保留参数用于持久化） */
+    img.setAttribute('src', newUrl);
+
+    /* 触发编辑区 input 事件，让 Vditor 重新序列化并同步 */
+    var editor = document.querySelector('.vditor-ir') || document.querySelector('.vditor-wysiwyg');
+    if (editor) {
+      try { editor.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) { /* 忽略 */ }
+    }
+  }
+
   /* ---------- 图片点击选中 + 拖拽调整尺寸 ---------- */
 
   let selectedImg = null;
@@ -232,7 +309,7 @@
   let dragHandle = null;
   let isDragging = false;
 
-  /** 选中图片（显示边框 + 拖拽手柄）
+  /** 选中图片（显示边框 + 右下角拖拽手柄）
    *  @param {HTMLImageElement} img 图片元素
    *  @author 火 冰 */
   function selectImage(img) {
@@ -244,20 +321,26 @@
     dragHandle = document.createElement('div');
     dragHandle.id = 'mde-img-resize-handle';
     dragHandle.style.cssText = 'position:absolute;z-index:100;'
-      + 'width:10px;height:10px;'
+      + 'width:12px;height:12px;'
       + 'background:var(--note-brand-600,#7C3AED);'
       + 'border:2px solid #fff;border-radius:50%;'
       + 'cursor:nwse-resize;'
       + 'box-shadow:0 1px 4px rgba(0,0,0,.3);';
 
-    const rect = img.getBoundingClientRect();
-    dragHandle.style.left = (rect.width - 5) + 'px';
-    dragHandle.style.top = (rect.height - 5) + 'px';
-
-    const parent = img.parentNode;
-    if (parent) {
-      parent.style.position = parent.style.position || 'relative';
-      parent.appendChild(dragHandle);
+    /* 圆点定位到图片右下角：用 img 相对于 offsetParent 的位置计算 */
+    var offsetParent = img.offsetParent;
+    if (offsetParent) {
+      dragHandle.style.left = (img.offsetLeft + img.offsetWidth - 6) + 'px';
+      dragHandle.style.top = (img.offsetTop + img.offsetHeight - 6) + 'px';
+      offsetParent.style.position = offsetParent.style.position || 'relative';
+      offsetParent.appendChild(dragHandle);
+    } else {
+      /* 回退：用 fixed 定位到视口右下角 */
+      var rect = img.getBoundingClientRect();
+      dragHandle.style.position = 'fixed';
+      dragHandle.style.left = (rect.right - 6) + 'px';
+      dragHandle.style.top = (rect.bottom - 6) + 'px';
+      document.body.appendChild(dragHandle);
     }
 
     dragHandle.addEventListener('mousedown', startDrag);
@@ -294,28 +377,40 @@
     selectedImg.style.opacity = '0.7';
   }
 
-  /** 拖拽中
+  /** 拖拽中：更新图片尺寸和圆点位置
    *  @param {MouseEvent} e 鼠标事件 */
   function onDrag(e) {
     if (!isDragging || !selectedImg) return;
-    const dx = e.clientX - dragStartX;
-    const dy = e.clientY - dragStartY;
-    const newW = Math.max(20, dragStartW + dx);
-    const newH = Math.max(20, dragStartH + dy);
+    var dx = e.clientX - dragStartX;
+    var dy = e.clientY - dragStartY;
+    var newW = Math.max(20, dragStartW + dx);
+    var newH = Math.max(20, dragStartH + dy);
     selectedImg.style.width = newW + 'px';
     selectedImg.style.height = newH + 'px';
+    /* 圆点跟随图片右下角 */
     if (dragHandle) {
-      dragHandle.style.left = (newW - 5) + 'px';
-      dragHandle.style.top = (newH - 5) + 'px';
+      var offsetParent = selectedImg.offsetParent;
+      if (offsetParent && dragHandle.offsetParent === offsetParent) {
+        dragHandle.style.left = (selectedImg.offsetLeft + newW - 6) + 'px';
+        dragHandle.style.top = (selectedImg.offsetTop + newH - 6) + 'px';
+      } else {
+        var rect = selectedImg.getBoundingClientRect();
+        dragHandle.style.left = (rect.right - 6) + 'px';
+        dragHandle.style.top = (rect.bottom - 6) + 'px';
+      }
     }
   }
 
-  /** 结束拖拽
+  /** 结束拖拽：同步尺寸到 URL 参数
    *  @param {MouseEvent} e 鼠标事件 */
   function endDrag(e) {
     if (!isDragging || !selectedImg) return;
     isDragging = false;
     selectedImg.style.opacity = '1';
+    /* 拖拽结束后将尺寸写入 URL 参数 */
+    var w = Math.round(selectedImg.offsetWidth);
+    var h = Math.round(selectedImg.offsetHeight);
+    syncImageSizeToUrl(selectedImg, w, h);
   }
 
   /** 初始化：绑定右键菜单和点击事件 */
@@ -454,6 +549,35 @@
       }
     }, true);
 
+    /* 图片加载时解析 URL 参数按尺寸显示 */
+    document.addEventListener('load', function (e) {
+      if (e.target && e.target.tagName === 'IMG') {
+        applyImageSizeFromUrl(e.target);
+      }
+    }, true);
+
+    /* MutationObserver：新插入的图片解析 URL 参数 */
+    if (typeof MutationObserver === 'function') {
+      var imgObserver = new MutationObserver(function (mutations) {
+        for (var i = 0; i < mutations.length; i++) {
+          var added = mutations[i].addedNodes;
+          for (var j = 0; j < added.length; j++) {
+            var node = added[j];
+            if (node.nodeType !== 1) continue;
+            if (node.tagName === 'IMG') {
+              applyImageSizeFromUrl(node);
+            } else if (node.querySelectorAll) {
+              var imgs = node.querySelectorAll('img');
+              for (var k = 0; k < imgs.length; k++) {
+                applyImageSizeFromUrl(imgs[k]);
+              }
+            }
+          }
+        }
+      });
+      imgObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    }
+
     // 按 ESC 取消选中
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
@@ -468,6 +592,10 @@
   window.mdeDownloadImage = downloadImage;
   window.mdeOpenImageSizeDialog = openImageSizeDialog;
   window.mdeInitEnhance = init;
+  window.mdeParseImageUrlSize = parseImageUrlSize;
+  window.mdeBuildImageUrlSize = buildImageUrlSize;
+  window.mdeApplyImageSizeFromUrl = applyImageSizeFromUrl;
+  window.mdeSyncImageSizeToUrl = syncImageSizeToUrl;
 
   // 自动初始化
   init();
