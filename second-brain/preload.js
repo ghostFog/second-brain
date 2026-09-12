@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   uploadResource: (fileName, data) => ipcRenderer.invoke('notes:uploadResource', fileName, data),
   /** 用系统默认程序打开上传的资源文件（传入 note://vault_res/ 路径的存储名 uuid.ext） */
   openResource: (stored) => ipcRenderer.invoke('notes:openResource', stored),
+  /** 删除上传的资源文件（图片/附件）：从 .resources 物理删除并刷新元数据 */
+  deleteResource: (url) => ipcRenderer.invoke('notes:deleteResource', url),
   /** 在系统文件管理器中显示该笔记 */
   revealNote: (relPath) => ipcRenderer.invoke('notes:reveal', relPath),
   /** 移动整个目录到新父目录（保留内部结构 + 空目录；源目录被移除），返回 {dir, moved} */

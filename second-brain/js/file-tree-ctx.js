@@ -206,6 +206,29 @@ function buildOpenChildren(path) {
   return children;
 }
 
+/** 重建数据库元数据（全库扫描，覆盖所有目录的 _meta.json）。
+ *  @param {string} dir 目标目录相对路径（空串表示根目录）；当前实现为全库重建，
+ *         确保子孙目录与祖先目录数据全部修正。
+ *  @author 火 冰 */
+async function rebuildMeta(dir) {
+  const bridge = window.noteDesktop;
+  if (!bridge || !bridge.refreshMeta) {
+    if (typeof showToast === 'function') showToast('该功能仅桌面版可用');
+    return;
+  }
+  if (typeof showToast === 'function') showToast('正在重建笔记数据…');
+  try {
+    const result = await bridge.refreshMeta();
+    /* 刷新文件树 UI */
+    try { await refreshTreeAfterChange(); } catch (_) { /* 忽略 */ }
+    if (typeof showToast === 'function') {
+      showToast('笔记数据已重建' + (result && result.dirs ? '（' + result.dirs + ' 个目录）' : ''));
+    }
+  } catch (_) {
+    if (typeof showToast === 'function') showToast('重建失败');
+  }
+}
+
 /* 绑定文件树右键：在 #file-tree 上做委托，统一处理目录 / 笔记 / 空白区三种场景
  * 所有匹配场景命中后 stopPropagation，阻断冒泡到 document，确保只弹一份菜单。
  * 作者: 火 冰 */
@@ -237,6 +260,7 @@ function bindFileTreeContextMenu() {
         { label: '移动到…', icon: 'move-right', children: moveChildren },
         '-',
         treeSpec('删除目录', 'trash-2', () => actDeleteDir(targetDir)),
+        treeSpec('重建笔记数据', 'refresh-cw', () => rebuildMeta(targetDir)),
       ]);
       return;
     }
@@ -270,6 +294,8 @@ function bindFileTreeContextMenu() {
       treeSpec('新建笔记', 'file-plus', () => doNewNote('')),
       '-',
       treeSpec((showHidden ? '隐藏隐藏目录' : '显示隐藏目录'), showHidden ? 'eye-off' : 'eye', () => toggleHiddenFiles()),
+      '-',
+      treeSpec('重建笔记数据', 'refresh-cw', () => rebuildMeta('')),
     ]);
   });
 

@@ -570,7 +570,7 @@ const snowflake = new SnowflakeId({ mid: 1 });
 /** 从笔记 frontmatter 提取属性：id / tags / 字数（去空白）。
  * @param {string} text 笔记全文
  * @param {string} name 笔记文件名（无 id 时的回退）
- * @returns {{noteId:string, tags:string[], wordCount:number}}
+ * @returns {{noteId:string, tags:string[], wordCount:number, attachments:Array, outlinks:Array}}
  * @author 火 冰 */
 function parseNoteMeta(text, name) {
   let d = {};
@@ -578,7 +578,96 @@ function parseNoteMeta(text, name) {
   const idAttr = (typeof d.id === 'string' && d.id.trim()) ? d.id.trim() : '';
   const rawTags = Array.isArray(d.tags) ? d.tags : [];
   const wordCount = String(text || '').replace(/\s+/g, '').length;
-  return { noteId: idAttr, tags: rawTags.map(String).filter(Boolean), wordCount };
+  const attachments = extractAttachments(text);
+  const outlinks = extractOutlinks(text);
+  return { noteId: idAttr, tags: rawTags.map(String).filter(Boolean), wordCount, attachments, outlinks };
+}
+
+/** 图片扩展名集合（用于区分图片与普通附件） */
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.ico', '.tif', '.tiff']);
+
+/** 从 Markdown 文本中提取附件/图片列表。
+ *  识别三种语法:
+ *    1. 图片: ![name](note://vault_res/uuid.ext)
+ *    2. 附件引言: > [!attach] name note://vault_res/uuid.ext
+ *    3. 普通链接附件: [name](note://vault_res/uuid.ext)
+ *  @param {string} text 笔记全文
+ *  @returns {Array<{name:string, url:string, type:string}>} 附件列表（type 为 'image' 或 'attachment'）
+ *  @author 火 冰 */
+function extractAttachments(text) {
+  var result = [];
+  var src = String(text || '');
+  var seen = new Set();
+
+  /* 图片: ![name](note://vault_res/uuid.ext) */
+  var imgRe = /!\[([^\]]*)\]\((note:\/\/vault_res\/[^)\s]+)\)/g;
+  var m;
+  while ((m = imgRe.exec(src)) !== null) {
+    var url = m[2];
+    if (seen.has(url)) continue;
+    seen.add(url);
+    var ext = path.extname(url.split('/').pop() || '').toLowerCase();
+    result.push({ name: m[1] || url.split('/').pop(), url: url, type: 'image' });
+  }
+
+  /* 附件引言: > [!attach] name note://vault_res/uuid.ext */
+  var attachRe = />\s*\[!attach\]\s+(.+?)\s+(note:\/\/vault_res\/[^\s]+)/gi;
+  while ((m = attachRe.exec(src)) !== null) {
+    var url2 = m[2];
+    if (seen.has(url2)) continue;
+    seen.add(url2);
+    result.push({ name: m[1].trim(), url: url2, type: 'attachment' });
+  }
+
+  /* 普通链接附件: [name](note://vault_res/uuid.ext)（排除已被图片匹配的 ![] 语法） */
+  var linkRe = /(?<!\!)\[([^\]]*)\]\((note:\/\/vault_res\/[^)\s]+)\)/g;
+  while ((m = linkRe.exec(src)) !== null) {
+    var url3 = m[2];
+    if (seen.has(url3)) continue;
+    seen.add(url3);
+    var ext3 = path.extname(url3.split('/').pop() || '').toLowerCase();
+    result.push({ name: m[1] || url3.split('/').pop(), url: url3, type: IMAGE_EXTS.has(ext3) ? 'image' : 'attachment' });
+  }
+
+  return result;
+}
+
+/** 从 Markdown 文本中提取正向链接（该笔记链接到的其他笔记）。
+ *  识别两种语法:
+ *    1. Wiki 链接: [[笔记名]] 或 [[笔记名|显示文本]]
+ *    2. 相对路径链接: [text](路径.md)（非 note:// 和非 http 开头）
+ *  @param {string} text 笔记全文
+ *  @returns {Array<{path:string, name:string}>} 正向链接列表
+ *  @author 火 冰 */
+function extractOutlinks(text) {
+  var result = [];
+  var src = String(text || '');
+  var seen = new Set();
+
+  /* Wiki 链接: [[笔记名]] 或 [[笔记名|显示文本]] */
+  var wikiRe = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
+  var m;
+  while ((m = wikiRe.exec(src)) !== null) {
+    var target = m[1].trim();
+    var targetPath = target.toLowerCase().endsWith('.md') ? target : target + '.md';
+    if (seen.has(targetPath)) continue;
+    seen.add(targetPath);
+    result.push({ path: targetPath, name: target });
+  }
+
+  /* 相对路径链接: [text](路径.md)（排除 note:// 和 http(s):// 开头） */
+  var relRe = /\[([^\]]*)\]\(([^)]+)\)/g;
+  while ((m = relRe.exec(src)) !== null) {
+    var url = m[2].trim();
+    if (/^(note:|https?:|mailto:|tel:|ftp:)/i.test(url)) continue;
+    if (!url.toLowerCase().endsWith('.md')) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    var linkName = url.split('/').pop().replace(/\.md$/i, '');
+    result.push({ path: url, name: linkName });
+  }
+
+  return result;
 }
 
 /** 从笔记 frontmatter 中移除 `id:` 字段，使 md 文件保持干净（id 改由 .second-brain 元数据追踪）。
@@ -626,7 +715,7 @@ function ensureNoteId(text, gen, prevId) {
 
 /** 递归扫描 vault（跳过 .second-brain），逐目录生成元数据记录。
  * 每条记录：dir / noteCount(直接 .md 数) / dirCount(直接子目录数) / size(递归占用字节) / totalNotes(递归笔记数)
- *          / notes[](直接笔记属性) / children[](文件列表：子目录 type:'dir' + 文件 type:'file'，各带 size、mtime) / updatedAt。
+ *          / notes[](直接笔记属性) / children[](子目录列表 type:'dir'，各带 size、mtime) / updatedAt。
  * @returns {Promise<Map<string, object>>} 目录相对路径('' 表示根) -> 记录
  * @author 火 冰 */
 async function scanVaultMeta() {
@@ -641,12 +730,13 @@ async function scanVaultMeta() {
     // 读取本目录旧记录中每篇笔记的「索引分块覆盖配置」(chunk) 与「稳定雪花 id」(noteId)，重建时保留
     const prevOverrides = {};
     const prevNoteIds = {};
+    const prevIndexTimes = {};
     try {
       const prev = JSON.parse(await fs.promises.readFile(path.join(root, META_DIR, ...(dirRel ? dirRel.split('/') : []), '_meta.json'), 'utf8'));
-      if (prev && Array.isArray(prev.notes)) prev.notes.forEach(function (n) { if (n && n.chunk) prevOverrides[n.name] = n.chunk; if (n && n.noteId) prevNoteIds[n.name] = n.noteId; });
+      if (prev && Array.isArray(prev.notes)) prev.notes.forEach(function (n) { if (n && n.chunk) prevOverrides[n.name] = n.chunk; if (n && n.noteId) prevNoteIds[n.name] = n.noteId; if (n && n.indexTime) prevIndexTimes[n.name] = n.indexTime; });
     } catch (e) { /* 无旧记录 */ }
     let subBytes = 0, subNotes = 0;
-    const dirKids = [], fileKids = [];   // 目录属性：文件列表（子目录 + 文件）
+    const dirKids = [];   // children 只记录子目录
     for (const it of items) {
       if (it.name === META_DIR || it.name === RESOURCE_DIR) continue;                      // 跳过元数据目录与上传资源目录自身
       const childAbs = path.join(abs, it.name);
@@ -669,8 +759,8 @@ async function scanVaultMeta() {
         const clean = stripMetaId(text);
         if (clean.removed) { try { await fs.promises.writeFile(childAbs, clean.text, 'utf8'); } catch (e) { /* 清理失败不阻断 */ } text = clean.text; }
         const pm = parseNoteMeta(text, it.name);
-        rec.notes.push({ name: it.name, path: childRel, noteId: noteId, wordCount: pm.wordCount, tags: pm.tags, size: st.size, created: st.birthtimeMs, mtime: st.mtimeMs, chunk: prevOverrides[it.name] || undefined });
-        fileKids.push({ name: it.name, type: 'file', size: st.size, created: st.birthtimeMs, mtime: st.mtimeMs });
+        rec.notes.push({ name: it.name, path: childRel, noteId: noteId, wordCount: pm.wordCount, tags: pm.tags, size: st.size, created: st.birthtimeMs, mtime: st.mtimeMs, chunk: prevOverrides[it.name] || undefined, indexTime: prevIndexTimes[it.name] || Date.now(), attachments: pm.attachments || [], outlinks: pm.outlinks || [] });
+
         rec.noteCount++;
         rec.size += st.size;
       }
@@ -678,14 +768,50 @@ async function scanVaultMeta() {
     rec.size += subBytes;         // 占用大小 = 目录下全部文件递归合计
     rec.totalNotes = rec.noteCount + subNotes;   // 笔记个数 = 直接 + 子孙
     rec.totalSize = rec.size;
-    // 文件列表排序：目录在前、文件在后，各自按中文名称排序
+    // children 只记录子目录（文件信息已在 notes 数组中）
     dirKids.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); });
-    fileKids.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); });
-    rec.children = dirKids.concat(fileKids);
+    rec.children = dirKids;
     return { bytes: rec.size, notes: rec.totalNotes };
   };
   await walk('');
+  /* 第二遍：根据正向链接计算反向链接 */
+  computeBacklinks(records);
   return records;
+}
+
+/** 根据正向链接（outlinks）计算反向链接（backlinks）并回填到每篇笔记。
+ *  遍历所有笔记的 outlinks，将 (源笔记 → 目标笔记) 的关系反转为 (目标笔记 → 源笔记)。
+ *  @param {Map<string, object>} records scanVaultMeta 的产物
+ *  @author 火 冰 */
+function computeBacklinks(records) {
+  /* 收集所有笔记路径 → noteId 映射，用于匹配 outlinks */
+  var allNotes = new Map();
+  for (var [dir, rec] of records) {
+    if (!rec || !Array.isArray(rec.notes)) continue;
+    for (var i = 0; i < rec.notes.length; i++) {
+      var n = rec.notes[i];
+      n.backlinks = [];
+      allNotes.set(n.path, n);
+      allNotes.set(n.name, n);
+    }
+  }
+
+  /* 遍历每篇笔记的 outlinks，找到目标笔记并添加反向链接 */
+  for (var [dir2, rec2] of records) {
+    if (!rec2 || !Array.isArray(rec2.notes)) continue;
+    for (var j = 0; j < rec2.notes.length; j++) {
+      var src = rec2.notes[j];
+      if (!Array.isArray(src.outlinks)) continue;
+      for (var k = 0; k < src.outlinks.length; k++) {
+        var link = src.outlinks[k];
+        /* 尝试匹配: 完整路径 → 文件名 → 去扩展名 */
+        var target = allNotes.get(link.path) || allNotes.get(link.name + '.md') || allNotes.get(link.name);
+        if (target && target.path !== src.path) {
+          target.backlinks.push({ path: src.path, name: src.name.replace(/\.md$/i, '') });
+        }
+      }
+    }
+  }
 }
 
 /** 将元数据记录逐目录写入 .second-brain/<dir>/_meta.json，并清理不对应现存目录的镜像残留。
@@ -919,9 +1045,27 @@ ipcMain.handle('notes:createDir', async (_e, dir) => {
   return rel;
 });
 
-/* 删除单篇笔记（移入回收站）；删除后从索引移除该笔记全部块 */
+/* 删除单篇笔记：先清理笔记内引用的资源文件（图片/附件），再删除 .md 文件并移除索引。
+ * @param {string} rel 笔记相对路径
+ * @returns {Promise<boolean>} 是否删除成功
+ * @author 火 冰 */
 ipcMain.handle('notes:delete', async (_e, rel) => {
   const abs = resolveVaultPath(rel);
+  /* 删除前先清理笔记内引用的资源文件 */
+  try {
+    if (fs.existsSync(abs)) {
+      const text = await fs.promises.readFile(abs, 'utf8');
+      const attachments = extractAttachments(text);
+      const resDir = path.join(vaultRoot(), RESOURCE_DIR);
+      for (var i = 0; i < attachments.length; i++) {
+        var m = String(attachments[i].url).match(/^note:\/\/vault_res\/([^?#]+)/);
+        if (m) {
+          var resAbs = path.join(resDir, m[1]);
+          try { if (fs.existsSync(resAbs)) await fs.promises.unlink(resAbs); } catch (e) { /* 资源删除失败不阻断 */ }
+        }
+      }
+    }
+  } catch (e) { /* 读取/解析失败不阻断删除 */ }
   if (fs.existsSync(abs)) { await fs.promises.unlink(abs); }
   aiEngine.removeNote(rel).catch(function () { /* 移除索引失败不阻塞删除 */ });
   scheduleMetaRefresh();
@@ -962,6 +1106,25 @@ ipcMain.handle('notes:openResource', async (_e, stored) => {
   const abs = path.join(vaultRoot(), RESOURCE_DIR, ...segs);
   if (!fs.existsSync(abs)) return false;
   shell.openPath(abs);
+  return true;
+});
+
+/* 删除上传的资源文件（图片/附件）：从 .resources 目录物理删除，并刷新元数据。
+ * @param {string} url note://vault_res/uuid.ext 资源地址或存储名
+ * @returns {Promise<boolean>} 是否删除成功
+ * @author 火 冰 */
+ipcMain.handle('notes:deleteResource', async (_e, url) => {
+  var stored = String(url || '');
+  /* 支持传入完整 note://vault_res/uuid.ext 或纯存储名 uuid.ext */
+  var m = stored.match(/^note:\/\/vault_res\/([^?#]+)/);
+  if (m) stored = m[1];
+  const segs = stored.split('/').filter(Boolean);
+  if (!stored || segs.includes('..')) return false;
+  const abs = path.join(vaultRoot(), RESOURCE_DIR, ...segs);
+  try {
+    if (fs.existsSync(abs)) await fs.promises.unlink(abs);
+  } catch (e) { /* 删除失败不阻断 */ }
+  scheduleMetaRefresh();
   return true;
 });
 

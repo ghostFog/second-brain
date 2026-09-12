@@ -39,8 +39,9 @@
   }
 
   /* 从 blockquote 文本内容解析出 name 和 url
-   * 格式: [!attach] 真实名 note://vault_res/uuid.ext
-   * @returns {{name:string, url:string}|null} */
+   *  格式: [!attach] 真实名 note://vault_res/uuid.ext
+   *  注意：此函数在卡片增强前调用（无卡片 UI 文本干扰），直接用 textContent 即可
+   *  @returns {{name:string, url:string}|null} */
   function parseAttachContent(bq) {
     var text = String(bq.textContent || '').trim();
     if (text.indexOf('[!attach]') !== 0) return null;
@@ -152,11 +153,25 @@
 
   /* ---------- 删除处理 ---------- */
 
-  /* 删除附件块并同步 markdown */
+  /* 删除附件块并同步 markdown + 删除物理文件
+   *  @param {HTMLElement} bq 附件 blockquote 元素
+   *  @author 火 冰 */
   function deleteAttachBlock(bq) {
-    /* 获取编辑区根 */
+    if (!bq) return;
     var root = bq.parentNode;
     if (!root) return;
+
+    /* 删除前先获取资源 URL：优先从卡片 data-sb-res-url 取，回退到 parseAttachContent */
+    var resUrl = '';
+    var card = bq.querySelector('.' + CARD_CLASS);
+    if (card) {
+      resUrl = card.getAttribute('data-sb-res-url') || '';
+    }
+    if (!resUrl) {
+      /* 回退：临时移除卡片后解析原始 blockquote 文本 */
+      var info = parseAttachContent(bq);
+      resUrl = info ? info.url : '';
+    }
 
     /* 在 blockquote 后插入一个空段落（便于继续编辑） */
     var nextP = document.createElement('p');
@@ -183,10 +198,9 @@
       editor.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
-    /* 可选：删除 .resources 中的物理文件 */
-    var url = bq.getAttribute && bq.getAttribute('data-sb-res-url');
-    if (url && window.noteDesktop && typeof window.noteDesktop.deleteResource === 'function') {
-      try { window.noteDesktop.deleteResource(url); } catch (_) { /* 忽略 */ }
+    /* 删除 .resources 中的物理文件 */
+    if (resUrl && window.noteDesktop && typeof window.noteDesktop.deleteResource === 'function') {
+      try { window.noteDesktop.deleteResource(resUrl); } catch (_) { /* 忽略 */ }
     }
   }
 

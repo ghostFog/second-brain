@@ -114,6 +114,36 @@
     }
   }
 
+  /** 从编辑区删除图片：移除 IR/WYSIWYG DOM 节点 + 删除物理文件 + 同步 markdown
+   *  @param {HTMLImageElement} img 图片元素
+   *  @author 火 冰 */
+  function deleteImageFromEditor(img) {
+    if (!img) return;
+    var src = img.getAttribute('src') || '';
+
+    /* 取消选中状态 */
+    deselectImage();
+
+    /* IR 模式：删除整个 [data-type="img"] 容器；WYSIWYG 模式：删除图片所在块 */
+    var irContainer = img.closest('[data-type="img"]');
+    var removeTarget = irContainer || img;
+    var parent = removeTarget.parentNode;
+    if (parent) {
+      /* 在删除位置插入光标占位 */
+      removeTarget.outerHTML = '<wbr>';
+      /* 触发编辑区 input 事件，让 Vditor 重新序列化并同步 */
+      var editor = document.querySelector('.vditor-ir') || document.querySelector('.vditor-wysiwyg');
+      if (editor) {
+        try { editor.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) { /* 忽略 */ }
+      }
+    }
+
+    /* 删除物理文件 */
+    if (src && window.noteDesktop && typeof window.noteDesktop.deleteResource === 'function') {
+      try { window.noteDesktop.deleteResource(src); } catch (_) { /* 忽略 */ }
+    }
+  }
+
   /** 关闭图片尺寸弹窗 */
   function closeImageSizeDialog() {
     const dialog = document.getElementById('mde-image-size-dialog');
@@ -517,6 +547,22 @@
 
         menu.appendChild(downloadItem);
         menu.appendChild(sizeItem);
+
+        /* 删除图片：移除编辑区 DOM + 删除物理文件 + 同步 markdown */
+        const deleteItem = document.createElement('button');
+        deleteItem.type = 'button';
+        deleteItem.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;'
+          + 'padding:6px 12px;border:none;background:transparent;color:var(--note-danger,#dc2626);'
+          + 'font-size:13px;text-align:left;cursor:pointer;';
+        deleteItem.innerHTML = '<i data-lucide="trash-2" class="w-4 h-4"></i><span>删除图片</span>';
+        deleteItem.addEventListener('click', function () {
+          deleteImageFromEditor(img);
+          menu.remove();
+        });
+        deleteItem.addEventListener('mouseover', function () { deleteItem.style.background = 'rgba(0,0,0,.06)'; });
+        deleteItem.addEventListener('mouseout', function () { deleteItem.style.background = 'transparent'; });
+        menu.appendChild(deleteItem);
+
         document.body.appendChild(menu);
 
         const rect = menu.getBoundingClientRect();
@@ -592,6 +638,7 @@
   window.mdeDownloadImage = downloadImage;
   window.mdeOpenImageSizeDialog = openImageSizeDialog;
   window.mdeInitEnhance = init;
+  window.mdeDeleteImageFromEditor = deleteImageFromEditor;
   window.mdeParseImageUrlSize = parseImageUrlSize;
   window.mdeBuildImageUrlSize = buildImageUrlSize;
   window.mdeApplyImageSizeFromUrl = applyImageSizeFromUrl;
