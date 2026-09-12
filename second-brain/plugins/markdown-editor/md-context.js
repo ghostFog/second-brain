@@ -14,7 +14,7 @@
   function sbUploadAccept(type) {
     return (type === 'image')
       ? 'image/*'
-      : '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.html,.htm,.md,.txt,.sh,.bat,.cmd,.ps1,.csv,.zip,.rar,.7z';
+      : '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.html,.htm,.md,.txt,.sh,.bat,.cmd,.ps1,.csv,.zip,.rar,.7z,.asc';
   }
 
   /* HTML 转义（插入文本防注入）
