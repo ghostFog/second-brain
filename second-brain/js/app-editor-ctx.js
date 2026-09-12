@@ -444,6 +444,17 @@
     }
   }
 
+  /* 所见即所得右键「插入图片/上传附件」的共享文件选择与上传逻辑
+   * （WYSIWYG 是自定义 DOM 而非 vditor 模式，不能用 editor-vditor 的 handleVdUpload；
+   *   上传仍走同一桥接 uploadResource 落盘到 .resources，再按类型生成可往返的 DOM 块）。
+   * 说明：
+   *   - 图片 → `<p>![名](url)</p>`（富文本编辑区不渲染 <img>，预览/阅读正常显示图片）；
+   *   - 附件 → `<blockquote>[!attach] 名 url</blockquote>`（= 卡片引言，预览/阅读渲染完整卡片）。
+   * 作者: 火 冰 */
+  /* 上传与块生成（insWysPickUpload / handleWysPickFiles / wysUploadBlockHtml / wysEsc）
+   * 真实逻辑已迁入 markdown-editor 插件的 md-context.js，本宿主通过 window.insWysPickUpload
+   * 调用；网页版无目录插件时为 undefined，由调用方按需降级提示。 */
+
   /* 构建「所见即所得」编辑区右键菜单：富文本原生操作（execCommand 可实现），
    * markdown 专用的表格/脚注/数学块等在富文本里不提供，避免选中语义错乱。 */
   function buildEdWysiwygSchema() {
@@ -524,6 +535,14 @@
     const insSeg = {
       label: '插入', icon: 'plus', children: [
         specItem('链接', 'link', insLink),
+        specItem('图片', 'image', function () {
+          const pick = (typeof window.insWysPickUpload === 'function') ? window.insWysPickUpload : function () { console.warn('[markdown-editor] 上传仅桌面版支持'); };
+          pick('image', function (html) { insertWysBlock(html, evHitAnchor()); });
+        }),
+        specItem('附件', 'paperclip', function () {
+          const pick = (typeof window.insWysPickUpload === 'function') ? window.insWysPickUpload : function () { console.warn('[markdown-editor] 上传仅桌面版支持'); };
+          pick('attachment', function (html) { insertWysBlock(html, evHitAnchor()); });
+        }),
         specItem('脚注', 'superscript', insFoot),
         specItem('表格', 'table', insTable),
         specItem('标注', 'quote', insQuote),

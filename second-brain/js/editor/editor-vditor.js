@@ -29,13 +29,439 @@
   let vdReady = false;
   /** @type {string|null} 待 vditor 异步渲染完成后补渲的内容（启动/快速切换时序缓冲） */
   let vdPending = null;
-  /** @type {string[]} 工具栏精简项：承接原自研格式/表格/代码/数学能力，含原生搜索、大纲、导出 */
+  /** @type {string[]} 工具栏精简项：承接原自研格式/表格/代码/数学能力，含原生搜索、大纲、导出；
+   *  upload 为 vditor 内置上传按钮，支持图片与附件（accept/上传逻辑见 buildVditor 的 upload 配置） */
   const VDTOOLBAR = [
     'undo', 'redo', '|', 'headings', 'bold', 'italic', 'strike', '|',
     'list', 'ordered-list', 'check', 'outdent', 'indent', '|',
-    'quote', 'line', 'code', 'inline-code', '|', 'table', 'link', '|',
+    'quote', 'line', 'code', 'inline-code', '|', 'table', 'link', 'upload', '|',
     'outline', 'export',
   ];
+
+  /* ---------- 资源上传（图片/附件）助手 ---------- */
+
+  /** 是否图片类文件名（决定插入为 `![名](url)` 还是 `[名](url)`）
+   * @param {string} name 原始文件名
+   * @returns {boolean} 是否为图片
+   * @author 火 冰 */
+  function isImageName(name) {
+    return /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i.test(String(name || ''));
+  }
+
+  /** 生成资源插入 markdown：图片 → `![真实名](url)`，附件 → `[真实名](url)`（笔记内使用真实名）。
+   *  暴露到 window 供 jsdom 回归断言调用。
+   * @param {string} name 原始真实文件名
+   * @param {string} url  note://vault_res/... 资源地址
+   * @returns {string} 待插入片段
+   * @author 火 冰 */
+  function sbResMarkdown(name, url) {
+    return isImageName(name) ? '![' + name + '](' + url + ')' : '[' + name + '](' + url + ')';
+  }
+  window.sbResMarkdown = sbResMarkdown;
+
+  /** 生成附件卡片插入 markdown（Obsidian 风格引言，供 `[!attach]` 语法渲染成卡片）：
+   *  `> [!attach] 真实名 note://vault_res/uuid.ext`，使上传的附件在编辑区显示为「醒目指示块」、
+   *  预览/阅读渲染为「完整附件卡片」。图片不经过此函数（保持 `![真实名](url)` 行内预览）。
+   *  暴露到 window 供 jsdom 回归断言调用。
+   * @param {string} name 原始真实文件名
+   * @param {string} url  note://vault_res/... 资源地址
+   * @returns {string} 待插入的附件卡片引言片段
+   * @author 火 冰 */
+  function sbAttachMarkdown(name, url) {
+    return '> [!attach] ' + name + ' ' + url;
+  }
+  window.sbAttachMarkdown = sbAttachMarkdown;
+
+  /** 从 note://vault_res/ 地址抽取资源存储名（uuid.ext）；非该协议地址返回空串。
+   *  暴露到 window 供 jsdom 回归断言调用。
+   * @param {string} url 资源地址
+   * @returns {string} 存储名，或空串
+   * @author 火 冰 */
+  function resolveVaultResUrl(url) {
+    if (typeof url !== 'string') return '';
+    const m = String(url).match(/^note:\/\/vault_res\/([^?#]+)/);
+    return m ? String(m[1]).replace(/^\/+/, '') : '';
+  }
+  window.resolveVaultResUrl = resolveVaultResUrl;
+
+  /** 上传一批文件到知识库资源目录：每个文件读二进制 → IPC 落盘（UUID 重命名）→ 回填真实名链接。
+   *  作为 vditor options.upload.handler；仅桌面版有桥接时生效，网页版提示不支持。
+   *  上传成功后将所有片段按序一次性插入光标处。
+   * @param {File[]} fileList 待上传文件数组（vditor 已按 accept/mutiple/max 过滤）
+   * @returns {Promise<string|void>} 返回错误文案则 vditor 提示，否则静默
+   * @author 火 冰 */
+  async function handleVdUpload(fileList) {
+    if (!fileList || !fileList.length) return;
+    const bridge = window.noteDesktop;
+    if (!bridge || typeof bridge.uploadResource !== 'function') {
+      try { if (vdInst && vdInst.tip) vdInst.tip.show('上传仅桌面版支持'); } catch (_) { /* 忽略提示异常 */ }
+      return;
+    }
+    const snippets = [];
+    for (let i = 0; i < fileList.length; i++) {
+      const f = fileList[i];
+      if (!f) continue;
+      try {
+        const buf = await f.arrayBuffer();                    // 读取原始二进制
+        const res = await bridge.uploadResource(f.name, buf); // 桌面端落盘 .resources，UUID 命名
+        if (res && res.url) {
+          // 图片保持行内预览；附件插入 `> [!attach] 名 url` 引言，供编辑区指示块/预览卡片渲染
+          snippets.push(isImageName(f.name)
+            ? sbResMarkdown(res.name || f.name, res.url)
+            : sbAttachMarkdown(res.name || f.name, res.url));
+        }
+      } catch (e) { console.error('[vditor] 上传失败:', f.name, e); }
+    }
+    if (snippets.length && vdInst) {
+      try { vdInst.insertValue(snippets.join('\n')); } catch (_) { /* 插入失败忽略 */ }
+    }
+  }
+
+  /** HTML 转义（卡片/上下文菜单文本防注入）
+   * @param {string} s 原始文本
+   * @returns {string} 转义后文本
+   * @author 火 冰 */
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  /** HTML 属性转义（与 escapeHtml 一致，供属性值使用）
+   * @param {string} s 原始文本
+   * @returns {string} 转义后文本
+   * @author 火 冰 */
+  function escapeAttr(s) {
+    return escapeHtml(s);
+  }
+
+  /** 附件卡片 HTML（预览/阅读视图）：扩展名徽标 + 真实名 + 下载按钮。
+   *  卡片携带 data-sb-res-url / data-sb-res-name，供点击打开、右键下载、复制链接复用。
+   *  暴露到 window 供 jsdom 回归断言调用。
+   * @param {string} name 原始真实文件名
+   * @param {string} url  note://vault_res/... 资源地址
+   * @returns {string} 卡片 HTML
+   * @author 火 冰 */
+  function sbAttachCardHTML(name, url) {
+    const m = String(url).match(/\.([0-9a-z]+)(?:$|[?#])/i);
+    const label = (m ? m[1] : 'file').toUpperCase().slice(0, 8);
+    const safeName = escapeAttr(name || '下载');
+    return '<div class="sb-res-card" data-sb-res-url="' + escapeAttr(url) + '" data-sb-res-name="' + safeName + '">'
+      + '<span class="sb-res-card-ext">' + escapeHtml(label) + '</span>'
+      + '<div class="sb-res-card-main">'
+      + '<span class="sb-res-card-name">' + escapeHtml(name || url) + '</span>'
+      + '<span class="sb-res-card-url">' + escapeHtml(url) + '</span>'
+      + '</div>'
+      + '<button type="button" class="sb-res-card-dl" title="下载 ' + safeName + '"></button>'
+      + '</div>';
+  }
+  window.sbAttachCardHTML = sbAttachCardHTML;
+
+  /** 预览/阅读 HTML 变换：把 Obsidian 风格附件引言 `> [!attach] 真实名 note://vault_res/uuid.ext`
+   *  渲染成附件卡片（下载/右键菜单），其余内容原样返回。
+   *  作为 vditor options.preview.transform；仅识别 note://vault_res 附件，防止误改普通引言。
+   *  暴露到 window 供 jsdom 回归断言调用。
+   * @param {string} html md2html 输出的 HTML
+   * @returns {string} 变换后的 HTML
+   * @author 火 冰 */
+  function transformPreviewHtml(html) {
+    if (!html || String(html).indexOf('[!attach]') === -1) return html;
+    const tpl = document.createElement('div');
+    tpl.innerHTML = html;
+    const qs = Array.prototype.slice.call(tpl.querySelectorAll('blockquote, [data-type="blockquote"]'));
+    for (let i = 0; i < qs.length; i++) {
+      if (!isAttachCallout(qs[i])) continue;
+      let text = String(qs[i].textContent || '').trim();
+      if (text.indexOf('[!attach]') !== 0) continue;
+      const body = text.slice('[!attach]'.length).trim();
+      if (!body) continue;
+      const sp = body.lastIndexOf(' ');                 // 最后一段空白切出 url，前面为真实名（允许名含空格）
+      const url = body.slice(sp + 1).trim();
+      const name = (sp > 0 ? body.slice(0, sp) : url).trim() || url;
+      if (!/^note:\/\/vault_res\/[^?#]+$/.test(url)) continue;
+      const wrap = document.createElement('div');
+      wrap.innerHTML = sbAttachCardHTML(name, url);
+      const node = wrap.firstChild;
+      if (node) qs[i].parentNode.replaceChild(node, qs[i]);
+    }
+    return tpl.innerHTML;
+  }
+  window.sbTransformPreviewHtml = transformPreviewHtml;
+
+  /** 通过 note:// 资源地址下载到本地（fetch→blob→临时链接触发浏览器下载，以真实名保存）。
+   *  暴露到 window 供回归断言/复用。
+   * @param {string} url  note://vault_res/... 资源地址
+   * @param {string} name 保存文件名（真实名）
+   * @author 火 冰 */
+  async function downloadResource(url, name) {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const blob = await resp.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = name || 'download';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { try { URL.revokeObjectURL(objUrl); } catch (_) { /* 忽略 */ } }, 10000);
+    } catch (e) { console.error('[res] 下载失败:', url, e); }
+  }
+  window.sbDownloadResource = downloadResource;
+
+  /* ---------- 编辑器/卡片右键菜单 ---------- */
+
+  let sbMenuEl = null;     // 当前展示的右键菜单元素
+
+  /** 关闭右键菜单 */
+  function hideSbMenu() { if (sbMenuEl) { sbMenuEl.remove(); sbMenuEl = null; } }
+  window.sbHideMenu = hideSbMenu;
+
+  /** 在指定坐标展示一个右键菜单（body 级固定浮层，可防溢出）。
+   * @param {Array<{label:string,onClick:Function}>} items 菜单项
+   * @param {number} x 视口横坐标
+   * @param {number} y 视口纵坐标
+   * @author 火 冰 */
+  function showSbMenu(items, x, y) {
+    hideSbMenu();
+    const el = document.createElement('div');
+    el.className = 'sb-ctx';
+    el.setAttribute('role', 'menu');
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'sb-ctx-item';
+      b.textContent = it.label;
+      b.setAttribute('role', 'menuitem');
+      (function (onClick) {
+        b.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          hideSbMenu();
+          if (typeof onClick === 'function') { try { onClick(); } catch (_) { /* 忽略菜单回调异常 */ } }
+        });
+      })(it.onClick);
+      el.appendChild(b);
+    }
+    document.body.appendChild(el);
+    const rect = el.getBoundingClientRect();
+    let px = x; let py = y;
+    if (px + rect.width > window.innerWidth - 8) px = Math.max(8, window.innerWidth - rect.width - 8);
+    if (py + rect.height > window.innerHeight - 8) py = Math.max(8, window.innerHeight - rect.height - 8);
+    el.style.left = px + 'px';
+    el.style.top = py + 'px';
+    sbMenuEl = el;
+    setTimeout(function () {
+      const onDoc = function (ev) { if (!el.contains(ev.target)) hideSbMenu(); document.removeEventListener('mousedown', onDoc, true); };
+      document.addEventListener('mousedown', onDoc, true);
+    }, 0);
+    const onKey = function (ev) { if (ev.key === 'Escape') { hideSbMenu(); document.removeEventListener('keydown', onKey, true); } };
+    document.addEventListener('keydown', onKey, true);
+  }
+
+  /** 把光标放到指定视口坐标处（右键时把插入点定位到鼠标位置）。
+   * @param {number} x 视口横坐标
+   * @param {number} y 视口纵坐标
+   * @author 火 冰 */
+  function placeCaretAtPoint(x, y) {
+    try {
+      const r = document.caretRangeFromPoint(x, y);
+      if (!r) return;
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      if (vdInst && vdInst.vditor) {
+        const v = vdInst.vditor;
+        const el = (vdMode === 'sv' && v.sv) ? v.sv.element
+          : ((vdMode === 'wysiwyg' && v.wysiwyg) ? v.wysiwyg.element : (v.ir ? v.ir.element : null));
+        if (el) el.focus();
+      }
+    } catch (_) { /* 忽略光标定位异常 */ }
+  }
+
+  let sbPickInput = null;   // 惰性创建的隐藏文件选择框（右键「插入图片/上传附件」复用）
+
+  /* 文件选择 accept 由 markdown-editor 插件的 md-context.js 提供（window.sbUploadAccept，
+   * 图片 `image/*`、附件非图片扩展名白名单）；此处仅取用并保证无插件时安全回落。 */
+  function sbUploadAccept(type) {
+    return (typeof window.sbUploadAccept === 'function')
+      ? window.sbUploadAccept(type)
+      : (type === 'image' ? 'image/*' : '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.html,.htm,.md,.txt,.sh,.bat,.cmd,.ps1,.csv,.zip,.rar,.7z');
+  }
+
+  /** 弹出文件选择，选中文件经 handleVdUpload 在光标处上传并插入（复用上传/落盘与分流逻辑）。
+   *  handleVdUpload 按 isImageName 判断：图片插行内 `![名](url)`、附件插 `> [!attach]` 卡片引言；
+   *  故此处仅需按 type 过滤 accept，分流由 handleVdUpload 完成。
+   * @param {string} type 'image' 只选图片 | 'attachment' 只选非图片附件
+   * @author 火 冰 */
+  function pickAndUploadAtCaret(type) {
+    if (!window.noteDesktop || typeof window.noteDesktop.uploadResource !== 'function') {
+      try { if (vdInst && vdInst.tip) vdInst.tip.show('上传仅桌面版支持'); } catch (_) { /* 忽略提示异常 */ }
+      return;
+    }
+    if (!sbPickInput) {
+      sbPickInput = document.createElement('input');
+      sbPickInput.type = 'file';
+      sbPickInput.style.display = 'none';
+      sbPickInput.multiple = true;
+      document.body.appendChild(sbPickInput);
+      sbPickInput.addEventListener('change', async function () {
+        const files = sbPickInput.files ? Array.prototype.slice.call(sbPickInput.files) : [];
+        sbPickInput.value = '';
+        if (files.length && vdInst) await handleVdUpload(files);
+      });
+    }
+    sbPickInput.accept = sbUploadAccept(type);
+    sbPickInput.click();
+  }
+
+  /** 编辑器/卡片右键处理：卡片 → 下载/复制链接；编辑区 → 插入图片/上传附件菜单。
+   *  （卡片只在预览/阅读出现，卡片右键用下载菜单；IR 表格/代码块右键由专属菜单接管，此处不叠加）
+   *  @param {MouseEvent} e 右键事件
+   *  @author 火 冰 */
+  function onEditorContextMenu(e) {
+    const card = e.target && e.target.closest ? e.target.closest('.sb-res-card') : null;
+    if (card) {
+      const url = card.getAttribute('data-sb-res-url') || '';
+      const name = card.getAttribute('data-sb-res-name') || '下载';
+      if (url) {
+        e.preventDefault();
+        e.stopPropagation();
+        showSbMenu([
+          { label: '下载', onClick: function () { downloadResource(url, name); } },
+          { label: '复制链接', onClick: function () { try { navigator.clipboard.writeText(url); } catch (_) { /* 忽略复制异常 */ } } },
+        ], e.clientX, e.clientY);
+      }
+      return;
+    }
+    // 命中判断用 vditor 内容容器 vdInst.vditor.element（编辑区/预览所在），
+    // 不能用 vdInst.element——Vditor 实例从不挂该字段，恒为 undefined，会导致右键菜单永不触发。
+    const vdRoot = (vdInst && vdInst.vditor) ? vdInst.vditor.element : (vdEl() || null);
+    if (vdInst && e.target && vdRoot && vdRoot.contains(e.target)) {
+      // IR 表格/代码块右键交给 showIrTableMenu/showIrCodeMenu 专属菜单，避免两组菜单叠加。
+      // 注意不能用 closest('pre')：vditor IR 整个编辑区被一个 <pre class="vditor-reset"> 包裹，
+      // 普通文字也会命中 pre，导致通用右键被误短路（Bug-049，见 irCodeAtRightClick）。
+      if (vdMode === 'ir') {
+        const tg = e.target;
+        const el = tg.nodeType === 1 ? tg : (tg.parentElement || null);
+        if (el && typeof el.closest === 'function'
+          && (el.closest('table') || el.closest('[data-type="code-block"]'))) return;
+      }
+      e.preventDefault();
+      placeCaretAtPoint(e.clientX, e.clientY);
+      showSbMenu([
+        { label: '插入图片', onClick: function () { pickAndUploadAtCaret('image'); } },
+        { label: '上传附件', onClick: function () { pickAndUploadAtCaret('attachment'); } },
+      ], e.clientX, e.clientY);
+    }
+  }
+  document.addEventListener('contextmenu', onEditorContextMenu);
+
+  /* ---------- 编辑区附件引言指示块（Obsidian `> [!attach]` 语法） ---------- */
+
+  /** 判断一个块是否为 `> [!attach]` 附件引言：正文取首个 <p> 文本，无 <p> 则用块自身文本，
+   *  以行首 `[!attach]` 判定（覆盖 IR/WYSIWYG 原生 blockquote 与 SV 源码 data-type 结构）。
+   * @param {HTMLElement} node 块节点
+   * @returns {boolean} 是否为附件引言
+   * @author 火 冰 */
+  function isAttachCallout(node) {
+    if (!node) return false;
+    let t = '';
+    const p = node.querySelector('p');
+    t = p ? p.textContent : '';
+    if (!t.trim()) t = node.textContent;
+    return /^\s*\[!attach\]/.test(t || '');
+  }
+
+  /** 标记编辑区中 `> [!attach] ...` 行为的引言块为 `sb-attach-callout`，
+   *  仅切换 class（不改 DOM/不动 markdown），供 CSS 显示成醒目附件指示块。
+   *  @param {HTMLElement} root 编辑区根
+   *  @author 火 冰 */
+  function markAttachCallouts(root) {
+    if (!root) return;
+    const qs = root.querySelectorAll('blockquote, [data-type="blockquote"]');
+    for (let i = 0; i < qs.length; i++) {
+      qs[i].classList.toggle('sb-attach-callout', isAttachCallout(qs[i]));
+    }
+  }
+  window.sbMarkAttachCallouts = markAttachCallouts;
+
+  let sbCalloutTimer = null;
+  /** 防抖标记：编辑内容变后，仅扫描 IR/WYSIWYG 编辑区并加指示类 */
+  function scheduleCalloutMark() {
+    if (sbCalloutTimer) return;
+    sbCalloutTimer = setTimeout(function () {
+      sbCalloutTimer = null;
+      if (!vdInst || !vdInst.vditor) return;
+      const v = vdInst.vditor;
+      if (v.ir) markAttachCallouts(v.ir.element);
+      if (v.wysiwyg) markAttachCallouts(v.wysiwyg.element);
+    }, 120);
+  }
+
+  /** 挂载 MutationObserver 监听文档结构变化，防抖触发指示块标记（重建/切换后自动覆盖）。
+   *  观察 documentElement（始终存在，不受脚本加载位置/body 就绪时机影响）。
+   *  @author 火 冰 */
+  function watchAttachCallouts() {
+    const root = document && document.documentElement ? document.documentElement : (document ? document.body : null);
+    if (!root || typeof MutationObserver !== 'function') return;
+    try {
+      const ob = new MutationObserver(function () { scheduleCalloutMark(); });
+      ob.observe(root, { childList: true, subtree: true });
+    } catch (_) { /* 忽略观察异常 */ }
+  }
+
+  // 启动即监听：编辑区 `> [!attach]` 引言实时加指示块样式（防抖，仅切 class，不改内容）
+  watchAttachCallouts();
+
+  // 冒泡阶段拦截：卡片下载按钮 → 下载；点卡片主体 → 系统默认程序打开（不导航窗口）
+  document.addEventListener('click', function (e) {
+    const dl = e.target && e.target.closest ? e.target.closest('.sb-res-card-dl') : null;
+    if (dl) {
+      const card = dl.closest('.sb-res-card');
+      const url = card && card.getAttribute('data-sb-res-url');
+      const name = card && card.getAttribute('data-sb-res-name');
+      if (url) { e.preventDefault(); e.stopPropagation(); downloadResource(url, name || 'download'); }
+      return;
+    }
+    const card = e.target && e.target.closest ? e.target.closest('.sb-res-card') : null;
+    if (card && e.target === card) {
+      const url = card.getAttribute('data-sb-res-url');
+      const stored = resolveVaultResUrl(url);
+      e.preventDefault();
+      e.stopPropagation();
+      if (stored && window.noteDesktop && typeof window.noteDesktop.openResource === 'function') {
+        try { window.noteDesktop.openResource(stored); } catch (_) { /* 忽略打开异常 */ }
+      }
+    }
+  }, false);
+
+  // 资源上传助手全量原样导出到 window，供 jsdom 回归断言调用
+  window.__vdRes = {
+    isImageName: isImageName,
+    sbResMarkdown: sbResMarkdown,
+    sbAttachMarkdown: sbAttachMarkdown,
+    resolveVaultResUrl: resolveVaultResUrl,
+    sbAttachCardHTML: sbAttachCardHTML,
+    transformPreviewHtml: transformPreviewHtml,
+    markAttachCallouts: markAttachCallouts,
+  };
+
+  // 捕获阶段拦截：点击上传附件（note://vault_res 链接）不再导致窗口整体导航，
+  // 改用系统默认程序打开；图片链接（vditor 自身的点击预览）放行不拦截。
+  document.addEventListener('click', function (e) {
+    const src = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!src) return;
+    const stored = resolveVaultResUrl(src.getAttribute('href'));
+    if (!stored || isImageName(stored)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const bridge = window.noteDesktop;
+    if (bridge && typeof bridge.openResource === 'function') {
+      try { bridge.openResource(stored); } catch (_) { /* 打开异常忽略 */ }
+    }
+  }, true);
 
   /** 应用当前是否为暗色主题（用于 vditor theme 选项跟随宿主）。
    *  读取全局已解析的 `html[data-theme]`（设置-外观-主题模式 dark/light/auto 的最终结果），
@@ -157,33 +583,13 @@
   let irCtxCode = null;
 
   /** 在目标块级元素前插入一个空段落（修复「表格/代码块作为首元素时无法在其前插入内容」）。
-   *  IR 模式下 top-level 块统一带 `data-block="0"`（表格即 <table data-block="0">，
-   *  代码块为 <div data-block="0" class="vditor-ir__node">），用 closest 归一化到块根，
-   *  在这些块根之前 `insertAdjacentHTML('beforebegin', <p data-block="0">ZWSP<wbr></p>)`，
-   *  再以 <wbr> 锚定光标；vditor 的 getValue 实时由 ir.element.innerHTML 推导，改完即可回传宿主。
+   *  真实算法（DOM 插入 + 光标定位）已迁入 markdown-editor 插件的 md-context.js（window.irInsertAbove），
+   *  本宿主仅注入 vdInst 实例并负责 getValue 同步回宿主。
    * @param {HTMLElement} blockEl 命中块内的任意元素（表格/代码块）
    * 作者: 火 冰 */
   function irInsertAbove(blockEl) {
     if (!vdInst || !blockEl) return;
-    const v = vdInst.vditor;
-    // 归一到带 data-block="0" 的块根；无则用原元素兜底
-    const root = (typeof blockEl.closest === 'function' && blockEl.closest('[data-block="0"]')) || blockEl;
-    const p = document.createElement('p');
-    p.setAttribute('data-block', '0');
-    p.appendChild(document.createTextNode('\u200b')); // ZWSP：保证空段占位非空、序列化后为空行
-    const wbr = document.createElement('wbr');
-    p.appendChild(wbr);
-    root.parentNode.insertBefore(p, root);
-    // 光标定位到新空段（vditor IR 以 <wbr> 锚定光标）；失败则仅聚焦，用户可点击进入
-    try {
-      const range = document.createRange();
-      range.setStart(wbr, 0);
-      range.collapse(true);
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-      if (v.ir && v.ir.element) v.ir.element.focus();
-    } catch (_) { /* 忽略光标异常 */ }
+    if (typeof window.irInsertAbove === 'function') window.irInsertAbove(vdInst, blockEl);
     try { sync2Host(vdInst.getValue()); } catch (_) { /* 忽略同步异常 */ }
   }
 
@@ -467,7 +873,7 @@
   function showIrTableMenu(x, y, isHeader) {
     const items = [];
     const defs = [
-      ['在表格上方插入空行', 'arrow-up-to-line', 'block', 'before'],
+      ['在上方插入空行', 'arrow-up-to-line', 'block', 'before'],
       ['在上方插入行', 'arrow-up', 'row', 'before'],
       ['在下方插入行', 'arrow-down', 'row', 'after'],
       ['在左侧插入列', 'arrow-left', 'col', 'before'],
@@ -483,12 +889,12 @@
     showIrMenu(x, y, items);
   }
 
-  /** 显示 IR 代码块右键菜单（当前仅「在代码块上方插入空行」）
+  /** 显示 IR 代码块右键菜单（当前仅「在上方插入空行」）
    * @param {number} x 鼠标 X
    * @param {number} y 鼠标 Y */
   function showIrCodeMenu(x, y) {
     showIrMenu(x, y, [{
-      label: '在代码块上方插入空行',
+      label: '在上方插入空行',
       icon: 'arrow-up-to-line',
       action: function () { irInsertAbove(irCtxCode); },
     }]);
@@ -509,7 +915,9 @@
     return table ? { table: table, tr: tr, td: td } : null;
   }
 
-  /** 右键命中探测：落在 ir 编辑区某代码块（.vditor-ir__node 包装的 <pre><code>）内
+  /** 右键命中探测：落在 ir 编辑区某代码块（.vditor-ir__node[data-type="code-block"] 内的 <pre><code>）中。
+   *  注意不能用 closest('pre') 判定——vditor IR 会把整个编辑区内容包在一个 <pre class="vditor-reset"> 里，
+   *  普通文字也命中 pre 而被误判为代码块（Bug-049）；须以代码块节点 data-type 区分。
    * @param {Event}  e 右键事件
    * @param {Object} v vditor 内部对象（vdInst.vditor）
    * @returns {HTMLElement|null} 代码块块级元素 */
@@ -518,10 +926,10 @@
     if (!node || !v.ir || !v.ir.element || !v.ir.element.contains(node)) return null;
     const el = (node.nodeType === 1) ? node : (node.parentElement || null);
     if (!el || typeof el.closest !== 'function') return null;
-    const pre = el.closest('pre');
-    if (!pre || !v.ir.element.contains(pre)) return null;
-    // 归一到带 data-block="0" 的代码块包装节点（vditor IR 用 <div class="vditor-ir__node">）
-    return pre.closest('[data-block="0"]') || pre;
+    // 真实代码块：外层带 data-type="code-block" 的 .vditor-ir__node（内含 <pre><code>）
+    const blk = el.closest('[data-type="code-block"]');
+    if (!blk || !v.ir.element.contains(blk)) return null;
+    return blk;
   }
 
   /** 执行行/列操作并同步保存（右键菜单动作）
@@ -532,7 +940,7 @@
     const hit = irCtxHit;
     if (axis === 'block') {
       irCtxHit = null;
-      irInsertAbove(hit.table);   // 在表格上方插入空行（含同步保存）
+      irInsertAbove(hit.table);   // 在上方插入空行（含同步保存）
       return;
     }
     const v = vdInst.vditor;
@@ -601,7 +1009,16 @@
       theme: resolveVdTheme().theme,
       lineNumber: !!(typeof restoreS === 'function' ? restoreS('lineNumbers', true) : true),
       toolbar: VDTOOLBAR,
-      preview: { delay: 50, cdn: '', mode: (vdPreview === 'both') ? 'both' : 'editor' },
+      preview: { delay: 50, cdn: '', mode: (vdPreview === 'both') ? 'both' : 'editor', transform: transformPreviewHtml },
+      // 上传图片/附件：accept 覆盖图片与常用附件（pdf/office/脚本/压缩包等），
+      // handler 由桌面端 IPC 落盘 .resources（UUID 重命名），笔记内链接使用真实名。
+      upload: {
+        max: 50 * 1024 * 1024,
+        multiple: true,
+        accept: 'image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.html,.htm,.md,.txt,.sh,.bat,.cmd,.ps1,.csv,.zip,.rar,.7z,.asc',
+        filename: function (name) { return name; },
+        handler: handleVdUpload,
+      },
       input: function (v) { sync2Host(v); },
       blur: function () { sync2Host(vdGetValue()); },
       /* vditor 首帧异步渲染完成后的回调：把 init 期间积压的待渲内容补进编辑器，

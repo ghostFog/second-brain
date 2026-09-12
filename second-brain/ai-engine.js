@@ -34,6 +34,8 @@ const DEFAULT_CONFIG = {
   overlap: 40,
   // 单块长度上限（字符）：>0 时切分块宽度封顶，避免单块过长；0/未填=不限制（仅受块大小约束）。全局统一，不随单文件覆盖
   maxChunkSize: 300,
+  // 分块策略：'fixed' 固定字符+重叠硬切（默认）；'semantic' 按标题/段落/句末语义切分（忽略重叠，块头注入 文件名+当前标题上下文）
+  chunkStrategy: 'fixed',
   // 嵌入模型下载目录（空=使用应用数据目录下的默认 models 目录）
   modelDir: '',
 };
@@ -126,6 +128,100 @@ function chunkTextDetailed(text, size, overlap) {
 }
 
 /**
+ * 语义分块：按「标题层级 / 段落(空行) / 语义完整句(句末符)」作为断点切分，而非固定字符数硬切。
+ * - 忽略相邻重叠；块文本以 size 为目标、maxChunkSize 为绝对上限封顶（未设上限退化为 size）。
+ * - 每个块头部注入上下文前缀：文件名 + 当前所在标题（若处于二级标题下，追加「/ 一级 / 二级」链）。
+ * - 返回每块正文在原文的字符区间 { text, content, start, end }（text=前缀+正文，供检索/向量化）。
+ * @param {string} text 原文
+ * @param {{size:number, maxChunkSize:number, fileName:string}} [opts] 目标窗宽 / 块上限 / 文件名
+ * @returns {Array<{text:string, content:string, start:number, end:number}>}
+ * @author 火 冰
+ */
+function semanticChunkText(text, opts) {
+  const clean = String(text || '').replace(/\r\n/g, '\n');
+  const maxLen = clean.length;
+  if (!maxLen) return [];
+  const size = Math.max(1, Math.floor(Number(opts && opts.size) || 200));
+  const rawCap = Math.floor(Number(opts && opts.maxChunkSize) || 0);
+  const cap = rawCap > 0 ? Math.max(1, rawCap) : Math.max(size, 1);
+  const fileLabel = String((opts && opts.fileName) || '').trim();
+
+  /* 句末符集合：中文标点 + 基础英文标点 + 省略符 */
+  const SENT_END = new Set(['。', '！', '？', '！', '.', '!', '?', '；', ';', '…']);
+
+  /* 按行扫描，把原文切成「标题单元」：每个标题行开启一个新单元，单元持有其所属标题链(一级/二级)与行的绝对偏移 */
+  const titleRe = /^(#{1,6})\s+(.+)$/;
+  const rows = [];
+  let acc = 0;
+  clean.split('\n').forEach(function (ln) {
+    const m = ln.match(titleRe);
+    rows.push({
+      text: ln, start: acc, heading: !!m,
+      level: m ? m[1].length : 0, titleText: m ? m[2].trim() : '',
+    });
+    acc += ln.length + 1;
+  });
+
+  /* 标题链维护 + 单元汇聚：h1/h2 取最近生效的一级/二级标题；三级以上不改变链 */
+  const units = [];
+  let h1 = '', h2 = '', curOpen = false, curStart = 0;
+  const flush = function () {
+    // 用布尔标志 curOpen 判断单元是否已开启：不能用数值起点 curStart 充当哨兵，
+    // 否则文件以标题开头（起点为 0）时，!0 为真，后续内容行会误重置单元起点
+    if (curOpen) units.push({ h1: h1, h2: h2, start: curStart });
+  };
+  for (const row of rows) {
+    if (row.heading) {
+      flush();
+      if (row.level === 1) { h1 = row.titleText; h2 = ''; }
+      else if (row.level === 2) { h2 = row.titleText; }
+      curStart = row.start; curOpen = true;
+    } else if (!curOpen) {
+      // 无标题开头的内容：视为一个无链单元
+      if (row.text.trim()) { curStart = row.start; curOpen = true; }
+    }
+    // 已进入单元：内容行不产生新单元（end 在 flush 时取全文边界，此处无需维护）
+  }
+  flush();
+
+  /* 从文末补上最后的单元结束边界（统一取 maxLen），并按单元切块 */
+  const makePrefix = function (file, a, b) {
+    const p = [];
+    if (file) p.push(file);
+    if (a) p.push(a);
+    if (b) p.push(b);
+    return p.join(' / ');
+  };
+
+  const out = [];
+  for (let ui = 0; ui < units.length; ui++) {
+    const u = units[ui];
+    const start = u.start;
+    const end = (ui + 1 < units.length) ? units[ui + 1].start : maxLen;
+    if (end <= start) continue;
+    const prefix = makePrefix(fileLabel, u.h1, u.h2);
+
+    /* 在单元正文区间内按 cap 贪心打包，块尾优先落在语义断点（行尾/句末、段落边界） */
+    let p = start;
+    while (p < end) {
+      let win = Math.min(p + cap, end);
+      let cut = win;
+      if (win < end) {
+        const from = Math.max(p + Math.floor(cap * 0.5), p);
+        for (let i = win; i > from; i--) {
+          const ch = clean[i - 1];
+          if (ch === '\n' || SENT_END.has(ch)) { cut = i; break; }
+        }
+      }
+      const content = clean.slice(p, cut).trim();
+      if (content) out.push({ text: prefix ? prefix + '\n' + content : content, content: content, start: p, end: cut });
+      p = cut;
+    }
+  }
+  return out;
+}
+
+/**
  * 按「块大小 + 相邻重叠值」的配置生成分块（支持单文件覆盖的显式偏移值）。
  * 未提供 offsets 时按 (块大小 - 重叠) 的固定步长从 0 起生成；提供 offsets 时按给定起始偏移切片
  * （每块宽度 = 块大小，末块裁剪到文末），用于「属性 → 索引分块」中编辑既有块的偏移后按原样生成。
@@ -134,10 +230,16 @@ function chunkTextDetailed(text, size, overlap) {
  * @param {number} overlap 相邻重叠（字符）
  * @param {number[]} [offsets] 每块起始偏移（显式覆盖）；缺省按步长推导
  * @param {number} [maxChunkSize] 单块长度上限（字符），>0 时封顶，避免某块过长；缺省/0=不限制
+ * @param {string} [strategy] 分块策略：'semantic' 走语义分块（忽略重叠/偏移，块头注入 文件名+标题 前缀）；缺省=固定字符分块
+ * @param {string} [fileName] 语义分块时注入块头的文件名（basename）
  * @returns {Array<{text:string, start:number, end:number}>} 非空片段（含起止）
  * @author 火 冰
  */
-function chunkConfigured(text, size, overlap, offsets, maxChunkSize) {
+function chunkConfigured(text, size, overlap, offsets, maxChunkSize, strategy, fileName) {
+  // 语义分块策略：忽略重叠与显式偏移，按标题/段落/句末语义切分，并注入「文件名+当前标题」上下文
+  if (strategy === 'semantic') {
+    return semanticChunkText(text, { size: size, maxChunkSize: maxChunkSize, fileName: fileName });
+  }
   const clean = String(text || '').replace(/\r\n/g, '\n');
   const len = clean.length;
   if (!len) return [];
@@ -726,6 +828,7 @@ class AiEngine {
           vaultPath: j.vaultPath || '',
           builtAt: j.builtAt || Date.now(),
           files: 0,
+          noteIndexAt: (j && typeof j.noteIndexAt === 'object') ? j.noteIndexAt : {},
           chunks: j.chunks.map(function (c) {
             files.add(c.noteId || c.path);
             return { id: c.id || c.noteId + '#b' + (c.block || 0), noteId: c.noteId || c.path, path: c.path, block: c.block || 0, text: c.text, start: c.start, end: c.end, vec: new Float32Array(Buffer.from(c.v, 'base64').buffer) };
@@ -745,6 +848,7 @@ class AiEngine {
         vaultName: this.index.vaultName,
         vaultPath: this.index.vaultPath,
         builtAt: this.index.builtAt,
+        noteIndexAt: this.index.noteIndexAt || {},
         chunks: this.index.chunks.map(function (c) {
           return { id: c.id, noteId: c.noteId, path: c.path, block: c.block, text: c.text, start: c.start, end: c.end, v: Buffer.from(c.vec).toString('base64') };
         }),
@@ -760,7 +864,7 @@ class AiEngine {
    */
   activateVault() {
     this._loadIndexFrom(this._indexPath());
-    if (!this.index) this.index = { vaultName: '', vaultPath: '', builtAt: null, files: 0, chunks: [] };
+    if (!this.index) this.index = { vaultName: '', vaultPath: '', builtAt: null, files: 0, chunks: [], noteIndexAt: {} };
     this.index.vaultName = this._vaultName();
     this.index.vaultPath = this.getVaultRoot ? this.getVaultRoot() : '';
     return { vaultName: this.index.vaultName, files: this.index.files, chunks: this.index.chunks.length, builtAt: this.index.builtAt };
@@ -788,14 +892,16 @@ class AiEngine {
     let total = 0;
     for (const f of files) {
       const prm = await this._chunkParamsFor(f);
-      total += chunkConfigured(fs.readFileSync(path.join(root, f), 'utf8'), prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize).length;
+      total += chunkConfigured(fs.readFileSync(path.join(root, f), 'utf8'), prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize, prm.strategy, path.basename(f)).length;
     }
+    const noteIndexAt = {};   // 每篇笔记的索引生成时间（用于「索引时间 < 文件更新时间」的过期检测）
     for (const f of files) {
       let text = '';
       try { text = fs.readFileSync(path.join(root, f), 'utf8'); } catch (e) { continue; }
       const noteId = await this._metaNoteIdFor(f, text);
       const prm = await this._chunkParamsFor(f);
-      const cs = chunkConfigured(text, prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize);
+      const cs = chunkConfigured(text, prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize, prm.strategy, path.basename(f));
+      noteIndexAt[noteId] = Date.now();
       for (let i = 0; i < cs.length; i++) {
         const c = cs[i];
         const vec = await this.embed(c.text);
@@ -805,7 +911,7 @@ class AiEngine {
       }
     }
     const notes = new Set(chunks.map(function (c) { return c.noteId; }));
-    this.index = { vaultName: this._vaultName(), vaultPath: root, builtAt: Date.now(), files: notes.size, chunks };
+    this.index = { vaultName: this._vaultName(), vaultPath: root, builtAt: Date.now(), files: notes.size, chunks, noteIndexAt };
     this._saveIndex();
     return { files: notes.size, chunks: chunks.length };
   }
@@ -825,7 +931,8 @@ class AiEngine {
       try { text = fs.readFileSync(path.join(root, rel), 'utf8'); } catch (e) { return this._removeNoteWork(rel); }
       const noteId = await this._metaNoteIdFor(rel, text);
       const prm = await this._chunkParamsFor(rel);
-      const cs = chunkConfigured(text, prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize);
+      const cs = chunkConfigured(text, prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize, prm.strategy, path.basename(rel));
+      const indexedAt = Date.now();
       const fresh = [];
       for (let i = 0; i < cs.length; i++) {
         const vec = await this.embed(cs[i].text);
@@ -833,6 +940,8 @@ class AiEngine {
       }
       this.index.chunks = this.index.chunks.filter(function (c) { return c.path !== rel; }).concat(fresh);
       this.index.files = this._distinctNotes();
+      if (!this.index.noteIndexAt) this.index.noteIndexAt = {};
+      this.index.noteIndexAt[noteId] = indexedAt;
       this._saveIndex();
     };
     this._queue = this._queue.then(run).catch(function () { /* 单篇增量更新失败不阻塞 */ });
@@ -840,20 +949,33 @@ class AiEngine {
   }
 
   /**
-   * 解析某篇笔记的分块参数（块大小 / 相邻重叠 / 单块长度上限 / 显式偏移）。
+   * 手动强制重建单篇笔记的索引块（供「索引过期」补救）。
+   * 复用 updateNote 的重算/替换骨架：只重算该文件块、刷新该笔记索引时间，不影响库内其他笔记。
+   * @param {string} rel 笔记相对路径
+   * @returns {Promise<void>}
+   * @author 火 冰
+   */
+  rebuildNoteIndex(rel) {
+    return this.updateNote(rel);
+  }
+
+  /**
+   * 解析某篇笔记的分块参数（块大小 / 相邻重叠 / 单块长度上限 / 显式偏移 / 分块策略）。
    * 优先取 `.second-brain` 元数据中该笔记的 `chunk` 覆盖配置；未单独设置时回退全局默认。
    * @param {string} rel 笔记相对路径
-   * @returns {Promise<{blockSize:number, overlap:number, maxChunkSize:number, offsets:number[]|null}>}
+   * @returns {Promise<{blockSize:number, overlap:number, maxChunkSize:number, offsets:number[]|null, strategy:string}>}
    * @author 火 冰
    */
   async _chunkParamsFor(rel) {
     const base = this.cfg || DEFAULT_CONFIG;
     const maxGlobal = Math.max(0, Math.floor(Number(base.maxChunkSize) || 0));
+    const defaultStrategy = base.chunkStrategy === 'semantic' ? 'semantic' : 'fixed';
     const empty = {
       blockSize: Number(base.blockSize) || 200,
       overlap: Number(base.overlap) || 40,
       maxChunkSize: maxGlobal,
       offsets: null,
+      strategy: defaultStrategy,
     };
     const root = this.getVaultRoot ? this.getVaultRoot() : null;
     if (!root || !rel) return empty;
@@ -871,6 +993,7 @@ class AiEngine {
         overlap: Number(c.overlap) || empty.overlap,
         maxChunkSize: empty.maxChunkSize,   // 单块上限为全局统一配置，不随单文件覆盖
         offsets: (Array.isArray(c.offsets) && c.offsets.length) ? c.offsets.slice() : null,
+        strategy: c.strategy === 'semantic' ? 'semantic' : defaultStrategy,   // 单笔记可覆盖分块策略
       };
     } catch (e) { /* 无覆盖记录或读取失败 → 用全局默认 */ }
     return empty;
@@ -918,6 +1041,12 @@ class AiEngine {
     this.index.chunks = this.index.chunks.filter(function (c) { return c.path !== rel; });
     if (this.index.chunks.length !== before) {
       this.index.files = this._distinctNotes();
+      // 同步清理该笔记的索引时间戳（若来自单个 noteId）
+      if (this.index.noteIndexAt) {
+        const removedIds = new Set();
+        this.index.chunks.forEach(function (c) { removedIds.add(c.noteId); });
+        Object.keys(this.index.noteIndexAt).forEach(function (k) { if (!removedIds.has(k)) delete this.index.noteIndexAt[k]; });
+      }
       this._saveIndex();
     }
   }
@@ -930,14 +1059,20 @@ class AiEngine {
   async listIndex() {
     if (!this.index) this.activateVault();
     const idx = this.index || { vaultName: '', builtAt: null, chunks: [] };
+    const root = this.getVaultRoot ? this.getVaultRoot() : null;
     const byPath = new Map();
     idx.chunks.forEach(function (c) {
       if (!byPath.has(c.path)) byPath.set(c.path, []);
       byPath.get(c.path).push({ id: c.id, noteId: c.noteId, block: c.block, text: (c.text || '').slice(0, 160), start: c.start, end: c.end });
     });
+    const noteIndexAt = idx.noteIndexAt || {};
     const groups = [];
     byPath.forEach(function (blocks, p) {
-      groups.push({ path: p, noteId: blocks[0] ? blocks[0].noteId : p, blocks: blocks });
+      const noteId = blocks[0] ? blocks[0].noteId : p;
+      // 索引生成时间（该笔记全部块共享）与文件更新时间：前者 < 后者即视为「索引过期」
+      let mtime = 0;
+      if (root && p) { try { mtime = fs.statSync(path.join(root, p)).mtimeMs; } catch (e) { mtime = 0; } }
+      groups.push({ path: p, noteId: noteId, indexedAt: noteIndexAt[noteId] || 0, mtime: mtime, blocks: blocks });
     });
     return {
       vaultName: idx.vaultName || '',
@@ -1313,4 +1448,4 @@ class AiEngine {
   }
 }
 
-module.exports = { AiEngine, chunkText, chunkConfigured, cosine, extractNoteId, DEFAULT_CONFIG };
+module.exports = { AiEngine, chunkText, chunkConfigured, semanticChunkText, cosine, extractNoteId, DEFAULT_CONFIG };

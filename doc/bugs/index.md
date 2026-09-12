@@ -53,6 +53,8 @@
 | [Bug-045](Bug-045.md) | 已修复（测试完成） | 主题「一次设置、一次渲染」：minimal-theme 插件启动仍自动 applyTheme 二次套用主题，改为 head 读数据一次渲染、插件仅切换时渲染。 |
 | [Bug-046](Bug-046.md) | 已修复（测试完成） | minimal-theme 映射到编辑器未使用配色自身背景/卡片/表面/文字/边框，反而用深色模式固定背景（表格#202329）；改为编辑器直接映射配色变量、移除「自动/浅色/深色」设置。 |
 | [Bug-047](Bug-047.md) | 已修复（测试完成） | 主界面激活编辑器时 Ribbon「编辑器」按钮未高亮：内置按钮 id 用了 `file` 而路由 key 为 `editor`，匹配不到；已统一为 `editor`。 |
+| [Bug-048](Bug-048.md) | 已修复（测试完成） | 编辑器区右键菜单永不弹出：命中判定用不存在的 `vdInst.element`（恒 undefined），`contains` 恒假；改用 `vdInst.vditor.element`。 |
+| [Bug-049](Bug-049.md) | 已修复（测试完成） | IR 模式通用右键菜单不弹出（WYSIWYG 正常）：IR 整区被 `<pre>` 包裹，代码块判定误用 `closest('pre')` 致普通文字被短路；改用 `[data-type="code-block"]` 判定。 |
 
 > 注（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——语言选择器(chip)显隐保留为 Bug-011，链接弹框 `docButton` 那条纠正为 Bug-042。
 

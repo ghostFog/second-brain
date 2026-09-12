@@ -7,6 +7,7 @@
 const { app, BrowserWindow, protocol, ipcMain, dialog, shell, Menu, session, Tray, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { randomUUID } = require('crypto'); // 上传资源（图片/附件）落盘用 UUID 重命名，避免重名冲突
 const grayMatter = require('gray-matter'); // 解析笔记 frontmatter（获取 id / tags 元数据）
 const { default: SnowflakeId } = require('snowflake-id'); // 雪花算法：生成全局唯一文档 id，方便索引/元数据稳定定位
 const { AiEngine, chunkConfigured } = require('./ai-engine');
@@ -53,6 +54,13 @@ const MIME = {
   '.otf': 'font/otf',
   '.eot': 'application/vnd.ms-fontobject',
   '.map': 'application/json; charset=utf-8',
+  // 上传资源（图片/附件）可能涉及的其它类型，避免 note:// 协议下以 octet-stream 返回
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.pdf': 'application/pdf',
 };
 
 /* ---------- 自定义协议：note:// ---------- */
@@ -70,7 +78,10 @@ function registerNoteProtocol() {
     const segments = pathname.split('/').filter(Boolean);
     if (segments.includes('..')) return new Response('Forbidden', { status: 403 });
 
-    const filePath = path.join(ROOT, ...segments);
+    // vault_res 主机 → 映射到知识库隐藏资源目录 .resources（上传的图片/附件，UUID 命名）
+    // 其余主机（local 等）→ 映射到应用根目录（视图/依赖资源）
+    const baseDir = (url.hostname === 'vault_res') ? path.join(vaultRoot(), RESOURCE_DIR) : ROOT;
+    const filePath = path.join(baseDir, ...segments);
     try {
       const data = await fs.promises.readFile(filePath);
       const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
@@ -522,7 +533,7 @@ async function walkNotes(dir, base, out) {
   catch { return 0; }
   let count = 0;
   for (const it of items) {
-    if (it.name === META_DIR) continue; // 跳过内部元数据目录 .second-brain（及其镜像子树），不进入笔记列表
+    if (it.name === META_DIR || it.name === RESOURCE_DIR) continue; // 跳过内部元数据目录 .second-brain 与上传资源目录 .resources，不进入笔记列表
     const abs = path.join(dir, it.name);
     const rel = base ? base + '/' + it.name : it.name;
     if (it.isDirectory()) {
@@ -549,6 +560,9 @@ async function walkNotes(dir, base, out) {
 
 /** 知识库存放元数据的隐藏目录名 */
 const META_DIR = '.second-brain';
+
+/** 上传资源（图片/附件）的统一隐藏资源目录名（位于知识库根，UUID 重命名落盘） */
+const RESOURCE_DIR = '.resources';
 
 /** 雪花 id 生成器：为新建笔记分配全局唯一文档 id（mid 取 1，进程内单例保证递增唯一）。 */
 const snowflake = new SnowflakeId({ mid: 1 });
@@ -634,7 +648,7 @@ async function scanVaultMeta() {
     let subBytes = 0, subNotes = 0;
     const dirKids = [], fileKids = [];   // 目录属性：文件列表（子目录 + 文件）
     for (const it of items) {
-      if (it.name === META_DIR) continue;                      // 跳过元数据目录自身
+      if (it.name === META_DIR || it.name === RESOURCE_DIR) continue;                      // 跳过元数据目录与上传资源目录自身
       const childAbs = path.join(abs, it.name);
       const childRel = (dirRel ? dirRel + '/' : '') + it.name;
       if (it.isDirectory()) {
@@ -828,6 +842,7 @@ ipcMain.handle('notes:saveNoteChunk', async (_e, rel, chunk) => {
       const val = {
         blockSize: Math.max(1, Math.floor(Number(c.blockSize) || 200)),
         overlap: Math.max(0, Math.floor(Number(c.overlap) || 0)),
+        strategy: c.strategy === 'semantic' ? 'semantic' : 'fixed',   // 单笔记分块策略覆盖（默认固定字符）
       };
       if (offs) val.offsets = offs;
       note.chunk = val;
@@ -840,12 +855,12 @@ ipcMain.handle('notes:saveNoteChunk', async (_e, rel, chunk) => {
 /* 预览某篇笔记按给定分块配置生成的索引分块（供「属性 → 索引分块」面板编辑时实时展示）。
  * size/overlap/offsets 为用户在面板填写/调整的值（maxChunkSize 为单块长度上限，0=不限制）；从磁盘读取笔记原文切分。
  * @returns {Promise<{ok:boolean, textLen?:number, blocks?:Array<{text,start,end}>}>} */
-ipcMain.handle('ai:previewChunk', async (_e, rel, size, overlap, offsets, maxChunkSize) => {
+ipcMain.handle('ai:previewChunk', async (_e, rel, size, overlap, offsets, maxChunkSize, strategy, fileName) => {
   await ensureVault();
   const abs = path.join(vaultRoot(), String(rel || '').replace(/^\/+/, ''));
   let text = '';
   try { text = await fs.promises.readFile(abs, 'utf8'); } catch (e) { return { ok: false }; }
-  const blocks = chunkConfigured(text, size, overlap, (Array.isArray(offsets) && offsets.length) ? offsets.map(Number) : null, maxChunkSize);
+  const blocks = chunkConfigured(text, size, overlap, (Array.isArray(offsets) && offsets.length) ? offsets.map(Number) : null, maxChunkSize, strategy, fileName || path.basename(rel || ''));
   return { ok: true, textLen: text.replace(/\r\n/g, '\n').length, blocks };
 });
 
@@ -918,6 +933,35 @@ ipcMain.handle('notes:reveal', async (_e, rel) => {
   const abs = resolveVaultPath(rel);
   if (!fs.existsSync(abs)) return false;
   shell.showItemInFolder(abs);
+  return true;
+});
+
+/* 上传资源（图片/附件）：落盘到知识库隐藏资源目录 .resources，用 UUID 重命名并保留扩展名，
+ * 返回 { url, name }；url 为 note://vault_res/<uuid.ext>，name 为原始真实文件名（笔记链接文本用）。
+ * @param {string}   fileName 原始文件名（用于保留扩展名 + 返回真实名）
+ * @param {ArrayBuffer|Uint8Array} dataBuf 文件二进制内容
+ * @author 火 冰 */
+ipcMain.handle('notes:uploadResource', async (_e, fileName, dataBuf) => {
+  const name = String(fileName || '').replace(/[\\/:*?"<>|]/g, '_').trim();
+  if (!name) throw new Error('文件名为空');
+  const ext = path.extname(name).toLowerCase();
+  const stored = randomUUID() + ext;              // 落盘用 UUID 名，笔记内始终引用真实名
+  const resDir = path.join(vaultRoot(), RESOURCE_DIR);
+  await fs.promises.mkdir(resDir, { recursive: true });
+  await fs.promises.writeFile(path.join(resDir, stored), Buffer.from(dataBuf));
+  return { url: 'note://vault_res/' + stored, name: name };
+});
+
+/* 用系统默认程序打开上传的资源文件（附件点击，如 pdf/zip/sh/bat/doc/xls/html）。
+ * @param {string} stored 资源存储名（uuid.ext，取自 note://vault_res/ 路径）
+ * @author 火 冰 */
+ipcMain.handle('notes:openResource', async (_e, stored) => {
+  const clean = String(stored || '');
+  const segs = clean.split('/').filter(Boolean);
+  if (!clean || segs.includes('..')) return false;   // 防路径穿越：仅允许 .resources 内的平级文件
+  const abs = path.join(vaultRoot(), RESOURCE_DIR, ...segs);
+  if (!fs.existsSync(abs)) return false;
+  shell.openPath(abs);
   return true;
 });
 
@@ -1256,6 +1300,13 @@ ipcMain.handle('ai:rebuildIndex', async (e) => {
     if (!e.sender.isDestroyed()) e.sender.send('ai:progress', p);
   });
   return Object.assign({}, result, aiEngine.getStatus());
+});
+
+/* 手动重建指定单篇笔记的索引（「索引过期」补救）；只重算该文件块，不影响库内其他笔记 */
+ipcMain.handle('ai:rebuildNoteIndex', async function (e, rel) {
+  if (!rel) return { ok: false };
+  await aiEngine.rebuildNoteIndex(String(rel));
+  return { ok: true };
 });
 
 /* 列出索引库中所有知识库的索引概要 */

@@ -751,10 +751,82 @@ function testIrBlockAbove() {
     'editor-vditor.js 暴露 __vdBlock 块级插入助手');
 
   const src = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
-  assert(/root\.parentNode\.insertBefore/.test(src) && /closest\(['"]\[data-block="0"\]/.test(src),
-    '上方插入空行：以 [data-block="0"] 归一表格/代码块根，并 insertBefore 插 <p data-block="0">');
-  assert(src.indexOf('在代码块上方插入空行') !== -1 && src.indexOf('在表格上方插入空行') !== -1,
-    '右侧菜单含「上方插入空行」（表格与代码块各一项）：提供了块前插入的 UI 入口');
+  const ctxSrc = fs.readFileSync(path.join(__dirname, 'plugins', 'markdown-editor', 'md-context.js'), 'utf8');
+  assert(/root\.parentNode\.insertBefore/.test(ctxSrc) && /closest\(['"]\[data-block="0"\]/.test(ctxSrc),
+    '上方插入空行：插件 md-context.js 以 [data-block="0"] 归一表格/代码块根，并 insertBefore 插 <p data-block="0">');
+  assert(src.indexOf('在上方插入空行') !== -1,
+    '右侧菜单含「在上方插入空行」（表格与代码块通用文案）：提供了块前插入的 UI 入口');
+  assert(src.indexOf('在代码块上方插入空行') === -1 && src.indexOf('在表格上方插入空行') === -1,
+    '右侧菜单已移除旧长文案「在代码块上方/表格上方插入空行」');
+}
+
+/* ---- 编辑区右键「插入图片/上传附件」：类型按 accept 过滤，分流插行内图片或卡片引言 ----
+ * 断言：editor-vditor.js 的通用右键菜单提供「插入图片」「上传附件」两项；
+ *       二者通过 sbUploadAccept(type) 映射 accept——图片 `image/*`、附件非图片扩展名白名单，
+ *       选中文件再经 handleVdUpload 按 isImageName 分流（图片行内、附件 `> [!attach]` 卡片）。
+ * 另：命中判定必须用 vditor 内容容器 vdInst.vditor.element / vdEl()，绝不能再用 vdInst.element——
+ *     Vditor 实例从不挂该字段，恒为 undefined，会导致右键菜单永不触发（Bug 防再犯）。
+ * 作者: 火 冰 */
+function testEditorRightClickUpload() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  W.document.head.appendChild(s);
+  // accept 过滤已迁入插件 md-context.js：一并注入以便行为断言
+  const cs = W.document.createElement('script');
+  cs.textContent = fs.readFileSync(path.join(__dirname, 'plugins', 'markdown-editor', 'md-context.js'), 'utf8');
+  W.document.head.appendChild(cs);
+  const src = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  assert(src.indexOf("label: '插入图片'") !== -1 && src.indexOf("label: '上传附件'") !== -1,
+    '右键：编辑区通用右键菜单含「插入图片」「上传附件」两项');
+  assert(src.indexOf('vdInst.element &&') === -1 && src.indexOf('vdInst.element.contains') === -1,
+    '右键：命中判定不再用从不赋值的 vdInst.element（否则 contains 恒 false，菜单永不弹出）');
+  assert(src.indexOf('vdInst.vditor.element') !== -1 || src.indexOf('vdEl()') !== -1,
+    '右键：命中判定改用 vditor 内容容器（vdInst.vditor.element / vdEl）');
+  // Bug-047 同源：vditor IR 把整个编辑区包在一个 <pre class="vditor-reset"> 里，若 IR 代码块判定用
+  // closest('pre')，普通文字也命中 pre 会被误短路，导致 IR 通用右键菜单永不弹出（WYSIWYG 无此包裹所以正常）。
+  // 回归守卫：代码块判定必须用 [data-type="code-block"]，且通用菜单短路条件不得再含 pre。
+  assert(src.indexOf('closest(\'[data-type="code-block"]\')') !== -1,
+    '右键: IR 代码块用 [data-type="code-block"] 判定（非 closest(\'pre\')）——普通文字不被整区 <pre> 误短路，通用菜单可弹出');
+  assert(src.indexOf('closest(\'table,pre\')') === -1,
+    '右键: IR 通用菜单短路条件不再含 pre（旧 Bug：IR 整区 <pre> 包裹致通用菜单永不弹出）');
+  assert(typeof W.sbUploadAccept === 'function', '右键：暴露 sbUploadAccept 类型→accept 助手');
+  assert(W.sbUploadAccept('image') === 'image/*', '右键：插入图片仅选 image/*');
+  assert(W.sbUploadAccept('attachment').indexOf('.pdf') !== -1 && W.sbUploadAccept('attachment').indexOf('image') === -1,
+    '右键：上传附件仅选非图片扩展名白名单');
+}
+
+/* ---- WYSIWYG 右键「插入」子菜单新增「图片/附件」上传入口 ----
+ * 断言：app-editor-ctx.js 的 WYSIWYG 插入子菜单含「图片」「附件」两入口（走 insWysPickUpload，
+ *       与 IR 共用 uploadResource 落盘到 .resources）；上传后按类型生成可往返 DOM 块：
+ *       图片 → `![名](url)` 段落；附件 → `> [!attach]` 引用块（预览/阅读渲染完整卡片）。
+ * 作者: 火 冰 */
+function testWysRightClickUpload() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'app-editor-ctx.js'), 'utf8');
+  try { W.document.head.appendChild(s); } catch (e) { /* 脚本仅在函数调用期落地，加载期不依赖 DOM */ }
+  // 块生成/上传纯逻辑已迁入插件 md-context.js，此处一并注入以便行为断言
+  const cs = W.document.createElement('script');
+  cs.textContent = fs.readFileSync(path.join(__dirname, 'plugins', 'markdown-editor', 'md-context.js'), 'utf8');
+  try { W.document.head.appendChild(cs); } catch (e) { /* 同上 */ }
+  const src = fs.readFileSync(path.join(__dirname, 'js', 'app-editor-ctx.js'), 'utf8');
+  const csrc = fs.readFileSync(path.join(__dirname, 'plugins', 'markdown-editor', 'md-context.js'), 'utf8');
+  assert(src.indexOf("specItem('图片'") !== -1 && src.indexOf("specItem('附件'") !== -1,
+    'WYSIWYG: 插入子菜单含「图片」「附件」两入口');
+  assert(csrc.indexOf('insWysPickUpload') !== -1 && csrc.indexOf('accept') !== -1,
+    'WYSIWYG: 两入口走插件 md-context.js 的 insWysPickUpload，accept 过滤上传类型');
+  assert(typeof W.sbWysUploadBlockHtml === 'function', 'WYSIWYG: 暴露 sbWysUploadBlockHtml 纯函数');
+  const p = W.sbWysUploadBlockHtml('cap.png', 'note://vault_res/u.png', true);
+  assert(p.indexOf('![cap.png](note://vault_res/u.png)') !== -1 && p.indexOf('<p') !== -1,
+    'WYSIWYG: 图片上传生成 ![名](url) 段落块（预览正常显示图片）');
+  const q = W.sbWysUploadBlockHtml('打包.zip', 'note://vault_res/u.zip', false);
+  assert(q.indexOf('<blockquote') !== -1 && q.indexOf('[!attach] 打包.zip note://vault_res/u.zip') !== -1,
+    'WYSIWYG: 附件上传生成 `> [!attach]` 引用块（预览/阅读渲染完整卡片）');
 }
 
 /* ---- Bug: 有序列表序号丢失（Tailwind preflight 重置 ol/ul，vditor 未恢复 ol）----
@@ -835,7 +907,154 @@ function testIrEmptyLineDelete() {
     'IR空行: 捕获阶段绑定 handleIrDeleteKeydown 拦截 Backspace/Delete');
 }
 
+/* ---- AI-16 语义分块回归断言 ----
+ * 覆盖语义分块算法的确定性复现点：
+ *   1) 文件以一级标题开头（起点为 0）时，单元起点必须落在标题行，不得被 !0 误判重置（曾导致首块丢失标题行）
+ *   2) 块内容按单元拼接须覆盖全文关键片段（标题行作为单元正文首行被保留）
+ *   3) 默认 chunkStrategy 为 'fixed'，strategy=semantic 走语义分块并注入文件名前缀
+ * 作者: 火 冰 */
+function testSemanticChunk() {
+  const vm = require('vm');
+  const src = fs.readFileSync(path.join(__dirname, 'ai-engine.js'), 'utf8');
+  const sandbox = {
+    module: { exports: {} }, exports: {}, __filename: __dirname, __dirname: __dirname,
+    require: function (id) {
+      if (id === 'onnxruntime-node') return { InferenceSession: null };
+      if (id === 'gray-matter') return function () { return { data: {}, content: '' }; };
+      return require(id);
+    },
+  };
+  sandbox.global = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(src, sandbox, { filename: 'ai-engine.js' });
+  const mod = sandbox.module.exports || {};
+  const { chunkConfigured, semanticChunkText, DEFAULT_CONFIG } = mod;
+
+  assert(DEFAULT_CONFIG && DEFAULT_CONFIG.chunkStrategy === 'fixed', 'AI-16: 默认 chunkStrategy 为 fixed');
+  const FILE = '回归笔记.md';
+  const text = [
+    '# 一级标题A', '',
+    '这是第一个段落，包含中文句子。这里有更多内容。', '',
+    '## 二级标题B', '',
+    '这是第二个段落。句子二。', '',
+    '# 一级标题C', '',
+    '结尾段落。',
+  ].join('\n');
+  const blocks = semanticChunkText(text, { size: 200, maxChunkSize: 300, fileName: FILE });
+  const strip = function (s) { return s.replace(/\s+/g, ''); };
+  const joined = strip(blocks.map(function (b) { return b.content; }).join(''));
+  assert(joined.indexOf('一级标题A') > -1, 'AI-16: 文件以标题开头时单元起点落在标题行（首块含一级标题A）');
+  assert(joined.indexOf('二级标题B') > -1 && joined.indexOf('一级标题C') > -1 && joined.indexOf('结尾段落') > -1,
+    'AI-16: 块内容拼接覆盖全文关键片段');
+  const semantic = chunkConfigured(text, 200, 40, null, 300, 'semantic', FILE);
+  assert(semantic.length > 1 && semantic[0].text.indexOf(FILE) === 0, 'AI-16: strategy=semantic 走语义分块并含文件名前缀');
+  const fixed = chunkConfigured(text, 200, 40, null, 300);
+  assert(fixed[0].text.indexOf(FILE) === -1, 'AI-16: 默认固定分块不含文件名前缀（向后兼容）');
+}
+
+/* ---- 资源上传助手：sbResMarkdown / resolveVaultResUrl ----
+ * 覆盖 Markdown Editor 上传图片/附件的确定性复现点：
+ *   1) 注入 editor-vditor.js 后暴露 window.sbResMarkdown；
+ *   2) 图片文件名 → `![真实名](note://vault_res/uuid.png)`；
+ *   3) 附件文件名（pdf/zip 等非图片）→ `[真实名](note://vault_res/uuid.pdf)`；
+ *   4) resolveVaultResUrl 从 note://vault_res/ 地址抽出存储名 uuid.ext，非该协议返回空串。
+ * 作者: 火 冰 */
+function testVaultResHelpers() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  W.document.head.appendChild(s);
+  assert(typeof W.sbResMarkdown === 'function', 'resources: editor-vditor.js 暴露 sbResMarkdown 资源片段助手');
+  assert(W.sbResMarkdown('截屏.png', 'note://vault_res/abc.png') === '![截屏.png](note://vault_res/abc.png)',
+    'resources: 图片用真实名插入为 ![截屏.png](note://vault_res/abc.png)');
+  assert(W.sbResMarkdown('设计文档.pdf', 'note://vault_res/uuid.pdf') === '[设计文档.pdf](note://vault_res/uuid.pdf)',
+    'resources: 附件(pdf)用真实名插入为 [设计文档.pdf](note://vault_res/uuid.pdf)');
+  assert(W.sbResMarkdown('打包.zip', 'note://vault_res/uuid.zip') === '[打包.zip](note://vault_res/uuid.zip)',
+    'resources: 附件(zip)插入为 [打包.zip](note://vault_res/uuid.zip)');
+  assert(typeof W.resolveVaultResUrl === 'function', 'resources: editor-vditor.js 暴露 resolveVaultResUrl');
+  assert(W.resolveVaultResUrl('note://vault_res/uuid-abc.png') === 'uuid-abc.png',
+    'resources: resolveVaultResUrl 抽出 note://vault_res/ 存储名 uuid-abc.png');
+  assert(W.resolveVaultResUrl('note://local/index.html') === '',
+    'resources: 非 vault_res 地址 resolveVaultResUrl 返回空串');
+  assert(W.resolveVaultResUrl(null) === '', 'resources: 空入参 resolveVaultResUrl 返回空串');
+}
+
+/* ---- 附件卡片与「> [!attach]」引言语法（预览变换 / 卡片 HTML / 编辑区指示块） ----
+ * 覆盖确定性复现点：
+ *   1) sbAttachCardHTML 生成 `.sb-res-card` 卡片（扩展名徽标 + 真实名 + 下载按钮 + data 属性）；
+ *   2) transformPreviewHtml 把 `[!attach] 名 url` 引言换成 `.sb-res-card`，普通引言不受影响；
+ *   3) markAttachCallouts 为编辑区 attach 引言加 `sb-attach-callout` 指示类。
+ * 作者: 火 冰 */
+function testVaultResCards() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  W.document.head.appendChild(s);
+  const card = W.sbAttachCardHTML('设计文档_最终.pdf', 'note://vault_res/uuid.pdf');
+  assert(typeof card === 'string' && card.indexOf('class="sb-res-card"') !== -1 && card.indexOf('data-sb-res-url="note://vault_res/uuid.pdf"') !== -1,
+    'card: sbAttachCardHTML 生成带 url 的附件卡片');
+  assert(card.indexOf('>PDF<') !== -1 && card.indexOf('设计文档_最终.pdf') !== -1 && card.indexOf('sb-res-card-dl') !== -1,
+    'card: 卡片含 PDF 扩展名徽标、真实名与下载按钮');
+  // transformPreviewHtml：attach 引言 → 卡片，普通引言原样
+  const input = '<blockquote><p>[!attach] 设计文档_最终.pdf note://vault_res/uuid.pdf</p></blockquote><blockquote><p>普通引言</p></blockquote>';
+  const out = W.sbTransformPreviewHtml(input);
+  const root = W.document.createElement('div');
+  root.innerHTML = out;
+  assert(root.querySelector('.sb-res-card') !== null, 'card: transform 把 [!attach] 引言渲染成 .sb-res-card 卡片');
+  assert(root.querySelector('.sb-res-card') && root.querySelector('.sb-res-card').getAttribute('data-sb-res-url') === 'note://vault_res/uuid.pdf',
+    'card: 卡片保留 data-sb-res-url 供下载/右键');
+  const quotes = root.querySelectorAll('blockquote');
+  assert(quotes.length === 1 && quotes[0].textContent.indexOf('普通引言') !== -1,
+    'card: 普通引言不受 transform 影响、不被替换');
+  assert(W.sbTransformPreviewHtml('<blockquote><p>[!attach] 未知链接 xyz</p></blockquote>').indexOf('sb-res-card') === -1,
+    'card: 非 note://vault_res 地址不渲染卡片');
+  // markAttachCallouts：编辑区指示块 class 切换（含 SV 源码 data-type 结构）
+  const editor = W.document.createElement('div');
+  editor.innerHTML = '<blockquote><p>[!attach] a.pdf note://vault_res/u.pdf</p></blockquote><blockquote><p>普通</p></blockquote>';
+  W.sbMarkAttachCallouts(editor);
+  const bqs = Array.prototype.slice.call(editor.querySelectorAll('blockquote'));
+  assert(bqs[0].classList.contains('sb-attach-callout') && !bqs[1].classList.contains('sb-attach-callout'),
+    'card: 编辑区 attach 引言加指示类，普通引言不加');
+  // SV 源码 mode 用 data-type="blockquote" 结构，也应加指示类
+  const svRoot = W.document.createElement('div');
+  svRoot.innerHTML = '<div data-type="blockquote"><p>[!attach] b.pdf note://vault_res/v.pdf</p></div>';
+  W.sbMarkAttachCallouts(svRoot);
+  assert(svRoot.firstChild.classList.contains('sb-attach-callout'),
+    'card: SV 源码 data-type=blockquote 结构也加指示类');
+}
+
+/* ---- 上传插入片段分流：图片行内预览 / 附件卡片引言 ----
+ * 覆盖 handleVdUpload 的插入片段决策（上传附件应渲染成「醒目指示块+完整卡片」而非普通链接）：
+ *   1) sbAttachMarkdown 生成 `> [!attach] 名 url` 引言；
+ *   2) 图片名 → sbResMarkdown（![名](url) 行内预览）；
+ *   3) 附件名（pdf/zip 等非图片）→ sbAttachMarkdown（卡片引言），保证预览/阅读出完整卡片。
+ * 作者: 火 冰 */
+function testVaultResUploadSnippet() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  W.document.head.appendChild(s);
+  assert(typeof W.sbAttachMarkdown === 'function', 'upload: editor-vditor.js 暴露 sbAttachMarkdown');
+  assert(W.sbAttachMarkdown('设计文档.pdf', 'note://vault_res/uuid.pdf') === '> [!attach] 设计文档.pdf note://vault_res/uuid.pdf',
+    'upload: 附件插入为 > [!attach] 名 url 卡片引言');
+  assert(!!W.__vdRes && W.__vdRes.sbAttachMarkdown === W.sbAttachMarkdown, 'upload: __vdRes 导出 sbAttachMarkdown');
+  // 镜像 handleVdUpload 的分流逻辑：图片走行内预览，附件走卡片引言
+  const isImg = function (n) { return W.__vdRes.isImageName(n); };
+  const snippetOf = function (name, url) { return isImg(name) ? W.sbResMarkdown(name, url) : W.sbAttachMarkdown(name, url); };
+  assert(snippetOf('cap.png', 'note://vault_res/u.png') === '![cap.png](note://vault_res/u.png)',
+    'upload: 图片上传插图为行内图片语法（保持预览）');
+  assert(snippetOf('打包.zip', 'note://vault_res/u.zip') === '> [!attach] 打包.zip note://vault_res/u.zip',
+    'upload: 附件(zip)上传插图 > [!attach] 卡片引言，预览/阅读出完整卡片');
+}
+
 testLogBadge();
+testSemanticChunk();
 testPluginLoad();
 testCodeLangGhost();
 testThemeSavedSnapshot();
@@ -845,9 +1064,13 @@ testVditorToolbarValid();
 testFullscreenDevtoolsKeybinds();
 testIrTableBarHelpers();
 testIrBlockAbove();
+testEditorRightClickUpload();
 testOrderedListCss();
 testTaskListRoundTrip();
 testIrEmptyLineDelete();
+testVaultResHelpers();
+testVaultResCards();
+testVaultResUploadSnippet();
 testVditorBridge();
 Promise.all([
   testCodeHighlightCopyBtn(),

@@ -683,3 +683,60 @@ body.ed-fs-active #ed-vditor .vditor { height: 100% !important; }
 .sb-math { display: inline-block; padding: 0 4px; margin: 0 1px; border-radius: 3px;
   background: var(--note-surface-2); font-family: var(--note-font-serif, Georgia, serif); }
 .sb-math.sel { background: var(--note-brand-50, #eef2ff); box-shadow: 0 0 0 1px var(--note-brand-400); }
+
+/* ---------- 附件卡片（预览/阅读，Obsidian `> [!attach] name url` 语法） ---------- */
+#ed-vditor .sb-res-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; margin: 6px 0;
+  background: var(--note-surface-2); border: 1px solid var(--note-border);
+  border-radius: 10px; cursor: pointer; user-select: none;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+#ed-vditor .sb-res-card:hover { border-color: var(--note-brand-400); box-shadow: 0 1px 6px rgba(0,0,0,0.08); }
+#ed-vditor .sb-res-card-ext {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 40px; height: 28px; padding: 0 8px;
+  font-size: 11px; font-weight: 600; color: var(--note-brand-600);
+  background: var(--note-brand-50, #eef2ff); border-radius: 6px; flex: none;
+}
+#ed-vditor .sb-res-card-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+#ed-vditor .sb-res-card-name {
+  font-size: 13px; font-weight: 500; color: var(--note-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#ed-vditor .sb-res-card-url {
+  font-size: 11px; color: var(--note-ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#ed-vditor .sb-res-card-dl {
+  width: 28px; height: 28px; flex: none; display: inline-flex;
+  align-items: center; justify-content: center;
+  border: 1px solid var(--note-border); border-radius: 6px;
+  background: var(--note-surface); color: var(--note-ink-3); cursor: pointer;
+}
+#ed-vditor .sb-res-card-dl:hover { color: var(--note-brand-600); border-color: var(--note-brand-400); }
+#ed-vditor .sb-res-card-dl::before { content: "\21E3"; font-size: 15px; }
+
+/* 编辑区附件引言指示块：把 `> [!attach] ...` 引言醒目成附件块（仅加 class，不改内容） */
+#ed-vditor blockquote.sb-attach-callout {
+  position: relative;
+  margin: 8px 0; padding: 10px 14px;
+  background: var(--note-brand-50, #eef2ff);
+  border-left: 4px solid var(--note-brand-400);
+  border-radius: 8px;
+}
+
+/* ---------- 编辑器/卡片右键菜单（body 级固定浮层） ---------- */
+.sb-ctx {
+  position: fixed; z-index: 3000; min-width: 150px;
+  padding: 4px; background: var(--note-popover);
+  border: 1px solid var(--note-border); border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.18);
+}
+.sb-ctx-item {
+  display: block; width: 100%; padding: 7px 10px; text-align: left;
+  border: none; background: transparent; border-radius: 5px;
+  font-size: 12px; color: var(--note-ink); cursor: pointer;
+  white-space: nowrap;
+}
+.sb-ctx-item:hover { background: var(--note-surface-2); color: var(--note-brand-600); }

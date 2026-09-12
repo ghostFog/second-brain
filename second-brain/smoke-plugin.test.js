@@ -29,10 +29,17 @@ W.toast = W.showToast;
 // 以 <script> 注入加载脚本（函数声明成为 window 全局属性）
 // 设置视图已拆分为 js/settings/*.js 多模块（与 index.html 加载顺序一致）
 const SCRIPTS = ['app-toolbar.js', 'app-plugins.js', 'settings/settings-core.js', 'settings/settings-ai.js', 'settings/settings-appearance.js', 'settings/settings-shortcuts.js', 'settings/settings-plugins.js', 'settings/settings-panels.js', 'settings/settings-main.js', 'file-tree-ctx.js', 'editor/editor-core.js', 'editor/editor-host.js', 'editor/editor-tabs.js', 'editor/editor-filetree.js', 'editor/editor-sidepanel.js', 'editor/editor-md.js', 'editor/editor-ctx.js', 'app-editor-ctx.js'];
+// markdown 增强逻辑已迁入插件模块：注入到宿主薄壳之后，以真实实现覆盖同名全局
+const PLUGIN_SCRIPTS = ['plugins/markdown-editor/md-serialize.js', 'plugins/markdown-editor/md-blocks.js', 'plugins/markdown-editor/md-context.js'];
 function loadScripts() {
   for (const name of SCRIPTS) {
     const s = W.document.createElement('script');
     s.textContent = fs.readFileSync(path.join(__dirname, 'js', name), 'utf8');
+    W.document.head.appendChild(s);
+  }
+  for (const name of PLUGIN_SCRIPTS) {
+    const s = W.document.createElement('script');
+    s.textContent = fs.readFileSync(path.join(__dirname, name), 'utf8');
     W.document.head.appendChild(s);
   }
 }

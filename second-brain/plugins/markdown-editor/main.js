@@ -1,12 +1,14 @@
 /* ============================================
- * 第二脑 — Markdown Editor 插件（声明外壳，引擎归宿主）
+ * 第二脑 — Markdown Editor 插件（编辑器的真正增强）
  * 作者: 火 冰
  * 功能:
- *   - 声明支持的 Markdown 后缀（.md / .markdown）与打开方式、工具按钮、侧边面板
- *   - 将工具按钮/命令 action 委托给宿主（editor-host.js）与 vditor 桥接（editor-vditor.js）
- * 说明:
- *   - vditor 引擎与 .md Provider 已整体迁入宿主 js/editor/editor-vditor.js（桌面+网页共用）。
- *   - 本插件仅保留动作映射外壳，不再注册独立 Provider，避免与宿主重复。
+ *   - 注册 .md/.markdown 编辑器 Provider（编辑/预览/分屏、右侧边面板）
+ *   - 承载 markdown 专属增强：往返序列化、代码块语言选择器、WYSIWYG 块编辑、
+ *     右键「插入图片/上传附件/在上方插入空行」（由 md-serialize.js / md-blocks.js / md-context.js 提供）
+ *   - 提供须让用户按需启用的套件，禁止直接把引擎放在宿主；vditor 引擎仍留宿主做共享底座，
+ *     本插件经 window.sbMdBridge 与 window.vd* 桥接宿主
+ * 说明: 与宿主 js/editor/editor-md.js 的薄壳委托同名函数配合——桌面版插件为本实现，
+ *       网页版（不加载目录插件）回落宿主薄壳。
  * ============================================ */
 'use strict';
 
@@ -20,6 +22,35 @@ function fireAction(action) {
 
 /* 注册 md 编辑器操作（错误边界由 PluginAPI.register 统一包裹） */
 try {
+  // 承载编辑器能力：覆盖宿主同 id Provider（后注册覆盖），并携带右键菜单等增强
+  if (typeof PluginAPI !== 'undefined' && PluginAPI.registerEditorProvider) {
+    try {
+      PluginAPI.registerEditorProvider({
+        id: 'markdown-editor',
+        name: 'Markdown Editor',
+        extensions: ['.md', '.markdown'],
+        openers: [
+          { id: 'edit', label: '编辑', icon: 'pencil' },
+          { id: 'preview', label: '预览', icon: 'eye' },
+          { id: 'split', label: '分屏', icon: 'columns-2' },
+        ],
+        toolbar: [],
+        sidebar: [
+          { id: 'props', label: '属性' },
+          { id: 'outline', label: '大纲' },
+          { id: 'backlinks', label: '反向链接' },
+          { id: 'tags', label: '标签' },
+        ],
+        open: function () { return Promise.resolve(); },
+        /* 编辑区渲染由 vditor 全权承担（vdInit/vdSetMode 驱动）——保留契约空实现 */
+        renderWysiwyg: function () { return ''; },
+        getMd: function () { return (typeof window.vdGetValue === 'function') ? window.vdGetValue() : ''; },
+        buildContextMenu: function () { return []; },
+        renderSidebar: function () { return Promise.resolve(); },
+      });
+    } catch (_) { /* 装配异常由宿主沙箱兜底 */ }
+  }
+
   PluginAPI.register('markdown-editor', {
     /* 源码 / 即时渲染 切换（委托宿主 toggleSource → vditor ir/sv） */
     'mde-toggle-source': function () { if (typeof toggleSource === 'function') toggleSource(); },

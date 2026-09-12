@@ -52,6 +52,9 @@ Desktop.ini
 # ---- TRAE IDE 本地目录 ----
 .trae/
 
+# ---- CodeArts Agent 本地目录 ----
+.arts/
+
 # ---- 其他临时文件 ----
 *_tmp_*
 *.bak

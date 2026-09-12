@@ -130,18 +130,24 @@
     const defBlock = Math.max(1, Math.floor(Number(cfg.blockSize) || 200));
     const defOverlap = Math.max(0, Math.floor(Number(cfg.overlap) || 40));
     const defMax = Math.max(0, Math.floor(Number(cfg.maxChunkSize) || 0));
+    const defStrategy = cfg.chunkStrategy === 'semantic' ? 'semantic' : 'fixed';
     // 单文件覆盖参数（未覆盖则用全局默认）
     const override = (note && note.chunk) || null;
     const blockSize = Math.max(1, Math.floor(Number(override && override.blockSize ? override.blockSize : defBlock)));
     const overlap = Math.max(0, Math.floor(Number(override && override.overlap !== undefined ? override.overlap : defOverlap)));
     const maxChunk = Math.max(0, Math.floor(Number(override && override.maxChunkSize !== undefined ? override.maxChunkSize : defMax)));
+    const strategy = (override && override.strategy === 'semantic') ? 'semantic' : defStrategy;
     const hasOffsets = Array.isArray(override && override.offsets) && override.offsets.length > 0;
-    const st = { rel: rel, blockSize: blockSize, overlap: overlap, maxChunkSize: maxChunk, mode: 'single', offsets: hasOffsets ? override.offsets.map(Number) : null, rows: [] };
+    const st = { rel: rel, blockSize: blockSize, overlap: overlap, maxChunkSize: maxChunk, strategy: strategy, mode: 'single', offsets: hasOffsets ? override.offsets.map(Number) : null, rows: [] };
     // ===== 构建面板骨架 =====
     box.innerHTML =
       '<div class="flex items-center gap-2 mb-1.5">'
       + '<div class="flex-1"><div class="text-[10px]" style="color:var(--note-ink-3);">块大小</div><input type="number" min="1" class="ed-chunk-size w-full rounded px-1.5 py-0.5 text-[10px] nums outline-none" value="' + blockSize + '" title="单文件块大小（字符）；留空请编辑该笔记的设置或恢复默认" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
       + '<div class="flex-1"><div class="text-[10px]" style="color:var(--note-ink-3);">相邻重叠</div><input type="number" min="0" class="ed-chunk-overlap w-full rounded px-1.5 py-0.5 text-[10px] nums outline-none" value="' + overlap + '" title="相邻分块重叠字符数" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
+      + '</div>'
+      + '<div class="flex items-center gap-2 mt-1 mb-1">'
+      + '<span class="text-[10px] shrink-0" style="color:var(--note-ink-3);">切分策略</span>'
+      + '<select class="ed-chunk-strategy flex-1 rounded px-1.5 py-0.5 text-[10px] outline-none" title="分块策略：语义分块按标题/段落/句末切分并注入文件名与标题上下文" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"><option value="fixed"' + (st.strategy !== 'semantic' ? ' selected' : '') + '>固定字符</option><option value="semantic"' + (st.strategy === 'semantic' ? ' selected' : '') + '>语义分块</option></select>'
       + '</div>'
       + '<div class="flex flex-wrap items-center gap-1 mb-1">'
       + '<span class="text-[10px]" style="color:var(--note-ink-2);">偏移调整：</span>'
@@ -189,7 +195,7 @@
       listEl.innerHTML = '<p class="px-2 py-2 text-[10px]" style="color:var(--note-ink-3);">计算中…</p>';
       let blocks = null;
       if (ai.previewChunk) {
-        try { const res = await ai.previewChunk(st.rel, st.blockSize, st.overlap, offsets, st.maxChunkSize); blocks = (res && res.ok) ? res.blocks : null; }
+        try { const res = await ai.previewChunk(st.rel, st.blockSize, st.overlap, offsets, st.maxChunkSize, st.strategy); blocks = (res && res.ok) ? res.blocks : null; }
         catch (_) { blocks = null; }
       }
       if (!blocks) { listEl.innerHTML = '<p class="px-2 py-2 text-[10px]" style="color:var(--note-ink-3);">预览失败（桌面端需重启后生效）</p>'; return; }
@@ -206,6 +212,13 @@
     // 按默认推导：清除显式偏移，改按块大小/重叠推导
     const load = box.querySelector('.ed-chunk-load');
     if (load) load.addEventListener('click', function () { st.offsets = null; loadRows(null); });
+    // 切分策略变更：重新预览（语义分块由内容驱动，清空显式偏移）
+    const stratSel = box.querySelector('.ed-chunk-strategy');
+    if (stratSel) stratSel.addEventListener('change', function () {
+      st.strategy = stratSel.value === 'semantic' ? 'semantic' : 'fixed';
+      st.offsets = null;
+      loadRows(null);
+    });
     // 块大小 / 重叠 变更：重新预览
     ['ed-chunk-size', 'ed-chunk-overlap'].forEach(function (cls) {
       const inp = box.querySelector('.' + cls);
@@ -237,8 +250,8 @@
     if (save) save.addEventListener('click', async function () {
       if (!napi.saveNoteChunk) { showToast('桌面端才支持保存索引分块配置'); return; }
       const payload = Array.isArray(st.offsets) && st.offsets.length
-        ? { blockSize: st.blockSize, overlap: st.overlap, offsets: st.offsets }
-        : { blockSize: st.blockSize, overlap: st.overlap };
+        ? { blockSize: st.blockSize, overlap: st.overlap, offsets: st.offsets, strategy: st.strategy }
+        : { blockSize: st.blockSize, overlap: st.overlap, strategy: st.strategy };
       try { const res = await napi.saveNoteChunk(st.rel, payload); showToast(res && res.ok ? '已保存，重建索引后生效' : '保存失败'); }
       catch (err) { showToast('保存失败：' + ((err && err.message) || err)); }
     });
@@ -249,9 +262,10 @@
       try {
         const res = await napi.saveNoteChunk(st.rel, { reset: true });
         if (res && res.ok) {
-          st.blockSize = defBlock; st.overlap = defOverlap; st.offsets = null;
+          st.blockSize = defBlock; st.overlap = defOverlap; st.strategy = defStrategy; st.offsets = null;
           const s = box.querySelector('.ed-chunk-size'); if (s) s.value = defBlock;
           const o = box.querySelector('.ed-chunk-overlap'); if (o) o.value = defOverlap;
+          const sel = box.querySelector('.ed-chunk-strategy'); if (sel) sel.value = defStrategy;
           loadRows(null);
           showToast('已恢复全局默认，重建索引后生效');
         } else { showToast('恢复默认失败'); }
@@ -307,12 +321,27 @@
         if (body) body.innerHTML = '<span style="color: var(--note-ink-3);">本篇尚未建立索引。请到 AI 问答页点击「重建索引」后重试。</span>';
         return;
       }
-      body.innerHTML = blocks.map(function (blk) {
+      // 索引过期检测：该篇索引生成时间早于文件修改时间 → 顶部提示并提供「重建本篇索引」
+      const stale = !!g && !!g.indexedAt && !!g.mtime && g.indexedAt < g.mtime;
+      const staleBar = stale
+        ? '<div class="rounded-md px-3 py-2 mb-2 text-[12px] flex items-center justify-between gap-2" style="color: var(--state-danger); background: var(--note-surface-2);"><span>索引已过期（文件已被修改）</span><button data-action="rebuild-note-index" class="shrink-0 px-2 py-0.5 rounded text-[11px] font-medium" style="background: var(--note-brand-600); color: #FFFFFF;">重建本篇</button></div>'
+        : '';
+      body.innerHTML = staleBar + blocks.map(function (blk) {
         return '<div class="rounded-md px-3 py-2 mb-2 text-[12px] leading-relaxed" style="color: var(--note-ink-2); background: var(--note-surface-2);">'
           + '<div class="mb-1 flex flex-wrap items-center gap-2 font-mono text-[10px]" style="color: var(--note-ink-3);">'
           + '<span title="笔记 id">' + esc(blk.noteId) + '</span><span>块 ' + (blk.block + 1) + '</span><span class="nums" title="块 id">' + esc(blk.id) + '</span>'
           + '</div>' + esc(blk.text) + '</div>';
       }).join('');
+      var rebuildBtn = body && body.querySelector('[data-action="rebuild-note-index"]');
+      if (rebuildBtn) {
+        rebuildBtn.addEventListener('click', function () {
+          if (!ai.rebuildNoteIndex) return;
+          body.innerHTML = '<span style="color: var(--note-ink-3);">重建中…</span>';
+          ai.rebuildNoteIndex(pathNow).then(function () { renderIndexPanel(); }).catch(function () {
+            if (body) body.innerHTML = '<span style="color: var(--state-danger);">重建失败</span>';
+          });
+        });
+      }
       refreshIcons();
     }).catch(function () { if (body) body.innerHTML = '<span style="color: var(--state-danger);">读取索引失败</span>'; });
   }

@@ -613,7 +613,7 @@ const DEFAULT_PLUGIN_DATA = [
   {
     "name": "Markdown Editor", "id": "markdown-editor", "author": "第二脑", "icon": "file-text",
     "color": "#7C3AED", "cat": "editor", "system": true, "installed": true,
-    "desc": "内置的 Markdown 编辑器能力：注册 .md/.markdown 后缀，提供编辑（源码/所见即所得）、预览、分屏打开方式、工具按钮与右侧边面板（属性/大纲/反向链接/标签）。",
+    "desc": "内置的 Markdown 编辑器增强（vditor 底座由宿主承载）：注册 .md/.markdown 后缀，提供编辑（源码/所见即所得）、预览、分屏打开方式、工具按钮与右侧边面板（属性/大纲/反向链接/标签），并承载 markdown 专属增强（往返序列化、代码块语言选择器、右键插入/上传）。桌面版目录插件覆盖本内置描述，网页版回落宿主薄壳。",
     "version": "1.0.0", "downloads": 22000, "rating": 4.9,
     "editor": {
       "extensions": [".md", ".markdown"],
@@ -696,7 +696,7 @@ const DEFAULT_PLUGIN_DATA = [
   {
     "name": "Minimal Theme", "id": "minimal-theme", "author": "Stephan Ango", "icon": "palette",
     "color": "#EC4899", "cat": "theme", "desc": "极简主题包，专注内容阅读的克制设计，支持多种配色方案切换。",
-    "version": "1.0.0", "downloads": 20100, "rating": 4.7, "installed": false,
+    "version": "1.0.0", "downloads": 20100, "rating": 4.7, "system": true, "installed": true,
     "ribbon": { "icon": "palette", "title": "Minimal", "actionKey": "apply-theme" },
   },
   {

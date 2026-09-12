@@ -36,6 +36,10 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   createDir: (dir) => ipcRenderer.invoke('notes:createDir', dir),
   /** 删除笔记 */
   deleteNote: (relPath) => ipcRenderer.invoke('notes:delete', relPath),
+  /** 上传资源（图片/附件）：落盘到 .resources（UUID 重命名），返回 {url, name} */
+  uploadResource: (fileName, data) => ipcRenderer.invoke('notes:uploadResource', fileName, data),
+  /** 用系统默认程序打开上传的资源文件（传入 note://vault_res/ 路径的存储名 uuid.ext） */
+  openResource: (stored) => ipcRenderer.invoke('notes:openResource', stored),
   /** 在系统文件管理器中显示该笔记 */
   revealNote: (relPath) => ipcRenderer.invoke('notes:reveal', relPath),
   /** 移动整个目录到新父目录（保留内部结构 + 空目录；源目录被移除），返回 {dir, moved} */
@@ -82,7 +86,9 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     /** 保存 AI 配置 */
     saveConfig: (cfg) => ipcRenderer.invoke('ai:saveConfig', cfg),
     /** 预览某篇笔记按给定分块配置生成的索引分块（属性-索引分块面板实时展示）；maxChunkSize 为单块长度上限，0=不限制 */
-    previewChunk: (rel, size, overlap, offsets, maxChunkSize) => ipcRenderer.invoke('ai:previewChunk', rel, size, overlap, offsets, maxChunkSize),
+    previewChunk: (rel, size, overlap, offsets, maxChunkSize, strategy, fileName) => ipcRenderer.invoke('ai:previewChunk', rel, size, overlap, offsets, maxChunkSize, strategy, fileName),
+    /** 手动重建指定单篇笔记的索引（「索引过期」补救） */
+    rebuildNoteIndex: (rel) => ipcRenderer.invoke('ai:rebuildNoteIndex', rel),
     /** 获取 AI 引擎状态 */
     getStatus: () => ipcRenderer.invoke('ai:getStatus'),
     /** 获取当前提供方可用的生成模型列表 */
