@@ -10,17 +10,75 @@
 (function () {
   /* ---------- 链接右键菜单 ---------- */
 
-  /** 取消链接：把链接转为纯文本
-   *  @param {HTMLAnchorElement} link 链接元素
+  /** 检测元素是否为 IR 模式链接节点（<span data-type="a">）
+   *  @param {Element} el 起始元素
+   *  @returns {Element|null} IR 链接节点或 null
+   *  @author 火 冰 */
+  function closestIRLink(el) {
+    if (!el || !el.closest) return null;
+    var node = el.closest('[data-type="a"]');
+    console.log('[MDE] closestIRLink: el=', el?.tagName, 'data-type=', el?.getAttribute?.('data-type'), 'node=', node?.tagName, 'class=', node?.className);
+    if (!node) return null;
+    /* 确认是 IR 模式的链接（含 .vditor-ir__link 子元素，或本身在 .vditor-ir 容器内） */
+    var hasLinkChild = node.querySelector('.vditor-ir__link');
+    var inIRContainer = node.closest('.vditor-ir');
+    console.log('[MDE] closestIRLink: hasLinkChild=', !!hasLinkChild, 'inIRContainer=', !!inIRContainer);
+    return (hasLinkChild || inIRContainer) ? node : null;
+  }
+
+  /** 获取链接的 URL（兼容 WYSIWYG <a href> 和 IR <span data-type="a">）
+   *  IR 链接 DOM 结构:
+   *    <span data-type="a" class="vditor-ir__node">
+   *      <span class="vditor-ir__marker--bracket">[</span>
+   *      <span class="vditor-ir__link">显示文本</span>
+   *      <span class="vditor-ir__marker--bracket">]</span>
+   *      <span class="vditor-ir__marker--paren">(</span>
+   *      <span class="vditor-ir__marker--link">https://example.com</span>
+   *      <span class="vditor-ir__marker--paren">)</span>
+   *    </span>
+   *  URL 在 .vditor-ir__marker--link 中（参照 Vditor 源码行 12285）
+   *  @param {Element} link 链接元素（<a> 或 IR span）
+   *  @returns {string} URL
+   *  @author 火 冰 */
+  function getLinkUrl(link) {
+    if (!link) return '';
+    /* WYSIWYG/SV: <a href="..."> */
+    if (link.tagName === 'A') return link.getAttribute('href') || '';
+    /* IR: <span data-type="a"> → URL 在 .vditor-ir__marker--link 中 */
+    var urlEl = link.querySelector('.vditor-ir__marker--link');
+    var url = urlEl ? (urlEl.textContent || '').trim() : '';
+    console.log('[MDE] getLinkUrl: urlEl=', !!urlEl, 'url=', url);
+    return url;
+  }
+
+  /** 取消链接：把链接转为纯文本（兼容 WYSIWYG <a> 和 IR <span data-type="a">）
+   *  @param {Element} link 链接元素（<a> 或 IR span）
    *  @author 火 冰 */
   function unlinkAtCaret(link) {
     if (!link) return;
-    const text = link.textContent || '';
-    const parent = link.parentNode;
+    console.log('[MDE] unlinkAtCaret: link=', link.tagName, 'data-type=', link.getAttribute?.('data-type'), 'outerHTML=', link.outerHTML?.slice(0, 200));
+
+    /* IR 模式：<span data-type="a"> → 取 .vditor-ir__link 的 innerHTML 作为纯文本，
+     *  参照 Vditor 源码行 11698 的取消链接逻辑：aElement.outerHTML = linkText + "<wbr>" */
+    if (link.getAttribute && link.getAttribute('data-type') === 'a') {
+      var linkTextEl = link.querySelector('.vditor-ir__link');
+      var linkText = linkTextEl ? linkTextEl.innerHTML : (link.textContent || '');
+      console.log('[MDE] unlinkAtCaret IR: linkTextEl=', !!linkTextEl, 'linkText=', linkText);
+      link.outerHTML = linkText + '<wbr>';
+      /* 触发编辑区 input 事件，让 Vditor 重新序列化并同步 */
+      var editor = document.querySelector('.vditor-ir') || document.querySelector('.vditor-wysiwyg');
+      if (editor) editor.dispatchEvent(new Event('input', { bubbles: true }));
+      console.log('[MDE] unlinkAtCaret IR: done, editor=', !!editor);
+      return;
+    }
+
+    /* WYSIWYG/SV 模式：<a href> → 替换为纯文本节点 */
+    var text = link.textContent || '';
+    var parent = link.parentNode;
     if (parent) {
-      const textNode = document.createTextNode(text);
+      var textNode = document.createTextNode(text);
       parent.replaceChild(textNode, link);
-      // 同步到 markdown
+      /* 同步到 markdown */
       if (typeof sync2Host === 'function') {
         sync2Host(window.vdGetValue ? window.vdGetValue() : '');
       }
@@ -264,10 +322,15 @@
   function init() {
     // 右键菜单处理
     document.addEventListener('contextmenu', function (e) {
-      // 检测右键是否命中链接
-      const link = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-      if (link) {
-        const href = link.getAttribute('href') || '';
+      // 检测右键是否命中链接（WYSIWYG: <a href>; IR: <span data-type="a">）
+      console.log('[MDE] contextmenu: target=', e.target?.tagName, 'class=', e.target?.className, 'data-type=', e.target?.getAttribute?.('data-type'));
+      var link = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+      var irLink = !link ? closestIRLink(e.target) : null;
+      var hitLink = link || irLink;
+      console.log('[MDE] contextmenu: link=', !!link, 'irLink=', !!irLink, 'hitLink=', !!hitLink);
+      if (hitLink) {
+        var href = getLinkUrl(hitLink);
+        console.log('[MDE] contextmenu: href=', href, 'isHttp=', /^https?:\/\//i.test(href));
         if (/^https?:\/\//i.test(href)) {
           const menu = document.createElement('div');
           menu.style.cssText = 'position:fixed;z-index:200;min-width:160px;'
@@ -294,7 +357,7 @@
             + 'font-size:13px;text-align:left;cursor:pointer;';
           unlinkItem.innerHTML = '<i data-lucide="unlink" class="w-4 h-4"></i><span>取消链接</span>';
           unlinkItem.addEventListener('click', function () {
-            unlinkAtCaret(link);
+            unlinkAtCaret(hitLink);
             menu.remove();
           });
           unlinkItem.addEventListener('mouseover', function () { unlinkItem.style.background = 'rgba(0,0,0,.06)'; });

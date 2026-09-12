@@ -5,10 +5,10 @@
   "icon": "file-text",
   "color": "#7C3AED",
   "cat": "editor",
-  "desc": "Markdown 编辑器增强（vditor 底座由宿主承载）：注册 .md/.markdown 后缀，提供编辑/预览/分屏、右侧边面板（属性/大纲/反向链接/标签），并承载 markdown 专属增强——往返序列化、代码块语言选择器、WYSIWYG 块编辑、右键「插入图片/上传附件/在上方插入空行」、链接右键「浏览器打开/取消链接」、图片右键「下载/设置尺寸」、图片点击选中与拖拽调整尺寸。桌面版目录插件加载，网页版回落宿主薄壳。",
+  "desc": "Markdown 编辑器增强（vditor 底座由宿主承载）：注册 .md/.markdown 后缀，提供编辑/预览/分屏、右侧边面板（属性/大纲/反向链接/标签），并承载 markdown 专属增强——往返序列化、代码块语言选择器、WYSIWYG 块编辑、右键「插入图片/上传附件/在上方插入空行」、链接右键「浏览器打开/取消链接」、图片右键「下载/设置尺寸」、图片点击选中与拖拽调整尺寸、附件块非编辑卡片（整体插入/删除）。桌面版目录插件加载，网页版回落宿主薄壳。",
   "version": "1.0.1",
   "main": "main.js",
-  "scripts": ["md-serialize.js", "md-blocks.js", "md-context.js", "md-enhance.js"],
+  "scripts": ["md-serialize.js", "md-blocks.js", "md-context.js", "md-enhance.js", "md-attach.js"],
   "styles": "styles.css",
   "permissions": ["ui.editor"],
   "editor": {
