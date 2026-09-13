@@ -1187,6 +1187,17 @@ ipcMain.handle('notes:openResource', async (_e, stored) => {
   return true;
 });
 
+/* 用系统默认浏览器打开外部 URL（http/https 链接）。
+ * @param {string} url 外部链接 URL（必须 http/https 协议）
+ * @returns {Promise<boolean>} 是否成功调用
+ * @author 火 冰 */
+ipcMain.handle('notes:openExternal', async (_e, url) => {
+  const u = String(url || '');
+  if (!/^https?:\/\//i.test(u)) return false;   // 仅允许 http/https
+  await shell.openExternal(u);
+  return true;
+});
+
 /* 删除上传的资源文件（图片/附件）：从 .resources 目录物理删除，并刷新元数据。
  * @param {string} url note://vault_res/uuid.ext 资源地址或存储名
  * @returns {Promise<boolean>} 是否删除成功

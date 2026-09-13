@@ -1117,6 +1117,7 @@ function testLinkNavDelegate() {
     { path: '新笔记-13-838.md', name: '新笔记-13-838.md' },
   ];
   const opened = [];
+  const externalOpened = [];
   function openNote(p) { opened.push(p); }
   function resolveRelPath(baseDir, rel) {
     let r = String(rel || '').replace(/^\.\//, '');
@@ -1169,7 +1170,9 @@ function testLinkNavDelegate() {
       return;
     }
     if (!href || href === '#' || href.charAt(0) === '#') return;
-    if (/^(note:|https?:|mailto:|tel:|ftp:|file:|javascript:|data:)/i.test(href)) return;
+    /* 外链 http/https：preventDefault + openExternal（与 md-linknav.js handleLink 一致） */
+    if (/^https?:\/\//i.test(href)) { e.preventDefault(); e.stopPropagation(); externalOpened.push(href); return; }
+    if (/^(note:|mailto:|tel:|ftp:|file:|javascript:|data:)/i.test(href)) return;
     const hit = findNoteByLink(href);
     if (hit) { e.preventDefault(); e.stopPropagation(); openNote(hit); return; }
     if (/\.md$/i.test(href) || href.indexOf('.') === -1) e.preventDefault();
@@ -1183,8 +1186,8 @@ function testLinkNavDelegate() {
   });
   assert(results[0].dp === true && results[0].opened[0] === '新笔记-13-838.md',
     'ED-47: 内部 .md 链接命中 → openNote 新开页签 + preventDefault（不再按应用目录解析 404）');
-  assert(results[1].dp === false && results[1].opened.length === 1,
-    'ED-47: 外链 https 放行（不 preventDefault）');
+  assert(results[1].dp === true && results[1].opened.length === 1 && externalOpened[0] === 'https://example.com',
+    'ED-47: 外链 https → preventDefault + openExternal（用系统默认浏览器打开，不在应用内导航）');
   assert(results[2].dp === true && results[2].opened.length === 1,
     'ED-47: 未命中 .md 链接 preventDefault 防 note:// 404 弹窗');
   assert(results[3].dp === true && results[3].opened[1] === '新笔记-13-837.md',

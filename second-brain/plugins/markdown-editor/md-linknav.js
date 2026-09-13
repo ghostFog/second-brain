@@ -144,8 +144,15 @@
       return true;
     }
     if (!href || href === '#' || href.charAt(0) === '#') return false;
-    /* 排除外链/资源协议 */
-    if (/^(note:|https?:|mailto:|tel:|ftp:|file:|javascript:|data:)/i.test(href)) return false;
+    /* 外链 http/https：用系统默认浏览器打开（主进程 shell.openExternal） */
+    if (/^https?:\/\//i.test(href)) {
+      e.preventDefault(); e.stopPropagation();
+      var nd = window.noteDesktop || {};
+      if (nd.openExternal) nd.openExternal(href);
+      return true;
+    }
+    /* 排除其他资源协议（note:/mailto:/tel:/ftp:/file:/data:）放行 */
+    if (/^(note:|mailto:|tel:|ftp:|file:|javascript:|data:)/i.test(href)) return false;
     var hit = findNoteByLink(href, notes, currentPath);
     console.log('[md-linknav] findNoteByLink: ' + (hit || 'null'));
     if (hit) { e.preventDefault(); e.stopPropagation(); api.openNote(hit); refreshNotes(); return true; }
