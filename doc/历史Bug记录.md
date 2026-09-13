@@ -62,6 +62,7 @@
 | Bug-048 | 已修复（测试完成） | 编辑器区右键菜单永不弹出：`onEditorContextMenu` 命中判定用了不存在的 `vdInst.element`（恒 undefined）做 `contains`，判定恒假；改用 `vdInst.vditor.element`。 | [查看](bugs/Bug-048.md) |
 | Bug-049 | 已修复（测试完成） | IR 通用右键菜单不弹出（WYSIWYG 正常）：IR 整区被 `<pre>` 包裹，代码块判定误用 `closest('pre')` 致普通文字被短路；改用 `[data-type="code-block"]`。 | [查看](bugs/Bug-049.md) |
 | Bug-050 | 已修复（测试完成） | 打开软件编辑器「闪烁→空白」，切 Ribbon 再切回才恢复：启动多次构建 vditor，旧实例异步 after 乱序抢占共享 `vdPending`，当前实例补渲落空；加构建序号令 after 仅最新实例消费。 | [查看](bugs/Bug-050.md) |
+| Bug-051 | 已修复（测试完成） | 编辑区点击相对链接触发 404 弹窗：相对链接按 `note://` 基址解析到应用目录而非笔记目录；链接导航逻辑迁至 `md-linknav.js` 插件 + 主进程加 `will-navigate`/`setWindowOpenHandler` 兜底。 | [查看](bugs/Bug-051.md) |
 
 > 说明（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——代码块语言选择器(chip)显隐保留为 Bug-011，编辑器链接弹框 `docButton` 那条纠正为 Bug-042。
 

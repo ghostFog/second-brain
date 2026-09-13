@@ -676,8 +676,6 @@
     // 反链点击：跳转到 [[内链]] 指向的笔记
     const back = $('ed-backlinks');
     if (back) back.addEventListener('click', function (e) { const t = e.target.closest('[data-open]'); if (t) openNote(t.dataset.open); });
-    // 预览内链点击已由 vditor 原生预览承接（原 #ed-preview 绑定随自研渲染退役删除）
-
     // 启动恢复：优先读取 .second-brain/recent.json 中上次打开的笔记（多个标签）；
     // 其次图谱跳转目标；都无则打开第一篇。均已打开则保持不变。
     if (!edCurrent) {

@@ -864,6 +864,11 @@ globalThis.PluginAPI = {
     getMode: function () { return (typeof restoreS === 'function' ? restoreS('edMode', 'edit') : 'edit'); },
     readNote: function (path) { return (typeof noteStore !== 'undefined' && noteStore && noteStore.read) ? noteStore.read(path) : Promise.resolve(''); },
     saveNote: function (path, md) { return (typeof noteStore !== 'undefined' && noteStore && noteStore.save) ? noteStore.save(path, md) : Promise.resolve(); },
+    /* 打开任意笔记（编辑区新开页签）：供编辑器能力插件（如 markdown-editor 链接导航）调用。
+     *  委托宿主 openNote（editor-host.js 闭包内全局函数）。作者: 火 冰 */
+    openNote: function (path) { if (typeof openNote === 'function' && path) openNote(path); },
+    /* 列出知识库全部笔记（含 path/name/folder/mtime/size）：供插件查询笔记列表。作者: 火 冰 */
+    listNotes: function () { return (typeof noteStore !== 'undefined' && noteStore && noteStore.list) ? noteStore.list() : Promise.resolve([]); },
     /* 编辑器主题抽象：宿主把 vditor 深浅切换与样式注入收口在内部，插件只读/触发，不直接调 vditor。 */
     theme: {
       /** 取当前已解析的 vditor 主题配置 { theme, extraCss } */

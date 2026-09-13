@@ -11,6 +11,30 @@
 | ---- | ---- | ---- | ---- |
 | MD-02 | 插件承载 markdown 专属增强（原 ED-49） | 将 markdown 专属逻辑迁入 `plugins/markdown-editor/`：① **往返序列化**（`md-serialize.js`：`inlineToMd`/`domToMd`）；② **代码块语言选择器 + WYSIWYG 块编辑**（`md-blocks.js`：语言 chip/下拉/应用、块选中/清空/光标归位/末尾补空段）；③ **右键插入与上传**（`md-context.js`），配套样式归入插件 `styles.css`；宿主 `editor-md.js`/`editor-vditor.js`/`app-editor-ctx.js` 收口为薄壳委托（`window.sbMdBridge.*`），网页版回落宿主薄壳兜底 | 桌面版加载目录插件：插件以 Provider + 增强代码承接编辑能力；网页版回落宿主薄壳，基础编辑可用、上传仅桌面版支持 |
 | MD-03 | 文件拖拽临时打开（原 ED-46） | 支持将外部文件拖拽到应用窗口，作为**临时文件**打开（不纳入知识库正式目录/不写盘到笔记库）；打开后**打开或切换到「临时文件目录区」**用于集中查看与管理临时文件；在打开/切换临时文件的场景下，**侧边面板不做更新**（大纲/属性/反向链接等不随临时文件刷新） | 拖拽文件到窗口即打开为临时文件，并聚焦/切换到临时文件目录区；临时文件状态下侧边面板保持原样不更新 |
-| MD-04 | 链接/反向链接数据管理（原 ED-47） | 反向链接管理使用笔记**完整路径**；识别并区分两类链接语法：单括号 `[text](路径)`（普通链接）与双括号 `[[路径]]`（笔记内链/反向链接），二者结构类似、仅开头分隔符不同；扫描笔记正文解析后建立**链接索引数据**（含来源/目标路径、链接类型，按完整路径归一），**目标为本知识库内其他笔记时记录正/反向链接关系**，供**侧边面板「反向链接」**与**图谱视图**共同读取渲染 | 笔记创建/编辑/删除/移动时增量更新链接索引；侧边「反向链接」按完整路径聚合显示引用当前笔记的其他笔记，图谱视图按该索引建边；**链接点击打开方式判断**：点击笔记内链接时，若目标指向本知识库内其他笔记（内部链接），按打开笔记方式跳转（复用文件树打开笔记逻辑），否则按外链/资源链接处理 |
+| MD-04 | 链接/反向链接数据管理（原 ED-47） | 反向链接管理使用笔记**完整路径**；识别并区分两类链接语法：单括号 `[text](路径)`（普通链接）与双括号 `[[路径]]`（笔记内链/反向链接），二者结构类似、仅开头分隔符不同；扫描笔记正文解析后建立**链接索引数据**（含来源/目标路径、链接类型，按完整路径归一），**目标为本知识库内其他笔记时记录正/反向链接关系**，供**侧边面板「反向链接」**与**图谱视图**共同读取渲染。**链接点击三模式兼容**（`md-linknav.js`）：WYSIWYG/预览模式链接为标准 `<a href>` → `closest('a[href]')` 命中；IR 模式链接为 `<span data-type="a">` 内含 `.vditor-ir__marker--link`（URL 在 textContent）→ `closest('[data-type="a"]')` 检测，展开编辑状态（`vditor-ir__node--expand`）不触发导航；SV 模式链接为纯文本 `<textarea class="vditor-sv">` → 从 `selectionStart` 经 `parseLinkAtPos` 解析 `[text](url)`/`[[wiki]]`，非链接位置放行（正常定位光标） | 笔记创建/编辑/删除/移动时增量更新链接索引；侧边「反向链接」按完整路径聚合显示引用当前笔记的其他笔记，图谱视图按该索引建边；**链接点击打开方式判断**：点击笔记内链接时，若目标指向本知识库内其他笔记（内部链接），按打开笔记方式跳转（复用文件树打开笔记逻辑），否则按外链/资源链接处理。三模式统一走 `handleLink` → `findNoteByLink` → `openNote` |
 | MD-05 | 图片/附件上传（原 ED-48） | vditor 工具栏新增 **upload** 按钮，`accept` 覆盖 `image/*` 与 `.pdf/.doc/.docx/.xls/.xlsx/.ppt/.pptx/.html/.htm/.md/.txt/.sh/.bat/.cmd/.ps1/.csv/.zip/.rar/.7z/.asc`；支持多选、单文件 ≤50MB。上传经桌面端 IPC `notes:uploadResource` 落盘到库根 `.resources`（UUID 命名保留扩展名），返回 `note://vault_res/<uuid.ext>`；**图片**按真实名插入 `![名](url)`（编辑/预览行内展示），**附件**插入为 Obsidian 风格卡片引言 `> [!attach] 名 url`（编辑区显示醒目指示块、预览/阅读渲染完整卡片）。`note://` 协议新增 `vault_res` 主机路由 → `.resources`；`.resources` 在 walkNotes/scanVaultMeta 中跳过（`.` 开头且被排除，文件树不可见）。附件链接点击经捕获阶段拦截，调 `notes:openResource` 用系统默认程序打开，避免窗口整体导航 | 编辑器工具栏点 **upload** 选择图片/附件 → 自动落盘并在光标处插入；图片行内展示、附件卡片展示，均可点击/右键下载；网页版无桌面桥接时提示「上传仅桌面版支持」 |
 | MD-06 | 表格列宽设定与拖拽调整 | 依据表格第二行分隔符 `| ---- | ---- |` 中每列的 `-` 个数计算该列百分比宽度（`-` 越多列越宽，按各列 `-` 个数占比分配）；编辑器内渲染**表格宽度 100%**、**`td` 内容自动换行**（列宽按固定值计算，不因内容撑破）；支持**拖拽调整列宽**，拖动列边框改变列宽后按新宽度**重算该列 `-` 个数**并回写 Markdown 分隔行 | 拖拽列边界调整宽度，松手后按新宽度重算各列 `-` 个数并写回分隔行；渲染时按分隔行 `-` 个数等比例分配表格宽度（100%） |
+## Vditor 三模式兼容规则
+
+> Markdown Editor 插件涉及编辑区交互的功能必须同步支持 Vditor 三种编辑模式，不能只适配单一模式。
+
+### 三模式 DOM 结构差异
+
+| 模式 | 容器 | 链接 DOM | 块级元素 | 说明 |
+| ---- | ---- | ---- | ---- | ---- |
+| **WYSIWYG** | `.vditor-wysiwyg` | `<a href="url">text</a>` | `<div class="vditor-wysiwyg__block" data-block="0" data-type="...">` | 所见即所得，渲染为最终 HTML，标准 `<a href>` |
+| **IR** | `.vditor-ir` | `<span class="vditor-ir__node" data-type="a"><span class="vditor-ir__marker--link">url</span>...</span>` | `<div class="vditor-ir__node" data-type="...">` | 即时渲染，保留 Markdown 语法标记，链接非 `<a>` 而是 `<span>` |
+| **SV** | `.vditor-sv`（`<textarea>`） | 纯文本 `[text](url)` / `[[wiki]]` | 无渲染 | 源码模式，纯文本编辑，无渲染 DOM |
+
+### 链接点击三模式处理规则（`md-linknav.js`）
+
+1. **WYSIWYG/预览**：`closest('a[href]')` 命中 → `a.getAttribute('href')` 取 URL
+2. **IR**：`closest('[data-type="a"]')` 命中 → `querySelector('.vditor-ir__marker--link').textContent` 取 URL；`vditor-ir__node--expand` 类表示展开编辑状态，不触发导航
+3. **SV**：`e.target.tagName === 'TEXTAREA'` + `classList.contains('vditor-sv')` → `parseLinkAtPos(text, selectionStart)` 从源码解析链接；非链接位置放行（正常定位光标编辑）
+
+### 通用开发规则
+
+- 涉及编辑区事件委托的功能，**必须同时检测三模式的 DOM 选择器**，不能只查 `<a href>`
+- IR 模式的类名前缀为 `vditor-ir__`，块级元素用 `data-type` 属性标记类型
+- SV 模式是 `<textarea>`，无渲染 DOM，需从 `value` + `selectionStart` 解析源码
+- Vditor 默认 `link: { isOpen: true }`，IR 点击未拦截时走 `window.open` → 被主进程 `setWindowOpenHandler` deny 兜底阻止 → 无效果；必须在捕获阶段先拦截

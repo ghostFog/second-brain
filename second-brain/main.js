@@ -162,6 +162,17 @@ function createWindow() {
       detail: 'at ' + String(sourceId || '') + ':' + String(line || '') });
   });
 
+  // 导航安全兜底：链接点击若未在前端拦截成功（如 vditor 内部 window.open / 默认导航），
+  // 一律拒绝新窗口创建并阻止窗口内导航，避免相对链接按 note:// 基址解析到应用目录触发 404 弹窗。
+  // 内部笔记跳转统一由前端 openNote 处理（编辑区新开页签）；外链/资源由前端按协议分流。
+  // 作者: 火 冰
+  mainWin.webContents.setWindowOpenHandler(function () {
+    return { action: 'deny' };
+  });
+  mainWin.webContents.on('will-navigate', function (e) {
+    e.preventDefault();
+  });
+
   mainWin.on('closed', () => { mainWin = null; });
   return mainWin;
 }
@@ -570,16 +581,17 @@ const snowflake = new SnowflakeId({ mid: 1 });
 /** 从笔记 frontmatter 提取属性：id / tags / 字数（去空白）。
  * @param {string} text 笔记全文
  * @param {string} name 笔记文件名（无 id 时的回退）
+ * @param {string} [srcPath] 笔记完整相对路径（透传给 extractOutlinks 解析相对路径链接）
  * @returns {{noteId:string, tags:string[], wordCount:number, attachments:Array, outlinks:Array}}
  * @author 火 冰 */
-function parseNoteMeta(text, name) {
+function parseNoteMeta(text, name, srcPath) {
   let d = {};
   try { d = grayMatter(String(text || '')).data || {}; } catch (e) { /* frontmatter 解析失败按空处理 */ }
   const idAttr = (typeof d.id === 'string' && d.id.trim()) ? d.id.trim() : '';
   const rawTags = Array.isArray(d.tags) ? d.tags : [];
   const wordCount = String(text || '').replace(/\s+/g, '').length;
   const attachments = extractAttachments(text);
-  const outlinks = extractOutlinks(text);
+  const outlinks = extractOutlinks(text, srcPath);
   return { noteId: idAttr, tags: rawTags.map(String).filter(Boolean), wordCount, attachments, outlinks };
 }
 
@@ -632,39 +644,78 @@ function extractAttachments(text) {
   return result;
 }
 
+/** 以基准目录解析相对路径（./ ../ 同目录 sub/ 等），返回归一后的正斜杠相对路径。
+ *  @param {string} baseDir 基准目录相对路径（如 '日记/2024年'，根目录为 ''）
+ *  @param {string} rel 待解析的相对路径（如 './09-02.md'、'../08-31.md'、'sibling.md'）
+ *  @returns {string} 归一后的路径（如 '日记/08-31.md'）
+ *  @author 火 冰 */
+function resolveRelPath(baseDir, rel) {
+  var r = String(rel || '').replace(/^\.\//, '');
+  var parts = baseDir ? String(baseDir).split('/').filter(Boolean) : [];
+  var segs = r.split('/');
+  for (var i = 0; i < segs.length; i++) {
+    if (segs[i] === '..') parts.pop();
+    else if (segs[i] === '.') continue;
+    else if (segs[i]) parts.push(segs[i]);
+  }
+  return parts.join('/');
+}
+
 /** 从 Markdown 文本中提取正向链接（该笔记链接到的其他笔记）。
  *  识别两种语法:
- *    1. Wiki 链接: [[笔记名]] 或 [[笔记名|显示文本]]
- *    2. 相对路径链接: [text](路径.md)（非 note:// 和非 http 开头）
+ *    1. Wiki 链接: [[笔记名]] 或 [[笔记名|显示文本]]（按笔记名匹配，不解析相对路径）
+ *    2. 相对路径链接: [text](路径.md)（非 note:// 和非 http 开头）；按源笔记所在目录解析为完整路径归一
  *  @param {string} text 笔记全文
+ *  @param {string} [srcPath] 源笔记完整相对路径（用于解析相对路径链接，如 '日记/2024年/09-01.md'）
  *  @returns {Array<{path:string, name:string}>} 正向链接列表
  *  @author 火 冰 */
-function extractOutlinks(text) {
+function extractOutlinks(text, srcPath) {
   var result = [];
   var src = String(text || '');
   var seen = new Set();
+  /* 源笔记所在目录，用于解析相对路径链接 */
+  var baseDir = '';
+  if (srcPath) {
+    var si = String(srcPath).lastIndexOf('/');
+    baseDir = si >= 0 ? String(srcPath).slice(0, si) : '';
+  }
+  var ABS_RE = /^[/\\]/;   // 以 / 或 \ 开头 = 从库根写的完整路径
 
-  /* Wiki 链接: [[笔记名]] 或 [[笔记名|显示文本]] */
+  /* 判断链接目标是否含路径结构（含分隔符或以 ./ ../ 开头），纯笔记名不含 */
+  function pathLike(p) {
+    return p.indexOf('/') >= 0 || p.indexOf('\\') >= 0 || /^\.\.?[/\\]/.test(p);
+  }
+
+  /* 按源笔记路径归一链接目标：/ 开头视为从库根完整路径；否则按源笔记所在目录解析相对路径 */
+  function normalize(p) {
+    var cleaned = String(p).replace(/^[/\\]+/, '');
+    if (ABS_RE.test(String(p))) return cleaned;
+    return resolveRelPath(baseDir, cleaned);
+  }
+
+  /* Wiki 链接: [[笔记名]] 或 [[笔记名|显示文本]]；纯笔记名保持全局匹配，含路径时按源笔记路径解析 */
   var wikiRe = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
   var m;
   while ((m = wikiRe.exec(src)) !== null) {
     var target = m[1].trim();
     var targetPath = target.toLowerCase().endsWith('.md') ? target : target + '.md';
-    if (seen.has(targetPath)) continue;
-    seen.add(targetPath);
-    result.push({ path: targetPath, name: target });
+    var finalPath = pathLike(targetPath) ? normalize(targetPath) : targetPath;
+    if (seen.has(finalPath)) continue;
+    seen.add(finalPath);
+    result.push({ path: finalPath, name: target });
   }
 
-  /* 相对路径链接: [text](路径.md)（排除 note:// 和 http(s):// 开头） */
+  /* 相对路径链接: [text](路径.md)（排除 note:// 和 http(s):// 开头）；一律按源笔记路径解析为完整路径归一 */
   var relRe = /\[([^\]]*)\]\(([^)]+)\)/g;
   while ((m = relRe.exec(src)) !== null) {
     var url = m[2].trim();
     if (/^(note:|https?:|mailto:|tel:|ftp:)/i.test(url)) continue;
     if (!url.toLowerCase().endsWith('.md')) continue;
-    if (seen.has(url)) continue;
-    seen.add(url);
-    var linkName = url.split('/').pop().replace(/\.md$/i, '');
-    result.push({ path: url, name: linkName });
+    var resolved = normalize(url);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    var linkName = resolved.split('/').pop().replace(/\.md$/i, '');
+    result.push({ path: resolved, name: linkName });
   }
 
   return result;
@@ -758,7 +809,7 @@ async function scanVaultMeta() {
         // 从 md frontmatter 清除历史补齐写入的 id，保持 md 干净
         const clean = stripMetaId(text);
         if (clean.removed) { try { await fs.promises.writeFile(childAbs, clean.text, 'utf8'); } catch (e) { /* 清理失败不阻断 */ } text = clean.text; }
-        const pm = parseNoteMeta(text, it.name);
+        const pm = parseNoteMeta(text, it.name, childRel);
         rec.notes.push({ name: it.name, path: childRel, noteId: noteId, wordCount: pm.wordCount, tags: pm.tags, size: st.size, created: st.birthtimeMs, mtime: st.mtimeMs, chunk: prevOverrides[it.name] || undefined, indexTime: prevIndexTimes[it.name] || Date.now(), attachments: pm.attachments || [], outlinks: pm.outlinks || [] });
 
         rec.noteCount++;
@@ -900,6 +951,33 @@ ipcMain.handle('notes:dirMeta', async (_e, dir) => {
     rec = Object.assign({}, rec, { created: st.birthtimeMs || Date.now(), mtime: st.mtimeMs || Date.now() });
   } catch (e) { /* 目录已不存在时保持缺省时间 */ }
   return rec || { dir: clean, noteCount: 0, dirCount: 0, size: 0, totalNotes: 0, totalSize: 0, notes: [], children: [], updatedAt: 0 };
+});
+
+/** 读取全库链接索引（outlinks/backlinks 摘要）供图谱视图与反向链接消费。
+ *  只读现有 _meta.json，不触发重建；递归遍历所有目录记录收集每篇笔记的 outlinks/backlinks。
+ *  @returns {Promise<Array<{path:string,name:string,outlinks:Array,backlinks:Array}>>}
+ *  @author 火 冰 */
+ipcMain.handle('notes:linksIndex', async () => {
+  await ensureVault();
+  const root = vaultRoot();
+  const result = [];
+  const walk = async (dirRel) => {
+    const metaAbs = path.join(root, META_DIR, ...(dirRel ? dirRel.split('/') : []), '_meta.json');
+    let rec = null;
+    try { rec = JSON.parse(await fs.promises.readFile(metaAbs, 'utf8')); } catch (e) { /* 无记录 */ }
+    if (rec && Array.isArray(rec.notes)) {
+      for (const n of rec.notes) {
+        result.push({ path: n.path, name: n.name, outlinks: Array.isArray(n.outlinks) ? n.outlinks : [], backlinks: Array.isArray(n.backlinks) ? n.backlinks : [] });
+      }
+    }
+    if (rec && Array.isArray(rec.children)) {
+      for (const c of rec.children) {
+        if (c.type === 'dir') await walk(dirRel ? dirRel + '/' + c.name : c.name);
+      }
+    }
+  };
+  await walk('');
+  return result;
 });
 
 /* 最近打开笔记的记录文件（存放于 .second-brain 根目录，多条路径按最近在前） */

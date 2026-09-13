@@ -21,6 +21,7 @@
   let gLinks = [];            // [{s,t,kind}]
   let gMeta = [];             // 笔记元数据列表
   let gContent = {};          // path -> md 原文
+  let gLinksIndex = [];       // 全库链接索引 [{path,name,outlinks,backlinks}]（主进程统一两类语法 + 完整路径归一）
   let gTagFilter = new Set();  // 选中的标签（空 = 全部）
   let gTypeFilter = { note: true, folder: true, tag: true };
 
@@ -42,6 +43,11 @@
       try { gContent[n.path] = await noteStore.read(n.path); }
       catch (e) { gContent[n.path] = ''; }
     }
+    /* 链接索引：主进程已统一 [[wiki]] 与 [text](路径.md) 两类语法 + 完整路径归一 */
+    try {
+      const nd = window.noteDesktop || {};
+      if (nd.linksIndex) gLinksIndex = await nd.linksIndex(); else gLinksIndex = [];
+    } catch (e) { gLinksIndex = []; }
     buildGraph();
     renderGraph();
   }
@@ -65,6 +71,8 @@
       nodes.push({ id: 'tag:' + t, label: t.replace('#', ''), kind: 'tag', path: '', folder: '', tags: [], deg: 0 });
     });
     // 连线
+    const pathToId = {};
+    gMeta.forEach(n => { pathToId[n.path] = idOf(n.path); });
     gMeta.forEach(n => {
       const src = idOf(n.path);
       const tagEdges = new Set();
@@ -72,20 +80,28 @@
         const tid = 'tag:' + t;
         if (nodesById[tid] && !tagEdges.has(tid)) { edges.push({ s: src, t: tid, kind: 'tag' }); tagEdges.add(tid); }
       });
-      const re = /\[\[([^\]]+)\]\]/g; const md = gContent[n.path] || ''; let m;
-      while ((m = re.exec(md))) {
-        let name = (m[1] || '').trim();
-        if (!name) continue;
-        const hit = gMeta.find(x => {
-          const base = (x.name || '').replace(/\.md$/, '');
-          return base === name || (name.indexOf(base) === 0 && /^(\||#|$)/.test(name.slice(base.length)));
-        });
-        if (hit && hit.path !== n.path) {
-          const dst = idOf(hit.path);
-          if (edges.some(e => (e.s === src && e.t === dst) || (e.s === dst && e.t === src))) return;
-          edges.push({ s: src, t: dst, kind: 'link' });
+    });
+    /* 笔记-笔记内链：消费主进程链接索引（统一 [[wiki]] 与 [text](路径.md) 两类语法 + 完整路径归一） */
+    gLinksIndex.forEach(item => {
+      const src = pathToId[item.path];
+      if (!src || !Array.isArray(item.outlinks)) return;
+      item.outlinks.forEach(link => {
+        /* 匹配: 完整路径 → 文件名 → 去扩展名 */
+        let hitPath = pathToId[link.path];
+        if (!hitPath) {
+          const ln = (link.name || '').replace(/\.md$/i, '');
+          const lp = (link.path || '').replace(/\.md$/i, '');
+          for (const n of gMeta) {
+            const base = (n.name || '').replace(/\.md$/i, '');
+            if (n.path === link.path || base === ln || base === lp) { hitPath = idOf(n.path); break; }
+          }
         }
-      }
+        if (hitPath && hitPath !== src) {
+          if (!edges.some(e => (e.s === src && e.t === hitPath) || (e.s === hitPath && e.t === src))) {
+            edges.push({ s: src, t: hitPath, kind: 'link' });
+          }
+        }
+      });
     });
     gNodes = nodes; gLinks = edges;
   }

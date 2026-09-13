@@ -1100,6 +1100,197 @@ function testVaultResUploadSnippet() {
     'upload: 附件(zip)上传插图 > [!attach] 卡片引言，预览/阅读出完整卡片');
 }
 
+/* ---- ED-47 链接导航委托（Bug：相对链接按 note:// 基址解析到应用目录弹 404 ----
+ * 点击内部 .md 链接应命中本库笔记 → openNote 新开页签并 preventDefault；
+ * 未命中的 .md 链接 preventDefault 防 404；外链放行；wiki 链接命中处理。
+ * 作者: 火 冰 */
+function testLinkNavDelegate() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body><div id="ed-vditor">'
+    + '<p><a href="新笔记-13-838.md">838</a></p>'
+    + '<p><a href="https://example.com">外链</a></p>'
+    + '<p><a href="不存在.md">缺失</a></p>'
+    + '<p><a href="#" data-wikilink="新笔记-13-837">wiki</a></p>'
+    + '</div></body></html>', { url: 'https://localhost/', runScripts: 'outside-only' });
+  const W = dom.window;
+  const edNotes = [
+    { path: '新笔记-13-837.md', name: '新笔记-13-837.md' },
+    { path: '新笔记-13-838.md', name: '新笔记-13-838.md' },
+  ];
+  const opened = [];
+  function openNote(p) { opened.push(p); }
+  function resolveRelPath(baseDir, rel) {
+    let r = String(rel || '').replace(/^\.\//, '');
+    let parts = baseDir ? baseDir.split('/').filter(Boolean) : [];
+    for (const seg of r.split('/')) {
+      if (seg === '..') parts.pop();
+      else if (seg === '.') continue;
+      else if (seg) parts.push(seg);
+    }
+    return parts.join('/');
+  }
+  function findNoteByLink(target) {
+    const t = String(target || '').trim();
+    if (!t) return null;
+    const tn = t.replace(/\.md$/i, '');
+    let hit = edNotes.find(n => n.path === t);
+    if (hit) return hit.path;
+    hit = edNotes.find(n => n.path === tn);
+    if (hit) return hit.path;
+    const isPath = t.indexOf('/') >= 0 || t.indexOf('\\') >= 0 || /^\.\.?[/\\]/.test(t);
+    if (isPath && edCurrent) {
+      const slash = edCurrent.lastIndexOf('/');
+      const cwd = slash >= 0 ? edCurrent.slice(0, slash) : '';
+      const clean = t.replace(/^[/\\]+/, '');
+      const resolved = /^[/\\]/.test(t) ? clean : resolveRelPath(cwd, clean);
+      if (resolved && resolved !== t) {
+        hit = edNotes.find(n => n.path === resolved);
+        if (hit) return hit.path;
+        hit = edNotes.find(n => n.path === resolved + '.md');
+        if (hit) return hit.path;
+      }
+    }
+    hit = edNotes.find(n => (n.name || '').replace(/\.md$/i, '') === tn);
+    if (hit) return hit.path;
+    hit = edNotes.find(n => n.name === t || n.name === tn + '.md');
+    if (hit) return hit.path;
+    return null;
+  }
+  let edCurrent = '新笔记-13-837.md';
+  // 捕获阶段委托（与 editor-host.js 一致）
+  W.document.addEventListener('click', function (e) {
+    if (e.target && e.target.closest && !e.target.closest('#ed-vditor')) return;
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    const href = a.getAttribute('href') || '';
+    const wiki = a.dataset.wikilink || '';
+    if (wiki) {
+      const hw = findNoteByLink(wiki);
+      if (hw) { e.preventDefault(); e.stopPropagation(); openNote(hw); }
+      return;
+    }
+    if (!href || href === '#' || href.charAt(0) === '#') return;
+    if (/^(note:|https?:|mailto:|tel:|ftp:|file:|javascript:|data:)/i.test(href)) return;
+    const hit = findNoteByLink(href);
+    if (hit) { e.preventDefault(); e.stopPropagation(); openNote(hit); return; }
+    if (/\.md$/i.test(href) || href.indexOf('.') === -1) e.preventDefault();
+  }, true);
+  const results = [];
+  const links = W.document.querySelectorAll('#ed-vditor a[href]');
+  links.forEach(function (a) {
+    const ev = new W.MouseEvent('click', { bubbles: true, cancelable: true });
+    a.dispatchEvent(ev);
+    results.push({ href: a.getAttribute('href'), dp: ev.defaultPrevented, opened: opened.slice() });
+  });
+  assert(results[0].dp === true && results[0].opened[0] === '新笔记-13-838.md',
+    'ED-47: 内部 .md 链接命中 → openNote 新开页签 + preventDefault（不再按应用目录解析 404）');
+  assert(results[1].dp === false && results[1].opened.length === 1,
+    'ED-47: 外链 https 放行（不 preventDefault）');
+  assert(results[2].dp === true && results[2].opened.length === 1,
+    'ED-47: 未命中 .md 链接 preventDefault 防 note:// 404 弹窗');
+  assert(results[3].dp === true && results[3].opened[1] === '新笔记-13-837.md',
+    'ED-47: wiki 链接 [[笔记名]] 命中 → openNote + preventDefault');
+
+  /* ---- ED-47 IR 模式链接导航（<span data-type="a"> + .vditor-ir__marker--link）---- */
+  const irDom = new JSDOM('<!DOCTYPE html><html><head></head><body><div id="ed-vditor">'
+    + '<p><span class="vditor-ir__node" data-type="a">'
+    + '<span class="vditor-ir__link">838</span>'
+    + '<span class="vditor-ir__marker--link">新笔记-13-838.md</span>'
+    + '</span></p>'
+    + '<p><span class="vditor-ir__node vditor-ir__node--expand" data-type="a">'
+    + '<span class="vditor-ir__marker--link">新笔记-13-838.md</span>'
+    + '</span></p>'
+    + '</div></body></html>', { url: 'https://localhost/', runScripts: 'outside-only' });
+  const iW = irDom.window;
+  const irOpened = [];
+  function irOpenNote(p) { irOpened.push(p); }
+  iW.document.addEventListener('click', function (e) {
+    if (!e.target || !e.target.closest) return;
+    if (!e.target.closest('#ed-vditor')) return;
+    var a = e.target.closest('a[href]');
+    if (a) return;
+    var irLink = e.target.closest('[data-type="a"]');
+    if (irLink) {
+      if (irLink.classList.contains('vditor-ir__node--expand')) return;
+      var marker = irLink.querySelector('.vditor-ir__marker--link');
+      if (marker) {
+        var href = marker.textContent.trim();
+        if (/^(note:|https?:|mailto:|tel:|ftp:|file:|javascript:|data:)/i.test(href)) return;
+        var hit = findNoteByLink(href);
+        if (hit) { e.preventDefault(); e.stopPropagation(); irOpenNote(hit); return; }
+        if (/\.md$/i.test(href) || href.indexOf('.') === -1) e.preventDefault();
+      }
+    }
+  }, true);
+  const irLink1 = iW.document.querySelector('[data-type="a"]:not(.vditor-ir__node--expand)');
+  const irEv1 = new iW.MouseEvent('click', { bubbles: true, cancelable: true });
+  irLink1.dispatchEvent(irEv1);
+  assert(irEv1.defaultPrevented === true && irOpened[0] === '新笔记-13-838.md',
+    'ED-47 IR: [data-type=a] 链接点击 → 从 .vditor-ir__marker--link 提取 URL → openNote');
+  const irLink2 = iW.document.querySelector('.vditor-ir__node--expand');
+  const irEv2 = new iW.MouseEvent('click', { bubbles: true, cancelable: true });
+  irLink2.dispatchEvent(irEv2);
+  assert(irEv2.defaultPrevented === false && irOpened.length === 1,
+    'ED-47 IR: 展开编辑状态（vditor-ir__node--expand）不触发导航');
+
+  /* ---- ED-47 SV 模式链接导航（textarea 源码解析）---- */
+  function parseLinkAtPos(text, pos) {
+    if (!text || pos < 0 || pos > text.length) return null;
+    var wikiRe = /\[\[([^\]]+)\]\]/g, m;
+    while ((m = wikiRe.exec(text)) !== null) {
+      if (pos >= m.index && pos <= m.index + m[0].length) return { url: m[1].trim(), wiki: true };
+    }
+    var linkRe = /\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+    while ((m = linkRe.exec(text)) !== null) {
+      if (pos >= m.index && pos <= m.index + m[0].length) return { url: m[2].trim(), wiki: false };
+    }
+    return null;
+  }
+  const svText = '前文 [838](新笔记-13-838.md) 后文 [[新笔记-13-837]] 结尾';
+  assert(parseLinkAtPos(svText, 8).url === '新笔记-13-838.md' && parseLinkAtPos(svText, 8).wiki === false,
+    'ED-47 SV: parseLinkAtPos 命中 [text](url) 链接');
+  assert(parseLinkAtPos(svText, 28).url === '新笔记-13-837' && parseLinkAtPos(svText, 28).wiki === true,
+    'ED-47 SV: parseLinkAtPos 命中 [[wiki]] 链接');
+  assert(parseLinkAtPos(svText, 0) === null,
+    'ED-47 SV: parseLinkAtPos 非链接位置返回 null');
+  const svDom = new JSDOM('<!DOCTYPE html><html><head></head><body><div id="ed-vditor">'
+    + '<textarea class="vditor-sv vditor-reset"></textarea>'
+    + '</div></body></html>', { url: 'https://localhost/', runScripts: 'outside-only' });
+  const sW = svDom.window;
+  const svTa = sW.document.querySelector('textarea');
+  svTa.value = svText;
+  const svOpened = [];
+  function svOpenNote(p) { svOpened.push(p); }
+  sW.document.addEventListener('click', function (e) {
+    if (!e.target || !e.target.closest) return;
+    if (!e.target.closest('#ed-vditor')) return;
+    if (e.target.tagName === 'TEXTAREA' && e.target.classList.contains('vditor-sv')) {
+      var pos = e.target.selectionStart;
+      var link = parseLinkAtPos(e.target.value || '', pos);
+      if (link) {
+        var hit = findNoteByLink(link.url);
+        if (hit) { e.preventDefault(); e.stopPropagation(); svOpenNote(hit); return; }
+        if (/\.md$/i.test(link.url) || link.url.indexOf('.') === -1) e.preventDefault();
+      }
+    }
+  }, true);
+  svTa.selectionStart = 8;
+  const svEv1 = new sW.MouseEvent('click', { bubbles: true, cancelable: true });
+  svTa.dispatchEvent(svEv1);
+  assert(svEv1.defaultPrevented === true && svOpened[0] === '新笔记-13-838.md',
+    'ED-47 SV: textarea 点击链接位置 → parseLinkAtPos 解析 → openNote');
+  svTa.selectionStart = 28;
+  const svEv2 = new sW.MouseEvent('click', { bubbles: true, cancelable: true });
+  svTa.dispatchEvent(svEv2);
+  assert(svEv2.defaultPrevented === true && svOpened[1] === '新笔记-13-837.md',
+    'ED-47 SV: textarea 点击 [[wiki]] 位置 → openNote');
+  svTa.selectionStart = 0;
+  const svEv3 = new sW.MouseEvent('click', { bubbles: true, cancelable: true });
+  svTa.dispatchEvent(svEv3);
+  assert(svEv3.defaultPrevented === false && svOpened.length === 2,
+    'ED-47 SV: textarea 点击非链接位置 → 放行（正常定位光标）');
+}
+
+testLinkNavDelegate();
 testLogBadge();
 testSemanticChunk();
 testPluginLoad();

@@ -54,6 +54,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   fileMeta: (relPath) => ipcRenderer.invoke('notes:fileMeta', relPath),
   /** 读取某目录的元数据记录（目录属性：文件列表 children + 总大小等）：'' 表示根目录 */
   dirMeta: (dir) => ipcRenderer.invoke('notes:dirMeta', dir),
+  /** 读取全库链接索引（outlinks/backlinks 摘要），供图谱视图与反向链接消费；只读不重建 */
+  linksIndex: () => ipcRenderer.invoke('notes:linksIndex'),
   /** 读取最近打开的笔记路径列表（.second-brain/recent.json）：{tabs, pinned} */
   recentLoad: () => ipcRenderer.invoke('notes:recentLoad'),
   /** 保存最近打开的笔记路径列表 + 锁定集合（.second-brain/recent.json）：接收 {tabs, pinned} */

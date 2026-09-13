@@ -273,23 +273,26 @@
     });
   }
 
-  /* 渲染反向链接 */
-  function renderBacklinks() {
+  /* 渲染反向链接：消费主进程链接索引 note.backlinks（统一 [[wiki]] 与 [text](路径.md) 两类语法 + 完整路径归一）。
+   *  作者: 火 冰 */
+  async function renderBacklinks() {
     const box = $('ed-backlinks'); if (!box) return;
     if (!edCurrent) { box.innerHTML = ''; const c = $('ed-backlink-count'); if (c) c.textContent = '0'; return; }
-    const currentName = edCurrent.split('/').pop().replace(/\.md$/, '');
-    const refs = [];
-    Object.keys(edOutdated).forEach(p => {
-      if (p === edCurrent) return;
-      const c = edOutdated[p] || '';
-      const re = new RegExp('\\[\\[' + currentName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:\\.[a-z0-9]+)?\\]\\]|\\[\\[' + currentName, 'i');
-      if (re.test(c)) refs.push({ path: p, name: p.split('/').pop() });
-    });
+    let refs = [];
+    try {
+      const nd = window.noteDesktop || {};
+      if (nd.fileMeta) {
+        const r = await nd.fileMeta(edCurrent);
+        if (r && r.note && Array.isArray(r.note.backlinks)) {
+          refs = r.note.backlinks.map(b => ({ path: b.path, name: b.name }));
+        }
+      }
+    } catch (e) { /* 链接索引读取失败降级为空 */ }
     const c = $('ed-backlink-count'); if (c) c.textContent = String(refs.length);
     if (!refs.length) { box.innerHTML = '<p class="text-[11px] pl-3" style="color: var(--note-ink-3);">（无反向链接）</p>'; return; }
     box.innerHTML = refs.map(r => '<div class="mx-3 p-2.5 rounded-md border cursor-pointer transition-colors hover:opacity-90" data-open="' + esc(r.path) + '" style="border-color: var(--note-border); background: var(--note-surface-2);">'
       + '<div class="flex items-center gap-1.5 mb-1.5"><i data-lucide="file-text" class="w-3.5 h-3.5 shrink-0" style="color: var(--note-brand-400);"></i><span class="text-[12px] font-medium" style="color: var(--note-ink);">' + esc(r.name) + '</span></div>'
-      + '<p class="text-[11px] leading-relaxed" style="color: var(--note-ink-3);">' + (edOutdated[r.path] || '').slice(0, 40) + '…</p>'
+      + '<p class="text-[11px] leading-relaxed" style="color: var(--note-ink-3);">' + esc((edOutdated[r.path] || '').slice(0, 40)) + (edOutdated[r.path] ? '…' : '') + '</p>'
       + '</div>').join('');
     refreshIcons();
   }
