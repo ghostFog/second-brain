@@ -33,6 +33,8 @@
   }
 
   /** 按链接目标查找本库笔记路径：完整路径 → 相对路径解析（基准=链接所在笔记目录）→ 全局文件名兜底。
+   *  含编码兼容：Vditor/Lute 预览面板可能对中文 href 进行 URL 编码（encodeURIComponent），
+   *  需对 href 解码后匹配 + 用 encodeURIComponent(note.path) 反向匹配。
    *  @param {string} target 链接目标（wiki 名 / 相对路径 / 完整路径）
    *  @param {Array} notes 笔记列表（含 path/name）
    *  @param {string} currentPath 链接所在笔记的完整路径（用于解析相对路径）
@@ -41,31 +43,49 @@
   function findNoteByLink(target, notes, currentPath) {
     var t = String(target || '').trim();
     if (!t) return null;
-    var tn = t.replace(/\.md$/i, '');
-    /* 1. 完整路径匹配 */
-    var hit = notes.find(function (n) { return n.path === t; });
-    if (hit) return hit.path;
-    hit = notes.find(function (n) { return n.path === tn; });
-    if (hit) return hit.path;
-    /* 2. 相对路径解析（以链接所在笔记的路径为基准）：./ ../ sub/ 及同目录文件名；/ 开头视为从库根 */
-    var isPath = t.indexOf('/') >= 0 || t.indexOf('\\') >= 0 || /^\.\.?[/\\]/.test(t);
-    if (isPath && currentPath) {
-      var slash = currentPath.lastIndexOf('/');
-      var cwd = slash >= 0 ? currentPath.slice(0, slash) : '';
-      var clean = t.replace(/^[/\\]+/, '');
-      var resolved = /^[/\\]/.test(t) ? clean : resolveRelPath(cwd, clean);
-      if (resolved && resolved !== t) {
-        hit = notes.find(function (n) { return n.path === resolved; });
-        if (hit) return hit.path;
-        hit = notes.find(function (n) { return n.path === resolved + '.md'; });
-        if (hit) return hit.path;
+    /* 尝试解码（Vditor/Lute 预览面板可能对中文 href 进行 URL 编码） */
+    var decoded = t;
+    try { var d = decodeURIComponent(t); if (d !== t) decoded = d; } catch (_) {}
+    /* 用原始 + 解码后的候选值都尝试匹配 */
+    var candidates = [t];
+    if (decoded !== t) candidates.push(decoded);
+    for (var ci = 0; ci < candidates.length; ci++) {
+      var c = candidates[ci];
+      var tn = c.replace(/\.md$/i, '');
+      /* 1. 完整路径匹配 */
+      var hit = notes.find(function (n) { return n.path === c; });
+      if (hit) return hit.path;
+      hit = notes.find(function (n) { return n.path === tn; });
+      if (hit) return hit.path;
+      /* 2. 相对路径解析（以链接所在笔记的路径为基准）：./ ../ sub/ 及同目录文件名；/ 开头视为从库根 */
+      var isPath = c.indexOf('/') >= 0 || c.indexOf('\\') >= 0 || /^\.\.?[/\\]/.test(c);
+      if (isPath && currentPath) {
+        var slash = currentPath.lastIndexOf('/');
+        var cwd = slash >= 0 ? currentPath.slice(0, slash) : '';
+        var clean = c.replace(/^[/\\]+/, '');
+        var resolved = /^[/\\]/.test(c) ? clean : resolveRelPath(cwd, clean);
+        if (resolved && resolved !== c) {
+          hit = notes.find(function (n) { return n.path === resolved; });
+          if (hit) return hit.path;
+          hit = notes.find(function (n) { return n.path === resolved + '.md'; });
+          if (hit) return hit.path;
+        }
       }
+      /* 3. 全局文件名匹配（wiki 链接 [[笔记名]] 兜底） */
+      hit = notes.find(function (n) { return (n.name || '').replace(/\.md$/i, '') === tn; });
+      if (hit) return hit.path;
+      hit = notes.find(function (n) { return n.name === c || n.name === tn + '.md'; });
+      if (hit) return hit.path;
     }
-    /* 3. 全局文件名匹配（wiki 链接 [[笔记名]] 兜底） */
-    hit = notes.find(function (n) { return (n.name || '').replace(/\.md$/i, '') === tn; });
-    if (hit) return hit.path;
-    hit = notes.find(function (n) { return n.name === t || n.name === tn + '.md'; });
-    if (hit) return hit.path;
+    /* 4. 反向编码匹配：用 encodeURIComponent(note.path/name) 匹配 target（覆盖非标准编码） */
+    for (var i = 0; i < notes.length; i++) {
+      var n = notes[i];
+      try {
+        if (encodeURIComponent(n.path) === t) return n.path;
+        if (encodeURIComponent(n.name || '') === t) return n.path;
+        if (encodeURIComponent((n.name || '').replace(/\.md$/i, '')) === tn) return n.path;
+      } catch (_) {}
+    }
     return null;
   }
 
@@ -114,10 +134,12 @@
    *  @returns {boolean} 是否已处理（true 表示已拦截/放行，调用方不再继续）
    *  作者: 火 冰 */
   function handleLink(href, wiki, currentPath, notes, api, e) {
+    console.log('[md-linknav] handleLink: href="' + href + '", wiki="' + wiki + '", currentPath="' + currentPath + '", notes=' + (notes ? notes.length : 'null'));
     /* 缓存未就绪：阻止默认导航（防 404）并触发加载，下次点击生效 */
-    if (!notes || !notes.length) { e.preventDefault(); refreshNotes(); return true; }
+    if (!notes || !notes.length) { console.log('[md-linknav] notesCache empty, refreshNotes'); e.preventDefault(); refreshNotes(); return true; }
     if (wiki) {
       var hw = findNoteByLink(wiki, notes, currentPath);
+      console.log('[md-linknav] wiki findNoteByLink: ' + (hw || 'null'));
       if (hw) { e.preventDefault(); e.stopPropagation(); api.openNote(hw); refreshNotes(); }
       return true;
     }
@@ -125,6 +147,7 @@
     /* 排除外链/资源协议 */
     if (/^(note:|https?:|mailto:|tel:|ftp:|file:|javascript:|data:)/i.test(href)) return false;
     var hit = findNoteByLink(href, notes, currentPath);
+    console.log('[md-linknav] findNoteByLink: ' + (hit || 'null'));
     if (hit) { e.preventDefault(); e.stopPropagation(); api.openNote(hit); refreshNotes(); return true; }
     /* 未命中但疑似内部 .md 链接：阻止默认导航，避免 note:// 404 弹窗 */
     if (/\.md$/i.test(href) || href.indexOf('.') === -1) { e.preventDefault(); return true; }
@@ -146,9 +169,12 @@
     var currentPath = state.current || '';
     var notes = notesCache;
 
+    console.log('[md-linknav] click: tag=' + e.target.tagName + ', class=' + (e.target.className || '').slice(0, 60));
+
     /* 1. WYSIWYG / 预览模式：<a href> 标准链接 */
     var a = e.target.closest('a[href]');
     if (a) {
+      console.log('[md-linknav] mode=<a>, href="' + a.getAttribute('href') + '"');
       handleLink(a.getAttribute('href') || '', a.dataset.wikilink || '', currentPath, notes, api, e);
       return;
     }
@@ -157,9 +183,10 @@
     var irLink = e.target.closest('[data-type="a"]');
     if (irLink) {
       /* 展开编辑状态（vditor-ir__node--expand）不触发导航，让用户正常编辑链接 */
-      if (irLink.classList.contains('vditor-ir__node--expand')) return;
+      if (irLink.classList.contains('vditor-ir__node--expand')) { console.log('[md-linknav] IR expand state, skip'); return; }
       var marker = irLink.querySelector('.vditor-ir__marker--link');
       if (marker) {
+        console.log('[md-linknav] mode=IR, url="' + marker.textContent.trim() + '"');
         handleLink(marker.textContent.trim(), '', currentPath, notes, api, e);
         return;
       }
@@ -171,6 +198,7 @@
      *    作者: 火 冰 */
     var svTa = e.target.closest('.vditor-sv');
     if (svTa && svTa.tagName === 'TEXTAREA') {
+      console.log('[md-linknav] mode=SV textarea');
       var ta = svTa;
       var apiRef = api;
       var cp = currentPath;
@@ -178,12 +206,12 @@
         var pos = ta.selectionStart;
         var text = ta.value || '';
         var link = parseLinkAtPos(text, pos);
-        console.log('[md-linknav] SV click: pos=' + pos + ', textLen=' + text.length + ', link=' + (link ? link.url : 'null'));
+        console.log('[md-linknav] SV: pos=' + pos + ', textLen=' + text.length + ', link=' + (link ? link.url : 'null'));
         if (link) {
           var sn = notesCache;
           if (!sn || !sn.length) { refreshNotes(); return; }
           var hit = findNoteByLink(link.url, sn, cp);
-          console.log('[md-linknav] SV findNoteByLink: hit=' + (hit || 'null') + ', notes=' + sn.length);
+          console.log('[md-linknav] SV findNoteByLink: ' + (hit || 'null') + ', notes=' + sn.length);
           if (hit) { apiRef.openNote(hit); refreshNotes(); }
         }
       }, 0);

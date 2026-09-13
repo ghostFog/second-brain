@@ -1288,6 +1288,15 @@ function testLinkNavDelegate() {
   svTa.dispatchEvent(svEv3);
   assert(svEv3.defaultPrevented === false && svOpened.length === 2,
     'ED-47 SV: textarea 点击非链接位置 → 放行（正常定位光标）');
+
+  /* ---- ED-47 编码兼容：Vditor/Lute 预览面板对中文 href 进行 URL 编码 ---- */
+  const encodedHref = encodeURIComponent('新笔记-13-838.md');
+  assert(decodeURIComponent(encodedHref) === '新笔记-13-838.md',
+    'ED-47 编码: decodeURIComponent 还原 encodeURIComponent 编码的中文 href');
+  assert(findNoteByLink(decodeURIComponent(encodedHref)) === '新笔记-13-838.md',
+    'ED-47 编码: 解码后的 href 能命中 findNoteByLink');
+  assert(encodeURIComponent('新笔记-13-838.md') === encodedHref,
+    'ED-47 编码: encodeURIComponent(note.path) 反向匹配编码后的 href');
 }
 
 testLinkNavDelegate();
