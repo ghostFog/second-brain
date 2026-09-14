@@ -475,10 +475,10 @@ function toggleInstallPlugin(p, toInstall) {
     else if (filterCat && filterCat !== 'all') list = list.filter(p => p.cat === filterCat);
     const q = (filterText || '').trim().toLowerCase();
     if (q) list = list.filter(p => p.name.toLowerCase().includes(q) || p.author.toLowerCase().includes(q) || p.desc.includes(q));
-    // 排序
-    if (sortBy === 'rating') list.sort((a, b) => b.rating - a.rating);
-    else if (sortBy === 'latest') list.sort((a, b) => b.downloads - a.downloads);
-    else list.sort((a, b) => b.downloads - a.downloads);
+    // 排序：已安装插件置顶，组内再按所选排序（rating 按评分、其余按下载量）
+    const installedFirst = (a, b) => (b.installed ? 1 : 0) - (a.installed ? 1 : 0);
+    if (sortBy === 'rating') list.sort((a, b) => installedFirst(a, b) || (b.rating - a.rating));
+    else list.sort((a, b) => installedFirst(a, b) || (b.downloads - a.downloads));
 
     if (list.length === 0) { grid.innerHTML = '<p class="text-caption p-4" style="color: var(--note-ink-3);">未找到匹配的插件</p>'; return; }
 

@@ -85,15 +85,18 @@
     // 二级子菜单：切换到所属分类并平滑滚动定位到对应区块
     document.querySelectorAll('.settings-subcat').forEach(sub => {
       sub.addEventListener('click', function () {
+        const cat = this.dataset.cat;
+        const cur = document.querySelector('.settings-cat.active');
         document.querySelectorAll('.settings-cat').forEach(c => c.classList.remove('active'));
         document.querySelectorAll('.settings-subcat').forEach(s => s.classList.remove('active'));
         this.classList.add('active');
-        const main = document.querySelector('.settings-cat[data-cat="' + this.dataset.cat + '"]');
+        const main = document.querySelector('.settings-cat[data-cat="' + cat + '"]');
         if (main) main.classList.add('active');
         // 点击子项时确保其所属子菜单展开
-        document.querySelectorAll('.settings-subcat[data-cat="' + this.dataset.cat + '"]').forEach(s => s.classList.remove('hidden'));
+        document.querySelectorAll('.settings-subcat[data-cat="' + cat + '"]').forEach(s => s.classList.remove('hidden'));
         if (main) main.classList.add('sub-open');
-        switchSettings(this.dataset.cat);
+        // 已是当前分类：仅滚动定位到锚点区块，不重新渲染面板（避免刷新丢失未保存输入/闪烁）
+        if (!cur || cur.dataset.cat !== cat) switchSettings(cat);
         // 定位到锚点区块：目标区块上方可滚动空间足够（区块下方剩余高度 ≥ 可视高度）则对齐区块顶部；
         // 剩余不足则滚到底（scrollTop = 全部高度 - 可视高度），不依赖底部占位撑高。
         // 以 200ms 间隔持续校正（共 12 次 ≈2.4s，覆盖内容异步撑高）；滚到底或已贴近顶部即提前结束
