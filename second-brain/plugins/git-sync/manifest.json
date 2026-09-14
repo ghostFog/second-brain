@@ -1,0 +1,32 @@
+{
+  "name": "Git Sync",
+  "id": "git-sync",
+  "author": "火 冰",
+  "icon": "git-branch",
+  "color": "#22C55E",
+  "cat": "sync",
+  "desc": "Git 版本控制同步：自动提交历史版本、还原到版本、同步到远程仓库、从 Git 打开知识库。不管理分支。",
+  "version": "1.0.0",
+  "main": "main.js",
+  "styles": "styles.css",
+  "permissions": ["git.run", "vault.read"],
+  "ribbon": {
+    "icon": "git-branch",
+    "title": "Git Sync（查看仓库状态）",
+    "actionKey": "git-status"
+  },
+  "commands": [
+    { "icon": "git-commit", "label": "提交当前变更", "actionKey": "git-commit" },
+    { "icon": "history", "label": "查看版本历史", "actionKey": "git-log" },
+    { "icon": "undo-2", "label": "还原到版本…", "actionKey": "git-revert" },
+    { "icon": "refresh-cw", "label": "立即同步（提交+推送）", "actionKey": "git-sync-now" },
+    { "icon": "repeat", "label": "自动提交: 开/关", "actionKey": "git-auto" },
+    { "icon": "cloud-upload", "label": "从 Git 打开知识库…", "actionKey": "git-clone" },
+    { "icon": "settings", "label": "Git Sync 设置…", "actionKey": "git-settings" }
+  ],
+  "contextMenus": {
+    "file-tree": [
+      { "label": "Git: 查看版本历史", "icon": "history", "actionKey": "git-log" }
+    ]
+  }
+}
