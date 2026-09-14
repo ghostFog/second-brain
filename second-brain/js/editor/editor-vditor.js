@@ -1035,7 +1035,13 @@
         handler: handleVdUpload,
       },
       input: function (v) { sync2Host(v); },
-      blur: function () { sync2Host(vdGetValue()); },
+      blur: function () {
+        // 首帧异步渲染完成前（vdReady=false）不触发保存：此时 vditor 内部未就绪，getValue 抛错
+        // 会回退暂存缓冲，若缓冲为空会把空内容经 onEdInput 落入防抖保存，覆盖磁盘——笔记被自动清空
+        // （Bug-052，文件只剩 1 字节换行）。渲染完成后才允许 blur 同步内容。作者: 火 冰
+        if (!vdReady) return;
+        sync2Host(vdGetValue());
+      },
       /* vditor 首帧异步渲染完成后的回调：把 init 期间积压的待渲内容补进编辑器，
        * 修复启动/快速切换时「工具栏渲染正常但内容区空白」的时序问题。
        * 注意回调内 this 不指向实例，必须用 inst/vdInst 显式引用。
@@ -1062,7 +1068,9 @@
     try {
       inst = new window.Vditor(el, opts);
       vdInst = inst;
-      vdBuffer = '';
+      // 构建期不清空 vdBuffer：vditor 首帧渲染是异步的（after 前 vdReady=false），期间 blur/异常
+      // 回退暂存缓冲时，若 vdBuffer 已清空会把空内容经 onEdInput 落盘覆盖磁盘——笔记被自动清空
+      // （Bug-052）。vdBuffer 恒为最近一次 vdSyncValue/vdSetValue 的内容，由下次同步覆盖，无残留。
       // 构建后应用解析出的额外主题 CSS（插件注入的编辑器覆盖样式）
       applyVdExtraCss(resolveVdTheme().extraCss);
       // 构建后确定性应用当前模式对应的视图显隐（sv 三种布局 / ir / wysiwyg），

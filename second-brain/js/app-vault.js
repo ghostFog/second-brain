@@ -1,4 +1,4 @@
-﻿/* ============================================
+/* ============================================
  * 第二脑 — 笔记库与笔记右键菜单
  * 作者: 火 冰
  * 功能: 标题栏库切换、文件树/空白区右键菜单
@@ -126,7 +126,8 @@
     refreshIcons();
   }
 
-  /* 处理库下拉动作：点击历史库切换 / 打开目录 / 迁移默认库 / 恢复默认后重载整页 */
+  /* 处理库下拉动作：切换/打开/恢复默认库由主进程在新窗口打开目标库（或聚焦已有窗口），
+   * 当前窗口保持原知识库不变，无需重载；仅迁移默认库成功后发起窗口重载并提示（主进程已同步刷新其他窗口）。 */
   async function onVaultAction() {
     const act = this.dataset.vaultAct;
     const bridge = window.noteDesktop;
@@ -137,8 +138,7 @@
       if (!p) return;
       const res = await bridge.switchVault(p);
       if (!res || res.canceled) { showToast('目录不存在或不可用'); return; }
-      window.location.reload();
-      return;
+      return; // 主进程已新开窗口显示目标库，当前窗口保持原知识库
     }
     closeVaultDropdown();
     if (act === 'migrate') {
@@ -152,8 +152,7 @@
     }
     const res = (act === 'open') ? await bridge.chooseVault() : await bridge.resetVault();
     if (!res || res.canceled) return;
-    // 刷新整页以重载当前笔记库（清空旧库的标签/选中态等内存状态）
-    window.location.reload();
+    // 主进程已新开窗口显示目标库（或聚焦已有窗口），当前窗口保持原知识库，无需重载
   }
 
   /* 初始化标题栏库选择器：绑定点击 + 显示当前库名 */

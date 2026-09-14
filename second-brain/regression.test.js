@@ -308,6 +308,64 @@ function testVditorBridge() {
   assert(W.vdGetValue() === 'Bug-050 content', 'Bug-050: 补渲后 getValue 返回最新内容');
 }
 
+/* ---- Bug-052: 首帧渲染完成前 blur 不得触发保存（防空内容清空笔记）----
+ * 根因: buildVditor 构建时清空 vdBuffer，而 vditor 首帧渲染是异步的（after 前 vdReady=false）。
+ * 该窗口期内编辑器失焦（blur）→ vdGetValue 走 safeGetValue 抛错回退 vdBuffer（已被清空）→
+ * onEdInput('') 落入 800ms 防抖保存 → 磁盘笔记被清空为 1 字节换行。
+ * 修复: 1) blur 仅在 vdReady 后同步；2) 构建期不再清空 vdBuffer，getValue 抛错时回退真实内容。
+ * 作者: 火 冰 */
+function testVditorBlurGuard() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body><div id="ed-vditor"></div></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window; const D = W.document;
+  W.registerEditorProvider = function () {};
+  W.restoreS = function () { return true; };
+  const hostCalls = [];
+  W.onEdInput = function (v) { hostCalls.push(v); };
+  let blurCb = null;
+  let afterCb = null;
+  // 桩 vditor：记录 blur/after 回调；getValue 模拟「首帧渲染未完成时 vditor 内部未就绪抛错」
+  const StubVditor = function (el, opts) {
+    blurCb = opts.blur;
+    afterCb = opts.after;
+    this._val = opts.value || '';
+    this.vditor = {
+      currentMode: 'ir',
+      sv: { element: { style: {} } },
+      ir: { element: { style: {}, parentElement: { style: {} }, querySelectorAll: function () { return []; } } },
+      wysiwyg: { element: { style: {}, parentElement: { style: {} }, querySelectorAll: function () { return []; } } },
+      preview: { element: { style: {} } },
+      render: function () {},
+    };
+  };
+  StubVditor.prototype.getValue = function () {
+    throw new TypeError("Cannot read properties of undefined (reading 'VditorIRDOM2Md')");
+  };
+  StubVditor.prototype.setValue = function (v) { this._val = v; };
+  StubVditor.prototype.destroy = function () {};
+  W.Vditor = StubVditor;
+  const inject = function () {
+    const s = D.createElement('script');
+    s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+    D.head.appendChild(s);
+  };
+  inject();
+
+  // 打开笔记：vdSyncValue 构建实例（异步首帧未完成，vdReady=false）
+  W.vdSyncValue('真实笔记内容');
+  assert(hostCalls.length === 0, 'Bug-052-前: 打开笔记构建阶段未产生保存');
+  // 模拟用户点击编辑区外（blur）：首帧渲染完成前不得把空内容同步给宿主保存
+  blurCb();
+  assert(hostCalls.length === 0, 'Bug-052: 首帧渲染完成前 blur 不触发保存（防空内容清空笔记）');
+  // 构建期不清空 vdBuffer：getValue 抛错时 vdGetValue 回退缓冲得到真实内容
+  assert(W.vdGetValue() === '真实笔记内容', 'Bug-052: 构建期保留 vdBuffer，getValue 抛错回退真实内容');
+  // 首帧渲染完成（after → vdReady=true）后，blur 才同步内容；getValue 抛错时回退缓冲真实内容
+  afterCb();
+  blurCb();
+  assert(hostCalls.length === 1 && hostCalls[0] === '真实笔记内容',
+    'Bug-052: 渲染完成后 blur 同步真实内容（不丢内容、不写空）');
+}
+
 /* ---- ED-11 迁移: 文件树「重命名」右键 / 双击文件名（renameNoteFile）----
  * 编辑器标题区已取消改名（vditor 后仅作静态展示），改名统一走文件树。
  * 注入 editor-filetree.js，桩 noteStore.move 与宿主状态，验证：
@@ -1322,6 +1380,7 @@ testVaultResHelpers();
 testVaultResCards();
 testVaultResUploadSnippet();
 testVditorBridge();
+testVditorBlurGuard();
 Promise.all([
   testCodeHighlightCopyBtn(),
   testRenameNoteFile(),

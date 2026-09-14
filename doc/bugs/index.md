@@ -56,6 +56,8 @@
 | [Bug-048](Bug-048.md) | 已修复（测试完成） | 编辑器区右键菜单永不弹出：命中判定用不存在的 `vdInst.element`（恒 undefined），`contains` 恒假；改用 `vdInst.vditor.element`。 |
 | [Bug-049](Bug-049.md) | 已修复（测试完成） | IR 模式通用右键菜单不弹出（WYSIWYG 正常）：IR 整区被 `<pre>` 包裹，代码块判定误用 `closest('pre')` 致普通文字被短路；改用 `[data-type="code-block"]` 判定。 |
 | [Bug-050](Bug-050.md) | 已修复（测试完成） | 打开软件编辑器「闪烁→空白」，切 Ribbon 再切回才恢复：启动多次构建 vditor，旧实例异步 after 乱序抢占共享 vdPending，当前实例补渲落空；加构建序号令 after 仅最新实例消费。 |
+| [Bug-052](Bug-052.md) | 已修复（测试完成） | 笔记内容被自动清空（文件只剩 1 字节换行）：vditor 首帧渲染完成前（异步窗口期）`blur` 经清空后的 `vdBuffer` 把空内容落入防抖保存覆盖磁盘；blur 加 `vdReady` 守卫 + 构建期保留 `vdBuffer` 兜底。 |
+| [Bug-053](Bug-053.md) | 已修复（测试完成） | 关闭主窗口报错「Object has been destroyed」（closed 回调访问已销毁的 webContents）：缓存 `wcId` 替代；主进程异常改走落盘 + 可复制错误弹窗（右键复制 + 日志路径 + 打开日志目录）；托盘菜单动态列出全部知识库。 |
 
 > 注（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——语言选择器(chip)显隐保留为 Bug-011，链接弹框 `docButton` 那条纠正为 Bug-042。
 

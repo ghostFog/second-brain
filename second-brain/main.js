@@ -5,9 +5,11 @@
  *       在 file 环境通过 fetch 加载本地视图文件
  * ============================================ */
 const { app, BrowserWindow, protocol, ipcMain, dialog, shell, Menu, session, Tray, nativeImage } = require('electron');
+const { AsyncLocalStorage } = require('node:async_hooks'); // 多窗口：IPC 请求链内按窗口解析知识库根
 const path = require('path');
 const fs = require('fs');
 const { randomUUID } = require('crypto'); // 上传资源（图片/附件）落盘用 UUID 重命名，避免重名冲突
+const { execFile } = require('child_process'); // Git 同步插件：以非 shell 方式执行 git 命令，避免注入
 const grayMatter = require('gray-matter'); // 解析笔记 frontmatter（获取 id / tags 元数据）
 const { default: SnowflakeId } = require('snowflake-id'); // 雪花算法：生成全局唯一文档 id，方便索引/元数据稳定定位
 const { AiEngine, chunkConfigured } = require('./ai-engine');
@@ -97,21 +99,109 @@ function registerNoteProtocol() {
 }
 
 /* ---------- 创建主窗口 ---------- */
-let mainWin = null;
+let mainWin = null; // 最近创建/聚焦的窗口（兼容引用；多窗口下每个库一个窗口）
 
-function createWindow() {
-  mainWin = new BrowserWindow({
+/* 多窗口状态：每个窗口绑定自己的知识库根（null=跟随默认库「我的笔记库」）。
+ * winVaults: webContentsId → 库根|null；vaultWinId: 库key(小写绝对路径) → winId（单库单窗口约束）；
+ * activeVault: 最近聚焦窗口的库根（null=默认库），供 note:// 协议等无窗口上下文解析资源。 */
+const winVaults = new Map();
+const vaultWinId = new Map();
+let activeVault = null;
+const vaultCtx = new AsyncLocalStorage(); // IPC 请求上下文：链内 vaultRoot() 按发起窗口解析
+
+/* 从 IPC event 定位发起窗口（renderer → BrowserWindow），取不到返回 null */
+function winFromEvent(event) {
+  const wc = event && event.sender;
+  if (!wc || wc.isDestroyed()) return null;
+  try { return BrowserWindow.fromWebContents(wc); } catch (e) { return null; }
+}
+
+/* 发起窗口绑定的知识库：null=跟随默认库，非 null=显式库根（不存在返回默认库根） */
+function vaultRootForEvent(event) {
+  const win = winFromEvent(event);
+  const vp = win ? winVaults.get(win.webContents.id) : undefined;
+  if (vp !== undefined) return vp || defaultVaultRoot();
+  return defaultVaultRoot();
+}
+
+/* 窗口绑定的原始值（null 或库路径），供 vault:get 区分显示名「我的笔记库」 */
+function windowVaultBinding(event) {
+  const win = winFromEvent(event);
+  return win ? (winVaults.get(win.webContents.id) ?? null) : null;
+}
+
+/* 库路径 → 去重键（Windows 忽略大小写） */
+function vaultKey(root) { return path.resolve(root).toLowerCase(); }
+
+/* 全量重建 库key → winId 映射，保证单库单窗口约束（窗口创建/关闭/迁移后调用） */
+function syncVaultWinMap() {
+  vaultWinId.clear();
+  for (const [winId, vp] of winVaults) {
+    const w = BrowserWindow.fromId(winId);
+    if (!w || w.isDestroyed()) continue;
+    const key = vaultKey(vp || defaultVaultRoot());
+    if (!vaultWinId.has(key)) vaultWinId.set(key, winId);
+  }
+}
+
+/* 显示并聚焦窗口：恢复任务栏显示 → 还原最小化 → show + focus */
+function showWindow(w) {
+  if (!w || w.isDestroyed()) return;
+  try { w.setSkipTaskbar(false); } catch (_) { /* 个别平台该方法不可用则忽略 */ }
+  if (w.isMinimized()) w.restore();
+  w.show();
+  w.focus();
+}
+
+/* 隐藏指定窗口到托盘：移出任务栏（skipTaskbar=true）再隐藏，不弹气泡 */
+function hideWindowToTray(w) {
+  if (!w || w.isDestroyed()) return;
+  try { w.setSkipTaskbar(true); } catch (_) { /* 忽略 */ }
+  w.hide();
+}
+
+/* 打开（或切换/恢复）知识库：目标库已有窗口则聚焦旧窗口，否则新开窗口。
+ * 每个知识库只允许占用一个主窗口。返回窗口或 null（已聚焦旧窗口）。 */
+function openVaultWindow(target) {
+  return createWindow(target || null);
+}
+
+/* IPC handler 包装：在请求链内注入「发起窗口的库根」，使 vaultRoot() 按窗口解析。
+ * 所有 ipcMain.handle 均改走本包装，内部工具函数与 aiEngine 无需感知窗口。 */
+function vaultHandle(channel, fn) {
+  ipcMain.handle(channel, function (event, ...args) {
+    return vaultCtx.run({ root: vaultRootForEvent(event) }, function () {
+      return fn(event, ...args);
+    });
+  });
+}
+
+/* 创建主窗口。vaultPath 为可选知识库路径：null/undefined=跟随默认库「我的笔记库」。
+ * 同库已有窗口时不重复创建（聚焦旧窗口并返回 null）。 */
+function createWindow(vaultPath) {
+  // 窗口绑定自己的知识库（null=跟随默认库）；切到默认库路径时也归一为 null（显示「我的笔记库」）
+  const bindingRaw = (vaultPath == null || vaultPath === '') ? null : path.resolve(vaultPath);
+  const binding = (bindingRaw && bindingRaw.toLowerCase() === defaultVaultRoot().toLowerCase()) ? null : bindingRaw;
+  if (binding) {
+    const existId = vaultWinId.get(vaultKey(binding));
+    if (existId !== undefined) {
+      const ex = BrowserWindow.fromId(existId);
+      if (ex && !ex.isDestroyed()) { showWindow(ex); return null; }
+      vaultWinId.delete(existId);
+    }
+  }
+  const win = new BrowserWindow({
     width: 1280,
     height: 820,
     minWidth: 900,
     minHeight: 600,
-    title: '第二脑',
+    title: '第二脑 · ' + (binding ? path.basename(binding) : '我的笔记库'), // 多窗口标题带库名，便于任务栏区分
     backgroundColor: '#1E1E2E',
     show: false,             // 待首帧渲染完成后才显示窗口，避免先露出深色窗口背景（Bug-041 消除首屏闪烁）
     frame: false,            // 移除系统标题栏，由前端自绘 Windows 风格标题栏
     titleBarStyle: 'hidden',
     // 统一应用图标：窗口/托盘同源脑图标（assets/icon | tray.png），大小不同而已
-    // 窗口打开时照常显示在任务栏；仅当最小化/缩小到托盘时才移出任务栏（见 hideToTray）
+    // 窗口打开时照常显示在任务栏；仅当最小化/缩小到托盘时才移出任务栏（见 hideWindowToTray）
     skipTaskbar: false,
     icon: path.join(ROOT, 'assets', 'icon.png'),
     webPreferences: {
@@ -123,30 +213,37 @@ function createWindow() {
   });
   _slog('browserwindow_created');
 
-  // 通过自定义协议加载首页，相对 fetch 自动沿用 note:// 协议
-  mainWin.loadURL('note://local/index.html');
+  // 登记窗口 ↔ 知识库绑定（null=默认库），并刷新单库单窗口映射
+  // 提前缓存 webContents.id：窗口销毁后（closed 回调里）webContents 已不可访问，
+  // 直接访问会抛「Object has been destroyed」（Bug-053），故一律使用缓存的 wcId。
+  const wcId = win.webContents.id;
+  winVaults.set(wcId, binding);
+  syncVaultWinMap();
+
+  // 通过自定义协议加载首页；query 携带库路径（信息性，渲染端仍以 vault:get 为准）
+  win.loadURL('note://local/index.html' + (binding ? '?vault=' + encodeURIComponent(binding) : ''));
 
   // 窗口就绪后再显示：后台加载渲染完成首帧后才 show()，
   // 不再让深色 backgroundColor 抢在浅色 body（首屏同步脚本已设 html.light）之前露出（Bug-041 窗口层根因）。
   // 作者: 火 冰
-  mainWin.once('ready-to-show', function () {
-    if (mainWin && !mainWin.isDestroyed()) mainWin.show();
+  win.once('ready-to-show', function () {
+    if (!win.isDestroyed()) win.show();
   });
   // 兜底：渲染异常/过慢时强制显示，避免白窗/黑屏卡死；首帧渲染完成即取消兜底
   var _sbShowTimer = setTimeout(function () {
-    if (mainWin && !mainWin.isDestroyed() && !mainWin.isVisible()) mainWin.show();
+    if (!win.isDestroyed() && !win.isVisible()) win.show();
   }, 4000);
-  mainWin.webContents.once('did-finish-load', function () { clearTimeout(_sbShowTimer); });
+  win.webContents.once('did-finish-load', function () { clearTimeout(_sbShowTimer); });
 
   // 保留 Ctrl+Shift+I 全局开/关开发者工具（不参与快捷键注册表，作为标准兜底）。
   // F12 已纳入用户可重绑的「设置-快捷键」注册表（cmd:devtools），由渲染进程 keydown → IPC 路由，
   // 故此处不再拦截 F12，避免抢占用户重绑的组合。
   // 作者: 火 冰
-  mainWin.webContents.on('before-input-event', function (event, input) {
+  win.webContents.on('before-input-event', function (event, input) {
     if (input.type !== 'keyDown') return;
     const ctrlShiftI = input.control && input.shift && (input.key === 'I' || input.key === 'i');
     if (ctrlShiftI) {
-      mainWin.webContents.toggleDevTools();
+      win.webContents.toggleDevTools();
       event.preventDefault();
     }
   });
@@ -155,8 +252,8 @@ function createWindow() {
   // vditor 等第三方库的日志）桥接到 userData/logs/app.log，便于排查界面空白/编辑区异常。
   // 作者: 火 冰
   // 启动耗时打点：渲染进程 DOM/脚本加载完成时机，用于判断「十几秒」在渲染端还是主进程端
-  mainWin.webContents.on('did-finish-load', function () { _slog('renderer_did_finish_load'); });
-  mainWin.webContents.on('console-message', function (_e, level, message, line, sourceId) {
+  win.webContents.on('did-finish-load', function () { _slog('renderer_did_finish_load'); });
+  win.webContents.on('console-message', function (_e, level, message, line, sourceId) {
     const lv = { 0: 'log', 1: 'warn', 2: 'error', 3: 'debug' }[level] || 'log';
     appendLog({ level: lv, msg: '[console] ' + String(message),
       detail: 'at ' + String(sourceId || '') + ':' + String(line || '') });
@@ -166,42 +263,68 @@ function createWindow() {
   // 一律拒绝新窗口创建并阻止窗口内导航，避免相对链接按 note:// 基址解析到应用目录触发 404 弹窗。
   // 内部笔记跳转统一由前端 openNote 处理（编辑区新开页签）；外链/资源由前端按协议分流。
   // 作者: 火 冰
-  mainWin.webContents.setWindowOpenHandler(function () {
+  win.webContents.setWindowOpenHandler(function () {
     return { action: 'deny' };
   });
-  mainWin.webContents.on('will-navigate', function (e) {
+  win.webContents.on('will-navigate', function (e) {
     e.preventDefault();
   });
 
-  mainWin.on('closed', () => { mainWin = null; });
-  return mainWin;
+  // 窗口关闭：释放窗口 ↔ 库绑定，刷新单库单窗口映射。
+  // 注意：closed 触发时窗口已销毁，webContents 不可访问（会抛「Object has been destroyed」Bug-053），
+  // 必须用创建时缓存的 wcId 而非 win.webContents.id。
+  win.on('closed', function () {
+    winVaults.delete(wcId);
+    syncVaultWinMap();
+    if (mainWin === win) mainWin = null;
+    refreshTrayMenu(); // 窗口关闭后刷新托盘知识库列表
+  });
+  // 窗口聚焦：记录为最近活动库（供 note:// 协议等无窗口上下文解析）
+  win.on('focus', function () {
+    activeVault = winVaults.get(wcId) || null;
+  });
+  mainWin = win;
+  refreshTrayMenu(); // 窗口创建后刷新托盘知识库列表（启动时 createTray 前调用会被 if(!tray) 安全跳过）
+  return win;
 }
 
-/* ---------- 窗口控制 IPC（供前端标题栏按钮调用） ---------- */
-ipcMain.on('win:minimize', () => { if (mainWin) hideToTray(); });
-ipcMain.on('win:maximize', () => {
-  if (!mainWin) return;
-  if (mainWin.isMaximized()) mainWin.unmaximize(); else mainWin.maximize();
+/* ---------- 窗口控制 IPC（供前端标题栏按钮调用；多窗口下各按钮只作用于发起窗口） ---------- */
+ipcMain.on('win:minimize', (e) => { hideWindowToTray(winFromEvent(e)); }); // 最小化：仅隐藏当前窗口到托盘
+ipcMain.on('win:maximize', (e) => {
+  const w = winFromEvent(e);
+  if (!w) return;
+  if (w.isMaximized()) w.unmaximize(); else w.maximize();
 });
 /* 切换整个窗口全屏（F11 快捷键 / 设置-快捷键注册表 cmd:fullscreen），等价系统级全屏 */
-ipcMain.on('win:fullscreen', () => {
-  if (!mainWin) return;
-  mainWin.setFullScreen(!mainWin.isFullScreen());
+ipcMain.on('win:fullscreen', (e) => {
+  const w = winFromEvent(e);
+  if (!w) return;
+  w.setFullScreen(!w.isFullScreen());
 });
 /* 开/关开发者工具（设置-快捷键注册表 cmd:devtools，默认 F12；Ctrl+Shift+I 仍走 before-input-event 兜底） */
-ipcMain.on('win:devtools', () => {
-  if (mainWin) mainWin.webContents.toggleDevTools();
+ipcMain.on('win:devtools', (e) => {
+  const w = winFromEvent(e);
+  if (w) w.webContents.toggleDevTools();
 });
-/* 关闭按钮(×)行为分派：
- * 仅首次（closeAsked=false）弹一次「关闭后希望执行什么操作」并记住选择；之后一律按 closeAction 直接执行，
- * 后续在设置「常规 → 关闭按钮行为」里维护，不再每次都弹。
- * quit=直接退出；tray=缩小到托盘；confirm=用户手动在设置里选的「每次询问」，仍每次弹。
+/* 关闭按钮(×)行为分派（窗口级生命周期）：
+ * - 多窗口：默认只关闭当前窗口（最后一个窗口关闭后由 window-all-closed 退出程序）；
+ *   设置里选了「直接退出/缩小到托盘」则仍尊重设置（退出程序 / 藏当前窗口到托盘）。
+ * - 单窗口：保持原有关闭按钮行为：仅首次（closeAsked=false）弹一次并记住选择，
+ *   之后按 closeAction 执行（quit=直接退出；tray=缩小到托盘；confirm=设置里选的「每次询问」）。
  * 作者: 火 冰 */
-ipcMain.on('win:close', () => {
-  if (!mainWin) return;
+ipcMain.on('win:close', (e) => {
+  const win = winFromEvent(e) || mainWin;
+  if (!win) return;
+  const alive = BrowserWindow.getAllWindows().filter(function (w) { return !w.isDestroyed(); });
+  if (alive.length > 1) { // 多窗口：关闭按钮 = 关闭当前窗口（窗口级）
+    if (closeAction === 'quit') { app.quit(); return; }           // 设置「直接退出」
+    if (closeAction === 'tray') { hideWindowToTray(win); return; } // 设置「缩小到托盘」
+    win.close();                                                   // confirm/默认：销毁当前窗口
+    return;
+  }
   if (!closeAsked) { // 首次询问一次并记住
     for (const w of BrowserWindow.getAllWindows()) w.setEnabled(false); // 禁用窗口防重复弹框
-    dialog.showMessageBox(mainWin, {
+    dialog.showMessageBox(win, {
       type: 'question',
       title: '关闭第二脑',
       message: '关闭后希望执行什么操作？',
@@ -213,7 +336,7 @@ ipcMain.on('win:close', () => {
       for (const w of BrowserWindow.getAllWindows()) { if (!w.isDestroyed()) w.setEnabled(true); }
       closeAsked = true; // 已询问过：之后从设置维护，不再弹首次询问
       if (r.response === 0) { closeAction = 'quit'; saveConfig(); app.quit(); }
-      else if (r.response === 1) { closeAction = 'tray'; saveConfig(); hideToTray(); }
+      else if (r.response === 1) { closeAction = 'tray'; saveConfig(); hideWindowToTray(win); }
       else { saveConfig(); } // response === 2：取消，保持窗口打开；仍记住已询问
     }).catch(function () {
       for (const w of BrowserWindow.getAllWindows()) { if (!w.isDestroyed()) w.setEnabled(true); }
@@ -221,10 +344,10 @@ ipcMain.on('win:close', () => {
     return;
   }
   if (closeAction === 'quit') { app.quit(); return; }
-  if (closeAction === 'tray') { hideToTray(); return; }
+  if (closeAction === 'tray') { hideWindowToTray(win); return; }
   // confirm：用户在设置里手动选择「每次询问」
   for (const w of BrowserWindow.getAllWindows()) w.setEnabled(false); // 禁用窗口防重复弹框
-  dialog.showMessageBox(mainWin, {
+  dialog.showMessageBox(win, {
     type: 'question',
     title: '关闭第二脑',
     message: '关闭后希望执行什么操作？',
@@ -235,7 +358,7 @@ ipcMain.on('win:close', () => {
   }).then(function (r) {
     for (const w of BrowserWindow.getAllWindows()) { if (!w.isDestroyed()) w.setEnabled(true); }
     if (r.response === 0) app.quit();                 // 退出程序
-    else if (r.response === 1) hideToTray(); // 缩小到托盘
+    else if (r.response === 1) hideWindowToTray(win); // 缩小到托盘
     // response === 2：取消，保持窗口打开
   }).catch(function () {
     for (const w of BrowserWindow.getAllWindows()) { if (!w.isDestroyed()) w.setEnabled(true); }
@@ -243,8 +366,8 @@ ipcMain.on('win:close', () => {
 });
 
 /* 读取/设置关闭按钮行为（供设置页「常规 → 关闭按钮行为」调整并持久化到 settings.json） */
-ipcMain.handle('win:getCloseAction', () => closeAction);
-ipcMain.handle('win:setCloseAction', (_e, val) => {
+vaultHandle('win:getCloseAction', () => closeAction);
+vaultHandle('win:setCloseAction', (_e, val) => {
   if (['confirm', 'quit', 'tray'].indexOf(val) === -1) return false;
   closeAction = val;
   closeAsked = true; // 手动在设置里调整即视为已首次确认，不再弹首次询问
@@ -258,39 +381,57 @@ ipcMain.handle('win:setCloseAction', (_e, val) => {
  * 作者: 火 冰 */
 let tray = null;
 
-/** 隐藏窗口到托盘：先移出任务栏（skipTaskbar=true）再隐藏。不弹托盘气泡，避免每次最小化打扰。
- * 作者: 火 冰 */
-function hideToTray() {
-  if (!mainWin || mainWin.isDestroyed()) return;
-  try { mainWin.setSkipTaskbar(true); } catch (_) { /* 个别平台该方法不可用则忽略 */ }
-  mainWin.hide();
-}
-
-/** 恢复并聚焦主窗口（从托盘点击时调用） */
+/** 恢复并聚焦所有窗口（托盘点击时调用）；无窗口则重建默认库窗口。 */
 function showMainWindow() {
-  if (!mainWin) { createWindow(); return; }
-  if (mainWin.isDestroyed()) { mainWin = null; createWindow(); return; }
-  try { mainWin.setSkipTaskbar(false); } catch (_) { /* 忽略 */ } // 恢复窗口时回到任务栏显示
-  if (mainWin.isMinimized()) mainWin.restore();
-  mainWin.show();
-  mainWin.focus();
+  const wins = BrowserWindow.getAllWindows().filter(function (w) { return !w.isDestroyed(); });
+  if (wins.length === 0) { createWindow(); return; }
+  wins.forEach(showWindow);
 }
 
-/** 创建系统托盘图标与菜单 */
+/** 创建系统托盘图标与菜单：菜单动态刷新（refreshTrayMenu），含全部知识库列表 */
 function createTray() {
   if (tray) return;
   const icon = nativeImage.createFromPath(path.join(ROOT, 'assets', 'tray.png'));
   tray = new Tray(icon.resize({ width: 16, height: 16 }));
   tray.setToolTip('第二脑');
-  // 托盘右键菜单：显示主窗口 / 退出
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '显示主窗口', click: showMainWindow },
-    { type: 'separator' },
-    { label: '退出', click: () => { app.quit(); } },
-  ]));
+  refreshTrayMenu();
   // 单击/双击恢复主窗口（Windows 托盘单击通常恢复窗口）
   tray.on('click', showMainWindow);
   tray.on('double-click', showMainWindow);
+}
+
+/** 刷新托盘右键菜单：列出全部知识库（默认库 + 当前各窗口打开的库 + 历史库，去重），
+ * 点击在对应库的新主窗口打开（该库已有窗口则聚焦旧窗口，单库单窗口）；尾部为「显示主窗口/退出」。
+ * 在启动、窗口创建/关闭、库切换/迁移/移除时调用，保证列表实时与当前库一致。
+ * 作者: 火 冰 */
+function refreshTrayMenu() {
+  if (!tray) return;
+  const items = [];
+  const seen = new Set();
+  const pushVault = function (p, name) {
+    const k = (p == null) ? '__default__' : vaultKey(p);
+    if (seen.has(k)) return;
+    seen.add(k);
+    items.push({
+      label: name || (p ? path.basename(p) : '我的笔记库'),
+      click: function () { openVaultWindow(p); },
+    });
+  };
+  // 1) 默认库「我的笔记库」固定置于顶部（跟随默认库的窗口也归一于此）
+  pushVault(null, '我的笔记库');
+  // 2) 当前各窗口打开的库（winVaults 中去重）
+  for (const [, vp] of winVaults) {
+    if (vp) pushVault(vp, path.basename(vp));
+  }
+  // 3) 历史库（最近打开，目录仍存在才列出）
+  (vaultHistory || []).forEach(function (h) {
+    if (h && typeof h.path === 'string' && fs.existsSync(h.path)) pushVault(h.path, h.name || path.basename(h.path));
+  });
+  if (items.length) items.push({ type: 'separator' });
+  items.push({ label: '显示主窗口', click: showMainWindow });
+  items.push({ type: 'separator' });
+  items.push({ label: '退出', click: function () { app.quit(); } });
+  tray.setContextMenu(Menu.buildFromTemplate(items));
 }
 
 /* ---------- 运行日志落盘 ---------- */
@@ -318,12 +459,79 @@ function appendLog(payload) {
 }
 ipcMain.on('app:log', (_e, p) => { appendLog(p || {}); });
 
+/* ---------- 主进程未捕获异常：写日志 + 可复制错误弹窗 ----------
+ * Electron 默认的主进程错误弹窗（A JavaScript error occurred in the main process）
+ * 不落日志、文本不可复制。这里统一接管：异常先落盘 userData/logs/app.log，
+ * 再弹可复制窗口（textarea 只读文本，支持右键/全选复制），附日志路径与「打开日志目录」。
+ * 作者: 火 冰 */
+let errWin = null; // 错误弹窗单例（重复异常仅聚焦已有弹窗）
+
+/** 打开运行日志目录（错误弹窗「打开日志目录」按钮触发） */
+ipcMain.handle('shell:openLogDir', async () => {
+  try { await shell.openPath(path.dirname(logFile())); } catch (_) { /* 打开失败忽略 */ }
+  return true;
+});
+
+/** 展示可复制错误弹窗：只读 textarea 支持右键复制错误信息，附日志路径 + 打开日志目录。
+ * @param {string} title 弹窗标题
+ * @param {string} text  错误详情（含堆栈）
+ * @author 火 冰 */
+function showErrorDialog(title, text) {
+  try {
+    if (errWin && !errWin.isDestroyed()) { errWin.focus(); return; }
+    errWin = new BrowserWindow({
+      width: 700, height: 480, resizable: true, minimizable: false, maximizable: false,
+      title: '第二脑 · ' + String(title || '错误'), show: true, autoHideMenuBar: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.js') },
+    });
+    errWin.on('closed', function () { errWin = null; });
+    const esc = function (s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    const html = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+      + '<style>body{font-family:system-ui,"Microsoft YaHei",sans-serif;margin:16px;background:#f5f5f7;color:#222;}'
+      + 'h2{margin:0 0 8px;font-size:15px;}p.hint{margin:0 0 8px;font-size:12px;color:#666;word-break:break-all;}'
+      + 'textarea{width:100%;height:300px;box-sizing:border-box;font:12px/1.5 Consolas,monospace;padding:8px;'
+      + 'border:1px solid #ccc;border-radius:6px;background:#fff;resize:vertical;color:#c00;}'
+      + '.row{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;}'
+      + 'button{padding:6px 14px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer;font-size:13px;}'
+      + 'button.primary{background:#2563eb;border-color:#2563eb;color:#fff;}</style></head><body>'
+      + '<h2>' + esc(title) + '</h2>'
+      + '<p class="hint">错误信息已写入日志：' + esc(logFile()) + '</p>'
+      + '<textarea readonly spellcheck="false" onfocus="this.select()" id="err">' + esc(text) + '</textarea>'
+      + '<div class="row"><button onclick="doCopy()">复制错误信息</button>'
+      + '<button id="openlog" class="primary">打开日志目录</button>'
+      + '<button onclick="window.close()">关闭</button></div>'
+      + '<script>function doCopy(){var t=document.getElementById("err");t.focus();t.select();'
+      + 'try{var ok=document.execCommand("copy");if(!ok)alert("复制失败，请手动全选文本复制");}catch(e){alert("复制失败："+e);}}'
+      + 'document.getElementById("openlog").addEventListener("click",function(){'
+      + 'try{window.noteDesktop&&window.noteDesktop.openLogDir&&window.noteDesktop.openLogDir();}catch(e){alert("无法打开日志目录："+e);}});</script>'
+      + '</body></html>';
+    errWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  } catch (_) { /* 错误弹窗自身失败不阻断（异常已写日志） */ }
+}
+
+/* 主进程未捕获异常：落盘 + 可复制弹窗（替换 Electron 默认不可复制的错误弹窗） */
+process.on('uncaughtException', function (err) {
+  try {
+    const text = (err && (err.stack || err.message)) ? (err.stack || String(err.message)) : String(err);
+    appendLog({ level: 'error', msg: '[uncaughtException] ' + text });
+    showErrorDialog('主进程异常（Uncaught Exception）', text);
+  } catch (_) { /* 兜底：不再抛出 */ }
+});
+
+/* 主进程未处理的 Promise 拒绝：仅落盘，不弹窗（避免非致命告警频繁打扰） */
+process.on('unhandledRejection', function (reason) {
+  try {
+    const text = (reason && (reason.stack || reason.message)) ? (reason.stack || String(reason.message)) : String(reason);
+    appendLog({ level: 'error', msg: '[unhandledRejection] ' + text });
+  } catch (_) { /* 兜底 */ }
+});
+
 /* 同步确认对话框（confirm）：
  * 渲染进程的 window.confirm 在 Electron 中不支持且返回 false，会让删除等确认静默失效。
  * 这里用原生对话框同步返回选择结果。作者: 火 冰 */
 ipcMain.on('dialog:confirm', (e, msg) => {
   try {
-    const idx = dialog.showMessageBoxSync(mainWin, {
+    const idx = dialog.showMessageBoxSync(winFromEvent(e), {
       type: 'question', buttons: ['确定', '取消'], defaultId: 0, cancelId: 1,
       message: String(msg || '确定吗？'), noLink: true,
     });
@@ -342,8 +550,14 @@ ipcMain.on('dialog:confirm', (e, msg) => {
 let defaultVaultPath = null;
 function defaultVaultRoot() { return defaultVaultPath || path.join(app.getPath('userData'), 'vault'); }
 
-/* 当前笔记库根路径：默认 userData/vault，用户可通过「库选择器」切换到任意目录 */
-function vaultRoot() { return currentVault || defaultVaultRoot(); }
+/* 当前知识库根：优先取 IPC 请求链内「发起窗口」绑定的库（vaultCtx），
+ * 无窗口上下文（note:// 协议、AI 引擎兜底等）取最近聚焦窗口的库 activeVault，
+ * 再退化为默认库。currentVault 仅用于启动时恢复「上次打开的库」。 */
+function vaultRoot() {
+  const store = vaultCtx.getStore();
+  if (store && store.root) return store.root;
+  return activeVault || defaultVaultRoot();
+}
 let currentVault = null;
 /* 打开过的笔记库历史（最近在前），用于下拉列表展示与快速切换 */
 let vaultHistory = [];
@@ -904,7 +1118,7 @@ function scheduleMetaRefresh() {
 }
 
 /* 手动重建元数据（返回概览） */
-ipcMain.handle('notes:refreshMeta', async () => {
+vaultHandle('notes:refreshMeta', async () => {
   await ensureVault();
   const records = await scanVaultMeta();
   await writeVaultMeta(records);
@@ -913,7 +1127,7 @@ ipcMain.handle('notes:refreshMeta', async () => {
 
 /* 读取某篇笔记所在目录的元数据记录 + 该笔记自身属性；缺失时自动重建后重读。
  * 返回 { dir, noteName, meta, note }。 */
-ipcMain.handle('notes:fileMeta', async (_e, rel) => {
+vaultHandle('notes:fileMeta', async (_e, rel) => {
   await ensureVault();
   const r = String(rel || '').replace(/^\/+/, '');
   const i = r.lastIndexOf('/');
@@ -933,7 +1147,7 @@ ipcMain.handle('notes:fileMeta', async (_e, rel) => {
 
 /* 读取某目录的元数据记录（目录属性：文件列表 children + 总大小等）；缺失时自动重建后重读。
  * dir 为目录相对路径，'' 表示根目录。返回该目录记录对象。 */
-ipcMain.handle('notes:dirMeta', async (_e, dir) => {
+vaultHandle('notes:dirMeta', async (_e, dir) => {
   await ensureVault();
   const clean = String(dir || '').trim().replace(/^[\\/]+|[\\/]+$/g, '').replace(/\\/g, '/');
   const metaAbs = path.join(vaultRoot(), META_DIR, ...(clean ? clean.split('/') : []), '_meta.json');
@@ -957,7 +1171,7 @@ ipcMain.handle('notes:dirMeta', async (_e, dir) => {
  *  只读现有 _meta.json，不触发重建；递归遍历所有目录记录收集每篇笔记的 outlinks/backlinks。
  *  @returns {Promise<Array<{path:string,name:string,outlinks:Array,backlinks:Array}>>}
  *  @author 火 冰 */
-ipcMain.handle('notes:linksIndex', async () => {
+vaultHandle('notes:linksIndex', async () => {
   await ensureVault();
   const root = vaultRoot();
   const result = [];
@@ -986,7 +1200,7 @@ function recentMetaFile() { return path.join(vaultRoot(), META_DIR, 'recent.json
 /* 读取最近打开的笔记路径列表（.second-brain/recent.json）；兼容旧版纯数组与新版 {tabs,pinned}。
  * 过滤掉已不存在/非 .md 的项；锁定集合也仅保留仍存在且仍打开的项。
  * @returns {Promise<{tabs:string[], pinned:string[]}>} 相对路径数组（最近在前） + 锁定 path 集合 */
-ipcMain.handle('notes:recentLoad', async () => {
+vaultHandle('notes:recentLoad', async () => {
   try {
     const raw = JSON.parse(await fs.promises.readFile(recentMetaFile(), 'utf8'));
     let tabs = [], pinned = [];
@@ -1010,7 +1224,7 @@ ipcMain.handle('notes:recentLoad', async () => {
 
 /* 保存最近打开的笔记路径列表（.second-brain/recent.json），含锁定集合。
  * @param {string[]|{tabs:string[], pinned:string[]}} paths 兼容旧版传入纯数组 */
-ipcMain.handle('notes:recentSave', async (_e, paths) => {
+vaultHandle('notes:recentSave', async (_e, paths) => {
   try {
     let tabs = [], pinned = [];
     if (Array.isArray(paths)) tabs = paths;                                        // 旧格式：纯数组
@@ -1026,7 +1240,7 @@ ipcMain.handle('notes:recentSave', async (_e, paths) => {
  * chunk = { blockSize, overlap, offsets? }；传入 chunk={reset:true} 清除覆盖、改按全局默认生成。
  * 写入该笔记所在目录 .second-brain/_meta.json 的笔记记录 chunk 字段。
  * @returns {Promise<{ok:boolean}>} */
-ipcMain.handle('notes:saveNoteChunk', async (_e, rel, chunk) => {
+vaultHandle('notes:saveNoteChunk', async (_e, rel, chunk) => {
   await ensureVault();
   const r = String(rel || '').replace(/^\/+/, '');
   const i = r.lastIndexOf('/');
@@ -1059,7 +1273,7 @@ ipcMain.handle('notes:saveNoteChunk', async (_e, rel, chunk) => {
 /* 预览某篇笔记按给定分块配置生成的索引分块（供「属性 → 索引分块」面板编辑时实时展示）。
  * size/overlap/offsets 为用户在面板填写/调整的值（maxChunkSize 为单块长度上限，0=不限制）；从磁盘读取笔记原文切分。
  * @returns {Promise<{ok:boolean, textLen?:number, blocks?:Array<{text,start,end}>}>} */
-ipcMain.handle('ai:previewChunk', async (_e, rel, size, overlap, offsets, maxChunkSize, strategy, fileName) => {
+vaultHandle('ai:previewChunk', async (_e, rel, size, overlap, offsets, maxChunkSize, strategy, fileName) => {
   await ensureVault();
   const abs = path.join(vaultRoot(), String(rel || '').replace(/^\/+/, ''));
   let text = '';
@@ -1069,7 +1283,7 @@ ipcMain.handle('ai:previewChunk', async (_e, rel, size, overlap, offsets, maxChu
 });
 
 /* 列出笔记库全部笔记 */
-ipcMain.handle('notes:list', async () => {
+vaultHandle('notes:list', async () => {
   await ensureVault();
   const out = [];
   await walkNotes(vaultRoot(), '', out);
@@ -1077,13 +1291,13 @@ ipcMain.handle('notes:list', async () => {
 });
 
 /* 读取单篇笔记原文 */
-ipcMain.handle('notes:read', async (_e, rel) => {
+vaultHandle('notes:read', async (_e, rel) => {
   await ensureVault();
   return await fs.promises.readFile(resolveVaultPath(rel), 'utf8');
 });
 
 /* 保存单篇笔记（自动建父目录）；保存后增量更新该笔记的索引块 */
-ipcMain.handle('notes:save', async (_e, rel, content) => {
+vaultHandle('notes:save', async (_e, rel, content) => {
   const abs = resolveVaultPath(rel);
   await fs.promises.mkdir(path.dirname(abs), { recursive: true });
   await fs.promises.writeFile(abs, content || '', 'utf8');
@@ -1093,7 +1307,7 @@ ipcMain.handle('notes:save', async (_e, rel, content) => {
 });
 
 /* 新建笔记：dir 为所在目录（相对路径），返回规范化的相对路径 */
-ipcMain.handle('notes:create', async (_e, name, dir) => {
+vaultHandle('notes:create', async (_e, name, dir) => {
   await ensureVault();
   const clean = (name || '').trim();
   if (!clean) throw new Error('笔记名不能为空');
@@ -1113,7 +1327,7 @@ ipcMain.handle('notes:create', async (_e, name, dir) => {
 });
 
 /* 新建目录：dir 为目标目录相对路径（支持多级如 a/b），返回规范化的相对路径 */
-ipcMain.handle('notes:createDir', async (_e, dir) => {
+vaultHandle('notes:createDir', async (_e, dir) => {
   await ensureVault();
   const clean = (dir || '').trim().replace(/^[\\/]+|[\\/]+$/g, '');
   if (!clean) throw new Error('目录名不能为空');
@@ -1127,7 +1341,7 @@ ipcMain.handle('notes:createDir', async (_e, dir) => {
  * @param {string} rel 笔记相对路径
  * @returns {Promise<boolean>} 是否删除成功
  * @author 火 冰 */
-ipcMain.handle('notes:delete', async (_e, rel) => {
+vaultHandle('notes:delete', async (_e, rel) => {
   const abs = resolveVaultPath(rel);
   /* 删除前先清理笔记内引用的资源文件 */
   try {
@@ -1151,7 +1365,7 @@ ipcMain.handle('notes:delete', async (_e, rel) => {
 });
 
 /* 在系统文件管理器中显示该笔记（右键菜单） */
-ipcMain.handle('notes:reveal', async (_e, rel) => {
+vaultHandle('notes:reveal', async (_e, rel) => {
   const abs = resolveVaultPath(rel);
   if (!fs.existsSync(abs)) return false;
   shell.showItemInFolder(abs);
@@ -1163,7 +1377,7 @@ ipcMain.handle('notes:reveal', async (_e, rel) => {
  * @param {string}   fileName 原始文件名（用于保留扩展名 + 返回真实名）
  * @param {ArrayBuffer|Uint8Array} dataBuf 文件二进制内容
  * @author 火 冰 */
-ipcMain.handle('notes:uploadResource', async (_e, fileName, dataBuf) => {
+vaultHandle('notes:uploadResource', async (_e, fileName, dataBuf) => {
   const name = String(fileName || '').replace(/[\\/:*?"<>|]/g, '_').trim();
   if (!name) throw new Error('文件名为空');
   const ext = path.extname(name).toLowerCase();
@@ -1177,7 +1391,7 @@ ipcMain.handle('notes:uploadResource', async (_e, fileName, dataBuf) => {
 /* 用系统默认程序打开上传的资源文件（附件点击，如 pdf/zip/sh/bat/doc/xls/html）。
  * @param {string} stored 资源存储名（uuid.ext，取自 note://vault_res/ 路径）
  * @author 火 冰 */
-ipcMain.handle('notes:openResource', async (_e, stored) => {
+vaultHandle('notes:openResource', async (_e, stored) => {
   const clean = String(stored || '');
   const segs = clean.split('/').filter(Boolean);
   if (!clean || segs.includes('..')) return false;   // 防路径穿越：仅允许 .resources 内的平级文件
@@ -1191,7 +1405,7 @@ ipcMain.handle('notes:openResource', async (_e, stored) => {
  * @param {string} url 外部链接 URL（必须 http/https 协议）
  * @returns {Promise<boolean>} 是否成功调用
  * @author 火 冰 */
-ipcMain.handle('notes:openExternal', async (_e, url) => {
+vaultHandle('notes:openExternal', async (_e, url) => {
   const u = String(url || '');
   if (!/^https?:\/\//i.test(u)) return false;   // 仅允许 http/https
   await shell.openExternal(u);
@@ -1202,7 +1416,7 @@ ipcMain.handle('notes:openExternal', async (_e, url) => {
  * @param {string} url note://vault_res/uuid.ext 资源地址或存储名
  * @returns {Promise<boolean>} 是否删除成功
  * @author 火 冰 */
-ipcMain.handle('notes:deleteResource', async (_e, url) => {
+vaultHandle('notes:deleteResource', async (_e, url) => {
   var stored = String(url || '');
   /* 支持传入完整 note://vault_res/uuid.ext 或纯存储名 uuid.ext */
   var m = stored.match(/^note:\/\/vault_res\/([^?#]+)/);
@@ -1222,7 +1436,7 @@ ipcMain.handle('notes:deleteResource', async (_e, url) => {
  * 移动后为目录内全部 .md 重绑 AI 索引（旧路径清除 + 新路径重建）。
  * 返回 { dir, moved }：dir 为移动后相对路径，moved 为移动的 .md 篇数。
  * 作者: 火 冰 */
-ipcMain.handle('notes:moveDir', async (_e, oldDir, newParent) => {
+vaultHandle('notes:moveDir', async (_e, oldDir, newParent) => {
   const oldClean = String(oldDir || '').replace(/[\\/]+$/, '');
   if (!oldClean) throw new Error('目录不能为空');
   const srcAbs = resolveVaultPath(oldClean);
@@ -1268,7 +1482,7 @@ ipcMain.handle('notes:moveDir', async (_e, oldDir, newParent) => {
 
 /* 删除目录：递归删除该目录（连同所有笔记、子目录与空目录本身），并清理目录内 .md 的 AI 索引。
  * 返回删除的 .md 篇数。作者: 火 冰 */
-ipcMain.handle('notes:removeDir', async (_e, dir) => {
+vaultHandle('notes:removeDir', async (_e, dir) => {
   const clean = String(dir || '').replace(/[\\/]+$/, '');
   if (!clean) throw new Error('目录不能为空');
   const abs = resolveVaultPath(clean);
@@ -1285,60 +1499,64 @@ ipcMain.handle('notes:removeDir', async (_e, dir) => {
 
 /* ---------- 笔记库选择 IPC（标题栏库选择器） ---------- */
 
-/* 获取当前笔记库信息：绝对路径 + 显示名（默认库显示「我的笔记库」）+ 默认库路径 */
-ipcMain.handle('vault:get', async () => {
+/* 获取当前笔记库信息：绝对路径 + 显示名（默认库显示「我的笔记库」）+ 默认库路径（按发起窗口解析） */
+vaultHandle('vault:get', async (event) => {
   const p = vaultRoot();
   scheduleMetaRefresh(); // 打开知识库时后台构建全库（当前目录及全部子目录）的属性数据
-  return { path: p, name: currentVault ? path.basename(p) : '我的笔记库', defaultPath: defaultVaultRoot(), history: vaultHistory.slice() };
+  const binding = windowVaultBinding(event);
+  return { path: p, name: binding ? path.basename(p) : '我的笔记库', defaultPath: defaultVaultRoot(), history: vaultHistory.slice() };
 });
 
-/* 打开目录选择器：选中即切换为当前笔记库（createDirectory 允许新建，即「打开新库」），并记入历史 */
-ipcMain.handle('vault:choose', async () => {
-  const r = await dialog.showOpenDialog(mainWin, {
+/* 打开目录选择器：选中即在**新主窗口**打开该知识库（当前窗口不变）。
+ * 目标库已有窗口时聚焦已有窗口（单库单窗口），记入历史并持久化下次启动库。 */
+vaultHandle('vault:choose', async (event) => {
+  const r = await dialog.showOpenDialog(winFromEvent(event), {
     title: '选择或新建笔记库目录',
     buttonLabel: '打开此目录',
     properties: ['openDirectory', 'createDirectory'],
   });
   if (r.canceled || !r.filePaths[0]) return { canceled: true };
-  recordHistory(vaultRoot()); // 切走前把当前库（含默认「我的笔记库」）记入最近打开
-  currentVault = r.filePaths[0];
-  recordHistory(currentVault);
+  const target = path.resolve(r.filePaths[0]);
+  recordHistory(vaultRoot()); // 把当前窗口的库记入最近打开
+  recordHistory(target);
+  currentVault = target; // 持久化：下次启动主窗口打开该库
   saveConfig();
-  aiEngine.activateVault(); // 切换后重载对应知识库的索引
-  scheduleMetaRefresh(); // 为新库生成/重建 .second-brain 元数据
-  return { canceled: false, path: currentVault, name: path.basename(currentVault), history: vaultHistory.slice() };
+  openVaultWindow(target); // 新开窗口 / 聚焦已有窗口
+  refreshTrayMenu(); // 库列表变化后刷新托盘菜单
+  return { canceled: false, opened: true };
 });
 
-/* 切换库：按历史库路径切换（无需弹选择器）。目录不存在或无历史路径时拒绝 */
-ipcMain.handle('vault:switch', async (_e, dir) => {
+/* 切换库（历史库列表点击）：在**新主窗口**打开目标库（当前窗口不变）。
+ * 目录不存在或无历史路径时拒绝；目标库已有窗口时聚焦已有窗口。 */
+vaultHandle('vault:switch', async (event, dir) => {
   if (!dir || typeof dir !== 'string') return { canceled: true };
   if (!fs.existsSync(dir)) return { canceled: true };
-  recordHistory(vaultRoot()); // 切走前把当前库（含默认「我的笔记库」）记入最近打开
-  // 切回默认库路径时按默认库处理（currentVault=null），保证显示名「我的笔记库」
-  const isDefault = path.resolve(dir).toLowerCase() === defaultVaultRoot().toLowerCase();
-  currentVault = isDefault ? null : dir;
-  recordHistory(currentVault);
+  const target = path.resolve(dir);
+  recordHistory(vaultRoot()); // 把当前窗口的库记入最近打开
+  recordHistory(target);
+  currentVault = target; // 持久化：下次启动主窗口打开该库
   saveConfig();
-  aiEngine.activateVault(); // 切换后重载对应知识库的索引
-  scheduleMetaRefresh(); // 为新库生成/重建 .second-brain 元数据
-  return { canceled: false, path: vaultRoot(), name: currentVault ? path.basename(currentVault) : '我的笔记库', history: vaultHistory.slice() };
+  openVaultWindow(target); // 新开窗口 / 聚焦已有窗口
+  refreshTrayMenu(); // 库列表变化后刷新托盘菜单
+  return { canceled: false, opened: true };
 });
 
-/* 从历史列表移除某库（仅移出历史，不改当前库） */
-ipcMain.handle('vault:remove', async (_e, dir) => {
+/* 从历史列表移除某库（仅移出历史，不改当前窗口） */
+vaultHandle('vault:remove', async (_e, dir) => {
   vaultHistory = vaultHistory.filter(function (h) { return h.path !== dir; });
   saveConfig();
+  refreshTrayMenu(); // 历史变化后刷新托盘菜单
   return { history: vaultHistory.slice() };
 });
 
-/* 恢复默认笔记库（userData/vault 或已迁移后的新默认库） */
-ipcMain.handle('vault:reset', async () => {
-  recordHistory(vaultRoot()); // 恢复默认前把当前库记入最近打开
-  currentVault = null;
+/* 恢复默认笔记库（userData/vault 或已迁移后的新默认库）：在新主窗口打开默认库（当前窗口不变） */
+vaultHandle('vault:reset', async () => {
+  recordHistory(vaultRoot()); // 把当前窗口的库记入最近打开
+  currentVault = null; // 持久化：下次启动主窗口打开默认库
   saveConfig();
-  aiEngine.activateVault(); // 切换后重载对应知识库的索引
-  const p = vaultRoot();
-  return { path: p, name: '我的笔记库', history: vaultHistory.slice() };
+  openVaultWindow(defaultVaultRoot()); // 新开窗口 / 聚焦已有默认库窗口
+  refreshTrayMenu(); // 库列表变化后刷新托盘菜单
+  return { canceled: false, opened: true };
 });
 
 /* ============================================
@@ -1374,17 +1592,114 @@ async function scanPlugins() {
 }
 
 /* 返回插件目录清单（供渲染进程启动时加载） */
-ipcMain.handle('plugins:list', async () => {
+vaultHandle('plugins:list', async () => {
   const plugins = await scanPlugins();
   return { plugins: plugins, dir: pluginsRoot() };
 });
 
 /* 在系统文件管理器中打开插件目录（供用户查看/放置插件） */
-ipcMain.handle('plugins:reveal', async () => {
+vaultHandle('plugins:reveal', async () => {
   const root = pluginsRoot();
   await fs.promises.mkdir(root, { recursive: true });
   await shell.openPath(root);
   return true;
+});
+
+/* ============================================
+ * Git 同步：子命令白名单 IPC（Git Sync 插件消费）
+ * 说明：
+ *   - Git Sync 插件在渲染进程运行，无 Node 权限，git 操作经此桥接在主进程执行。
+ *   - 「不管理分支」：只开放提交/历史/还原/远程同步等子命令，不开放 branch/merge 等分支管理。
+ *   - 以 execFile 直接调用 git 可执行文件 + 参数数组，不经 shell，参数不参与命令拼接，天然规避注入；
+ *     仍按子命令白名单收口，防止渲染进程请求任意命令。
+ *   - cwd 收口为发起窗口当前知识库根（含默认库），插件只能操作自己所在的知识库。
+ * 作者: 火 冰
+ * ============================================ */
+
+/* Git 允许执行的子命令白名单（缺失在前置位，args[0] 必须命中） */
+const GIT_ALLOWED_SUBCMDS = new Set([
+  'init', 'status', 'add', 'commit', 'log', 'show', 'diff',
+  'remote', 'push', 'pull', 'rev-parse', 'ls-files', 'ls-remote', 'config', 'checkout',
+]);
+
+/* 校验并执行一条 git 命令：req = { cwd, args }。返回 { exit, stdout, stderr }。
+ * 任一校验失败返回 { exit: -1, stderr: 描述 }，不抛给渲染进程裸异常。 */
+async function gitRun(req) {
+  const cwdRaw = req && req.cwd;
+  const args = Array.isArray(req && req.args) ? req.args : [];
+  if (!cwdRaw || typeof cwdRaw !== 'string') return { exit: -1, stderr: '缺少工作目录' };
+  // cwd 收口：只能等于发起窗口知识库根（或默认库根）
+  const cwd = path.resolve(cwdRaw);
+  const v = vaultRoot() ? path.resolve(vaultRoot()) : '';
+  const d = defaultVaultRoot() ? path.resolve(defaultVaultRoot()) : '';
+  if (cwd !== v && cwd !== d) return { exit: -1, stderr: '不允许在知识库根之外执行 git 操作' };
+  if (!args.length || typeof args[0] !== 'string' || !GIT_ALLOWED_SUBCMDS.has(args[0])) {
+    return { exit: -1, stderr: 'git 子命令不在白名单内: ' + (args[0] || '') };
+  }
+  // 参数做基础净化：杜绝换行/空字节等异常字符
+  for (const a of args) {
+    if (typeof a !== 'string') return { exit: -1, stderr: 'git 参数非法' };
+    if (/[\0\n\r]/.test(a)) return { exit: -1, stderr: 'git 参数含非法字符' };
+  }
+  return await new Promise(function (resolve) {
+    execFile('git', args, { cwd: cwd, timeout: 120000 }, function (err, stdout, stderr) {
+      const code = (err && typeof err.code === 'number') ? err.code : (err ? 1 : 0);
+      resolve({ exit: code, stdout: String(stdout || ''), stderr: String(stderr || (err && err.message) || '') });
+    });
+  });
+}
+
+/* Git Sync 插件：执行一条 git 命令（白名单收口 + cwd 锁定到知识库根） */
+vaultHandle('git:run', (_e, req) => gitRun(req));
+
+/* 探测 git 环境与知识库状态：{ installed, isRepo, branch, remote } */
+vaultHandle('git:check', async (event) => {
+  const cwd = vaultRoot();
+  // 探测 git 是否安装：git --version
+  const ver = await new Promise(function (resolve) {
+    execFile('git', ['--version'], { timeout: 10000 }, function (err, stdout) {
+      resolve(err ? '' : String(stdout || '').trim());
+    });
+  });
+  if (!ver) return { installed: false, isRepo: false };
+  const status = await gitRun({ cwd: cwd, args: ['status'] });
+  // 非仓库时 status 返回非 0；以 status 结果为准（仓库已有 .git 但首无提交也视为 isRepo）
+  const repoOk = status.exit === 0;
+  let branch = '', remote = '';
+  if (repoOk) {
+    const b = await gitRun({ cwd: cwd, args: ['rev-parse', '--abbrev-ref', 'HEAD'] });
+    branch = b.exit === 0 ? b.stdout.trim() : '';
+    const r = await gitRun({ cwd: cwd, args: ['remote', 'get-url', 'origin'] });
+    remote = r.exit === 0 ? r.stdout.trim() : '';
+  }
+  return { installed: true, isRepo: repoOk, branch: branch, remote: remote };
+});
+
+/* 从 Git 仓库打开知识库：渲染侧传 URL，主进程选保存目录 → 克隆为独立知识库 → 注册并新开窗口
+ * 返回 { canceled, path, name, error } */
+vaultHandle('vault:cloneGit', async (event, url) => {
+  if (!url || typeof url !== 'string' || !/^https?:\/\/|^git@|^[^@\s]+@[^:\s]+:/.test(url)) {
+    return { canceled: false, error: '仓库地址不合法' };
+  }
+  const win = winFromEvent(event);
+  const picked = await dialog.showOpenDialog(win, {
+    title: '选择克隆目标目录（将在其下创建仓库文件夹）',
+    buttonLabel: '克隆到此',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (picked.canceled || !picked.filePaths[0]) return { canceled: true };
+  const parent = path.resolve(picked.filePaths[0]);
+  // 从 URL 推断仓库名（取去 .git 后缀的末段）
+  const base = String(url).replace(/\.git\s*$/, '').split('/').pop().split(':').pop();
+  const name = base || 'cloned-vault';
+  const target = path.join(parent, name);
+  const cl = await gitRun({ cwd: parent, args: ['clone', url, target] });
+  if (cl.exit !== 0) return { canceled: false, error: '克隆失败：' + cl.stderr.trim() };
+  recordHistory(target);
+  currentVault = target; // 持久化：下次启动主窗口打开该库
+  saveConfig();
+  openVaultWindow(target);
+  return { canceled: false, path: target, name: name };
 });
 
 /* 把默认知识库内容迁移到新目录（移动语义：复制成功后清空原默认库）。
@@ -1429,10 +1744,10 @@ async function migrateDefaultVault(src, target) {
   return { ok: true };
 }
 
-/* 迁移默认知识库 IPC：弹目录选择器 → 二次确认 → 执行迁移 → 返回新库信息 */
-ipcMain.handle('vault:migrate', async () => {
+/* 迁移默认知识库 IPC：弹目录选择器 → 二次确认 → 执行迁移 → 刷新受影响窗口（发起窗口由渲染端重载提示） */
+vaultHandle('vault:migrate', async (event) => {
   const src = defaultVaultRoot();
-  const r = await dialog.showOpenDialog(mainWin, {
+  const r = await dialog.showOpenDialog(winFromEvent(event), {
     title: '选择迁移目标目录',
     buttonLabel: '迁移到此目录',
     message: '将默认知识库移动到所选目录（原位置内容将被清空）',
@@ -1447,7 +1762,7 @@ ipcMain.handle('vault:migrate', async () => {
     return { canceled: true, error: '目标目录不能与默认知识库相同或位于其内部' };
   }
   // 二次确认：移动语义会清空原默认库，提示用户风险
-  const c = await dialog.showMessageBox(mainWin, {
+  const c = await dialog.showMessageBox(winFromEvent(event), {
     type: 'warning',
     title: '迁移默认知识库',
     message: '确定把默认知识库移动到「' + target + '」吗？',
@@ -1462,12 +1777,21 @@ ipcMain.handle('vault:migrate', async () => {
     const res = await migrateDefaultVault(src, target);
     if (!res.ok) return { canceled: true, error: res.error };
     aiEngine.activateVault(); // 迁移后重载（新）默认知识库的索引
-    return {
-      canceled: false,
-      path: vaultRoot(),
-      name: currentVault ? path.basename(currentVault) : '我的笔记库',
-      history: vaultHistory.slice(),
-    };
+    // 刷新受影响窗口：跟随默认库（绑定 null）或绑定旧默认路径的窗口 → 改绑定为 null（跟随新默认库）并重载；
+    // 发起窗口只更新绑定不重载（由渲染端自行重载并提示迁移成功），避免旧绑定指向已删除的旧默认库目录
+    const senderId = event.sender && event.sender.id;
+    for (const [winId, vp] of winVaults) {
+      const w = BrowserWindow.fromId(winId);
+      if (!w || w.isDestroyed()) continue;
+      const curKey = vp == null ? null : path.resolve(vp).toLowerCase();
+      if (curKey === null || curKey === srcKey) {
+        winVaults.set(winId, null); // 跟随新默认库
+        if (winId !== senderId) w.webContents.reload();
+      }
+    }
+    syncVaultWinMap();
+    refreshTrayMenu(); // 迁移后默认库路径变化，刷新托盘知识库列表
+    return { canceled: false, migrated: true };
   } catch (err) {
     return { canceled: true, error: String((err && err.message) || err) };
   }
@@ -1491,29 +1815,29 @@ function initAiEngine() {
 }
 
 /* 读取 AI 配置 */
-ipcMain.handle('ai:getConfig', () => aiEngine.getConfig());
+vaultHandle('ai:getConfig', () => aiEngine.getConfig());
 
 /* 保存 AI 配置（本地模型路径 + 远程大模型参数） */
-ipcMain.handle('ai:saveConfig', (_e, cfg) => aiEngine.saveConfig(cfg || {}));
+vaultHandle('ai:saveConfig', (_e, cfg) => aiEngine.saveConfig(cfg || {}));
 
 /* 获取模型库状态（下载目录 + 各嵌入模型是否已下载） */
-ipcMain.handle('ai:getModelLib', () => aiEngine.getModelLib());
+vaultHandle('ai:getModelLib', () => aiEngine.getModelLib());
 
 /* 设置模型下载目录 */
-ipcMain.handle('ai:setModelDir', (_e, dir) => aiEngine.setModelDir(dir));
+vaultHandle('ai:setModelDir', (_e, dir) => aiEngine.setModelDir(dir));
 
 /* 下载嵌入模型（进度经 ai:modelProgress 推送） */
-ipcMain.handle('ai:downloadModel', async (e, repo, source) => {
+vaultHandle('ai:downloadModel', async (e, repo, source) => {
   return await aiEngine.downloadModel(repo, source, function (p) {
     if (!e.sender.isDestroyed()) e.sender.send('ai:modelProgress', p);
   });
 });
 
 /* 打开模型下载目录 */
-ipcMain.handle('ai:revealModelDir', () => aiEngine.revealModelDir());
+vaultHandle('ai:revealModelDir', () => aiEngine.revealModelDir());
 
 /* 弹出目录选择框，返回所选模型下载目录（取消返回 null） */
-ipcMain.handle('ai:pickModelDir', async () => {
+vaultHandle('ai:pickModelDir', async () => {
   const r = await dialog.showOpenDialog(mainWin, {
     title: '选择模型下载目录',
     properties: ['openDirectory', 'createDirectory'],
@@ -1523,31 +1847,31 @@ ipcMain.handle('ai:pickModelDir', async () => {
 });
 
 /* 获取 AI 引擎状态（模型加载/当前库索引片段数） */
-ipcMain.handle('ai:getStatus', () => aiEngine.getStatus());
+vaultHandle('ai:getStatus', () => aiEngine.getStatus());
 
 /* 获取当前知识库索引统计与明细（供编辑区「查看索引」面板） */
-ipcMain.handle('ai:listIndex', async () => await aiEngine.listIndex());
+vaultHandle('ai:listIndex', async () => await aiEngine.listIndex());
 
 /* 获取当前提供方可用的生成模型列表 */
-ipcMain.handle('ai:listModels', () => aiEngine.listModels());
+vaultHandle('ai:listModels', () => aiEngine.listModels());
 
 /* 从 Ollama 服务拉取已安装模型列表（添加/编辑生成模型时选择用） */
-ipcMain.handle('ai:listOllamaModels', (_e, baseUrl) => aiEngine.listOllamaModels(baseUrl));
+vaultHandle('ai:listOllamaModels', (_e, baseUrl) => aiEngine.listOllamaModels(baseUrl));
 
 /* 管理 Ollama 模型：加载/卸载/上下文长度（keep_alive + num_ctx） */
-ipcMain.handle('ai:manageOllamaModel', (_e, p) => aiEngine.manageOllamaModel(p || {}));
+vaultHandle('ai:manageOllamaModel', (_e, p) => aiEngine.manageOllamaModel(p || {}));
 
 /* 获取 Ollama 正在运行的模型列表（生成模型按运行状态显示 加载/卸载 按钮） */
-ipcMain.handle('ai:listRunningModels', (_e, baseUrl) => aiEngine.listRunningModels(baseUrl));
+vaultHandle('ai:listRunningModels', (_e, baseUrl) => aiEngine.listRunningModels(baseUrl));
 
 /* 加载本地嵌入模型（返回最新状态） */
-ipcMain.handle('ai:loadEmbedding', async () => {
+vaultHandle('ai:loadEmbedding', async () => {
   await aiEngine.loadEmbedding();
   return aiEngine.getStatus();
 });
 
 /* 重建知识库索引（进度通过 ai:progress 事件推送） */
-ipcMain.handle('ai:rebuildIndex', async (e) => {
+vaultHandle('ai:rebuildIndex', async (e) => {
   const result = await aiEngine.rebuildIndex(function (p) {
     if (!e.sender.isDestroyed()) e.sender.send('ai:progress', p);
   });
@@ -1555,19 +1879,19 @@ ipcMain.handle('ai:rebuildIndex', async (e) => {
 });
 
 /* 手动重建指定单篇笔记的索引（「索引过期」补救）；只重算该文件块，不影响库内其他笔记 */
-ipcMain.handle('ai:rebuildNoteIndex', async function (e, rel) {
+vaultHandle('ai:rebuildNoteIndex', async function (e, rel) {
   if (!rel) return { ok: false };
   await aiEngine.rebuildNoteIndex(String(rel));
   return { ok: true };
 });
 
 /* 列出索引库中所有知识库的索引概要 */
-ipcMain.handle('ai:listIndexes', async () => {
+vaultHandle('ai:listIndexes', async () => {
   return aiEngine.listIndexes();
 });
 
 /* 重建指定知识库索引（进度通过 ai:progress 事件推送） */
-ipcMain.handle('ai:rebuildIndexFor', async (e, vaultPath) => {
+vaultHandle('ai:rebuildIndexFor', async (e, vaultPath) => {
   const result = await aiEngine.rebuildIndexFor(vaultPath, function (p) {
     if (!e.sender.isDestroyed()) e.sender.send('ai:progress', p);
   });
@@ -1575,12 +1899,12 @@ ipcMain.handle('ai:rebuildIndexFor', async (e, vaultPath) => {
 });
 
 /* 删除指定知识库索引文件 */
-ipcMain.handle('ai:deleteIndex', async (_e, vaultPath) => {
+vaultHandle('ai:deleteIndex', async (_e, vaultPath) => {
   return aiEngine.deleteIndex(vaultPath);
 });
 
 /* 发起 AI 问答：检索上下文 → 流式生成，token 经 ai:token 推送 */
-ipcMain.handle('ai:ask', async (e, question, history) => {
+vaultHandle('ai:ask', async (e, question, history) => {
   const sender = e.sender;
   try {
     const { sources } = await aiEngine.ask({

@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   setCloseAction: (val) => ipcRenderer.invoke('win:setCloseAction', val),
   /** 写运行日志（落盘到 userData/logs/app.log） */
   log: (level, msg, detail) => ipcRenderer.send('app:log', { level: level, msg: msg, detail: detail }),
+  /** 打开运行日志目录（主进程错误弹窗「打开日志目录」按钮用，文件管理器定位到 logs/） */
+  openLogDir: () => ipcRenderer.invoke('shell:openLogDir'),
   /** 同步确认对话框（window.confirm 的 Electron 实现，返回是否确定） */
   confirm: (msg) => ipcRenderer.sendSync('dialog:confirm', msg),
   /** 列出笔记库全部笔记：挂起返回 [{path,name,folder,mtime,size}] */
@@ -82,6 +84,16 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     /** 在系统文件管理器中打开插件目录 */
     reveal: () => ipcRenderer.invoke('plugins:reveal'),
   },
+
+  /* ---------- Git 同步桥接（Git Sync 插件消费） ---------- */
+  git: {
+    /** 执行一条白名单 git 命令：req={cwd, args}，返回 {exit, stdout, stderr} */
+    run: (req) => ipcRenderer.invoke('git:run', req),
+    /** 探测 git 环境与知识库状态：{installed, isRepo, branch, remote} */
+    check: () => ipcRenderer.invoke('git:check'),
+  },
+  /** 从 Git 仓库克隆为独立知识库并打开：url 为仓库地址，返回 {canceled, path, name, error} */
+  cloneGit: (url) => ipcRenderer.invoke('vault:cloneGit', url),
   /** 迁移默认知识库到新目录（移动语义），返回 {canceled, path, name, history, error} */
   migrateVault: () => ipcRenderer.invoke('vault:migrate'),
 
