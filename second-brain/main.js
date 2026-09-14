@@ -407,7 +407,7 @@ function refreshTrayMenu() {
   const items = [];
   const seen = new Set();
   const pushVault = function (p, name) {
-    const k = (p == null) ? '__default__' : vaultKey(p);
+    const k = (p == null || vaultKey(p) === defaultVaultRoot().toLowerCase()) ? '__default__' : vaultKey(p);
     if (seen.has(k)) return;
     seen.add(k);
     items.push({
@@ -1617,7 +1617,7 @@ vaultHandle('plugins:reveal', async () => {
 /* Git 允许执行的子命令白名单（缺失在前置位，args[0] 必须命中） */
 const GIT_ALLOWED_SUBCMDS = new Set([
   'init', 'status', 'add', 'commit', 'log', 'show', 'diff',
-  'remote', 'push', 'pull', 'rev-parse', 'ls-files', 'ls-remote', 'config', 'checkout', 'clean',
+  'remote', 'push', 'pull', 'rev-parse', 'ls-files', 'ls-remote', 'config', 'checkout', 'clean', 'reset',
 ]);
 
 /* 校验并执行一条 git 命令：req = { cwd, args }。返回 { exit, stdout, stderr }。
@@ -1639,6 +1639,8 @@ async function gitRun(req) {
     if (typeof a !== 'string') return { exit: -1, stderr: 'git 参数非法' };
     if (/[\0\n\r]/.test(a)) return { exit: -1, stderr: 'git 参数含非法字符' };
   }
+  // reset 仅允许软/混合回退（不动工作区），禁止 --hard 以免丢失工作区改动
+  if (args[0] === 'reset' && args.includes('--hard')) return { exit: -1, stderr: 'git reset 不允许 --hard（拒绝危险回退）' };
   return await new Promise(function (resolve) {
     execFile('git', args, { cwd: cwd, timeout: 120000 }, function (err, stdout, stderr) {
       const code = (err && typeof err.code === 'number') ? err.code : (err ? 1 : 0);

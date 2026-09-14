@@ -9,11 +9,11 @@
   "version": "1.0.0",
   "main": "main.js",
   "styles": "styles.css",
-  "permissions": ["git.run", "vault.read"],
+  "permissions": ["git.run", "vault.read", "vault.write"],
   "ribbon": {
     "icon": "git-branch",
-    "title": "Git Sync（查看仓库状态）",
-    "actionKey": "git-status"
+    "title": "Git Sync",
+    "actionKey": "git-sync"
   },
   "commands": [
     { "icon": "git-commit", "label": "提交当前变更", "actionKey": "git-commit" },
@@ -28,8 +28,42 @@
   ],
   "contextMenus": {
     "file-tree": [
-      { "label": "Git: 查看此文件历史", "icon": "history", "actionKey": "git-file-log" },
-      { "label": "Git: 还原此文件到版本…", "icon": "undo-2", "actionKey": "git-file-revert" }
+      {
+        "label": "Git",
+        "icon": "git-branch",
+        "children": [
+          { "label": "对比", "icon": "compare", "actionKey": "gs-ctx-diff" },
+          { "label": "历史", "icon": "history", "actionKey": "gs-ctx-history" },
+          { "label": "回滚（放弃修改）", "icon": "undo-2", "actionKey": "gs-ctx-revert" },
+          { "label": "提交", "icon": "git-commit", "actionKey": "gs-ctx-commit" },
+          { "label": "合并提交", "icon": "git-merge", "actionKey": "gs-ctx-squash" },
+          { "label": "拉取", "icon": "download", "actionKey": "gs-ctx-pull" },
+          { "label": "推送", "icon": "upload", "actionKey": "gs-ctx-push" }
+        ]
+      }
+    ],
+    "file-tree-blank": [
+      {
+        "label": "Git",
+        "icon": "git-branch",
+        "children": [
+          { "label": "提交", "icon": "git-commit", "actionKey": "gs-ctx-repo-commit" },
+          { "label": "合并提交", "icon": "git-merge", "actionKey": "gs-ctx-repo-squash" },
+          { "label": "拉取", "icon": "download", "actionKey": "gs-ctx-repo-pull" },
+          { "label": "推送", "icon": "upload", "actionKey": "gs-ctx-repo-push" }
+        ]
+      }
+    ],
+    "file-tree-folder": [
+      {
+        "label": "Git",
+        "icon": "git-branch",
+        "children": [
+          { "label": "提交", "icon": "git-commit", "actionKey": "gs-ctx-dir-commit" },
+          { "label": "合并提交", "icon": "git-merge", "actionKey": "gs-ctx-dir-squash" },
+          { "label": "推送", "icon": "upload", "actionKey": "gs-ctx-dir-push" }
+        ]
+      }
     ]
   }
 }

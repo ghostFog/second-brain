@@ -1360,6 +1360,61 @@ function testLinkNavDelegate() {
     'ED-47 编码: encodeURIComponent(note.path) 反向匹配编码后的 href');
 }
 
+/* ---- Bug-056: 目录插件（minimal-theme）与内置 mock 同 id 时，pluginManager.install 按 id 去重跳过，
+ * 导致目录插件声明的 toolbar 顶栏按钮 / cycle-theme 命令 + Ctrl+Q 默认快捷键从未注册 ----
+ * 根因: initPluginSystem 先安装内置 mock minimal-theme（声明 ribbon），loadDirPlugins 异步加载目录插件
+ *       （声明 toolbar + cycle-theme + shortcut: Ctrl+Q）时 install 被 installedPlugins.find 去重 return，
+ *       顶栏图标不出现、Ctrl+Q 快捷键不生效。
+ * 修复: loadDirPlugins 在 install 前先卸载同 id 旧条目，再安装目录插件。
+ * 断言: ①loadDirPlugins 源码 install 前对同 id 先 uninstall；②manifest cycle-theme 声明 shortcut Ctrl+Q；
+ *       ③行为：先装 mock（ribbon）再装目录插件（toolbar+命令），顶栏渲染出 minimal-theme:toolbar 按钮，
+ *         且快捷键注册表 Ctrl+Q 命中 minimal-theme:cycle-theme。
+ * 作者: 火 冰 */
+function testDirPluginToolbarOverride() {
+  const pjs = fs.readFileSync(path.join(__dirname, 'js', 'app-plugins.js'), 'utf8');
+  // ① 源码：loadDirPlugins 中 install 前对同 id 先 uninstall
+  assert(/pluginManager\.uninstall\(id\);[\s\S]*?pluginManager\.install\(full\)/.test(pjs),
+    'Bug-056-1: loadDirPlugins install 前先卸载同 id 旧条目，目录插件扩展点不被去重跳过');
+  // ② manifest 声明 Ctrl+Q
+  const mani = JSON.parse(fs.readFileSync(path.join(__dirname, 'plugins', 'minimal-theme', 'manifest.json'), 'utf8'));
+  const cycleCmd = (mani.commands || []).find(c => c.actionKey === 'cycle-theme');
+  assert(cycleCmd && cycleCmd.shortcut === 'Ctrl+Q',
+    'Bug-056-2: manifest cycle-theme 命令声明默认快捷键 Ctrl+Q');
+  // ③ 行为断言
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body><div id="plugin-toolbar"></div></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  W.alert = function () {};
+  W.esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  }); };
+  W.refreshIcons = function () {};
+  W.showToast = function () {};
+  W.saveS = function () {}; W.restoreS = function () { return null; };
+  ['app-toolbar.js', 'app-plugins.js', 'app-keybinds.js'].forEach(function (name) {
+    const s = W.document.createElement('script');
+    s.textContent = fs.readFileSync(path.join(__dirname, 'js', name), 'utf8');
+    W.document.head.appendChild(s);
+  });
+  const host = W.document.getElementById('plugin-toolbar');
+  // 模拟 initPluginSystem 先装内置 mock（仅 ribbon，无 toolbar）
+  const mock = W.materializePlugin({
+    id: 'minimal-theme', name: 'Minimal Theme', icon: 'palette', installed: true,
+    ribbon: { icon: 'palette', title: 'Minimal', actionKey: 'apply-theme' },
+  });
+  W.pluginManager.install(mock);
+  // 模拟 loadDirPlugins 修复后的安装路径：先 uninstall 同 id，再 install 目录插件
+  const full = W.materializePlugin(Object.assign({}, mani, { installed: true }));
+  if (W.pluginManager.list().some(p => p.id === 'minimal-theme')) W.pluginManager.uninstall('minimal-theme');
+  W.pluginManager.install(full);
+  assert(!!host.querySelector('[data-plugin-toolbar="minimal-theme:toolbar"]'),
+    'Bug-056-3: 目录插件 toolbar 顶栏按钮渲染到 #plugin-toolbar（不再被 mock 去重跳过）');
+  const bind = W.kbGetBinds().find(b => b.id === 'minimal-theme:cycle-theme');
+  assert(bind && bind.combo === 'Ctrl+Q', 'Bug-056-4: 快捷键注册表 cycle-theme 命令生效组合为 Ctrl+Q');
+  const hit = W.kbMatch({ key: 'q', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false });
+  assert(hit && hit.id === 'minimal-theme:cycle-theme', 'Bug-056-5: Ctrl+Q 全局键命中 minimal-theme:cycle-theme');
+}
+
 testLinkNavDelegate();
 testLogBadge();
 testSemanticChunk();

@@ -16,7 +16,7 @@
     "actionKey": "cycle-theme"
   },
   "commands": [
-    { "icon": "palette", "label": "Minimal: 切换主题配色", "actionKey": "cycle-theme" }
+    { "icon": "palette", "label": "Minimal: 切换主题配色", "actionKey": "cycle-theme", "shortcut": "Ctrl+Q" }
   ],
   "settings": [
     {

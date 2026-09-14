@@ -84,13 +84,13 @@
     updateUi();
   }
 
-  /* 提交一次变更（可含推送）：执行 add → commit →（可选）push */
-  async function commitNow(doPush) {
+  /* 提交一次变更（可含推送）：执行 add → commit →（可选）push；silent=true 时无变更不提示（实时提交用） */
+  async function commitNow(doPush, silent) {
     await refreshVault();
     const st = await git(['status', '--porcelain']);
     if (st.exit !== 0 || !st.stdout.trim()) {
-      // 无变更：仍提示
-      showToast('没有可提交的变更');
+      // 无变更：手动提交时提示，实时提交静默
+      if (!silent) showToast('没有可提交的变更');
       // 若要求推送且无变更也尝试推送
       if (doPush) await pushNow(false);
       return;
@@ -103,9 +103,57 @@
       + ' ' + two(now.getHours()) + ':' + two(now.getMinutes());
     const cm = await git(['commit', '-m', msg]);
     if (cm.exit !== 0) { showToast('提交失败：' + cm.stderr.trim()); return; }
-    showToast('已提交：' + (cm.stdout.trim() || msg));
+    showToast('已提交');
     updateUi();
     if (doPush) await pushNow(false);
+  }
+
+  /* Ribbon「同步」动作：未初始化→确认制引导 git init；已初始化→提交到仓库（并按设置推送）。作者: 火 冰 */
+  async function syncNow() {
+    await refreshVault();
+    const s = await probe();
+    if (!s) return;
+    if (!s.installed) { showToast('未检测到 Git'); return; }
+    if (!s.isRepo) {
+      const yes = confirm('当前知识库尚未初始化 Git 仓库。\n点击“确定”立即 git init（.md 文件进入版本控制）。');
+      if (yes) await initRepo();
+      return;
+    }
+    await commitNow(gset('autoPush', false), false);
+  }
+
+  /* ------------------ 实时提交（文件变动即提交本地） ------------------ */
+
+  var realTimeTimer = null;
+
+  /* 文件树重绘作为「有变动」信号 → 防抖统一刷新：①目录树即时调整颜色（GIT-14）；
+   * ②开启「实时提交」时静默提交本地。作者: 火 冰 */
+  function scheduleFileTreeRefresh() {
+    if (realTimeTimer) { clearTimeout(realTimeTimer); realTimeTimer = null; }
+    realTimeTimer = setTimeout(async function () {
+      realTimeTimer = null;
+      await refreshVault();
+      if (!vaultPath) return;
+      const s = await probe();
+      if (!s || !s.installed) return;
+      if (s.isRepo) await applyTreeColoring(); // 文件变动后目录区即时调整颜色
+      else clearTreeColoring();
+      if (!gset('realTime', false)) return;    // 未开启实时提交则不提交
+      if (s.isRepo) await commitNow(false, true); // 静默提交本地，无变更不打扰
+    }, 1200);
+  }
+
+  /* 监听 #file-tree 重绘，作为「有变动」信号触发即时着色/实时提交；只挂载一次。作者: 火 冰 */
+  var rtObserved = false;
+  function bindFileTreeObserver() {
+    if (rtObserved) return;
+    const tree = document.getElementById('file-tree');
+    if (!tree) return;
+    rtObserved = true;
+    try {
+      new MutationObserver(scheduleFileTreeRefresh)
+        .observe(tree, { childList: true, subtree: true });
+    } catch (e) { /* 降级：不触发即时着色 */ }
   }
 
   /* 推送到远程（origin）；失败仅提示不回滚 */
@@ -186,6 +234,12 @@
     return '';
   }
 
+  /* 目标目录解析：右键注入的 __pluginCtxFolder（可能为 ''=根目录）；未右键目录时返回 null */
+  function resolveDirTarget() {
+    const f = window.__pluginCtxFolder;
+    return (typeof f === 'string') ? f : null;
+  }
+
   /* 版本历史弹框（库级，GIT-12：展示每次提交改动的文件清单，点文件看单文件差异） */
   async function historyModal() {
     await refreshVault();
@@ -236,38 +290,202 @@
     });
   }
 
-  /* 单文件版本历史弹框（GIT-10）：列出影响该文件的提交，可查看该文件差异 / 还原该文件到版本 */
+  /* 单文件版本历史弹框（GIT-10）：左右布局——左列提交列表（hash+时间+还原按钮），点击选中；
+   * 右侧为对比框，顶部滑动开关切换「对比上一版本 / 对比本地文件」；
+   * 该文件的历史（log）命令带 --date 短格式，便于左侧仅展示 hash 与时间。作者: 火 冰 */
   async function fileLogModal(relPath) {
     const s = await probe();
     if (!s || !s.isRepo) { showToast('当前知识库尚未初始化 Git；请先初始化'); return; }
     showToast('正在读取文件历史…');
-    const r = await git(['log', '--format=%x1e%H%x1f%s%x1f%ad%x1f%an', '-20', '--', relPath]);
+    const r = await git(['log', '--format=%x1e%H%x1f%s%x1f%ad%x1f%an', '--date=format:%Y-%m-%d %H:%M', '-20', '--', relPath]);
     if (r.exit !== 0) { showToast('读取历史失败：' + r.stderr.trim()); return; }
     const blocks = (r.stdout || '').split('\x1e').filter(function (b) { return b.trim(); });
-    let rows = '';
-    if (!blocks.length) rows = '<div class="gitsync-row gitsync-empty">该文件暂无提交历史</div>';
-    blocks.forEach(function (b) {
-      const it = parseLogBlock(b);
-      if (!it) return;
-      rows += '<div class="gitsync-row gitsync-commit" data-hash="' + it.hash + '">'
-        + '<div class="gitsync-commit-main"><span class="gitsync-hash">' + it.hash.slice(0, 7) + '</span>'
-        + '<span class="gitsync-subj">' + escapeHtml(it.subj) + '</span></div>'
-        + '<div class="gitsync-meta">' + escapeHtml(it.date) + ' · ' + escapeHtml(it.author) + '</div>'
-        + '<div class="gitsync-actions">'
-        + '<button data-cmd="diff" title="查看此文件在该版本的改动">Diff</button>'
-        + '<button data-cmd="revert" class="danger" title="把此文件还原到该版本的内容">还原此文件</button>'
-        + '</div></div>';
+    if (!blocks.length) {
+      openModal('文件历史 · ' + relPath, '<div class="gitsync-row gitsync-empty">该文件暂无提交历史</div>');
+      return;
+    }
+    const items = blocks.map(function (b) { return parseLogBlock(b); }).filter(Boolean);
+    let side = '';
+    items.forEach(function (it) {
+      side += '<div class="gsfh-item" data-hash="' + it.hash + '">'
+        + '<span class="gsfh-hash">' + it.hash.slice(0, 7) + '</span>'
+        + '<span class="gsfh-time">' + escapeHtml(it.date) + '</span>'
+        + '<button data-cmd="revert" class="gsfh-revert" title="把此文件还原到该版本的内容">还原</button>'
+        + '</div>';
     });
-    openModal('文件历史 · ' + relPath, rows, function (m) {
-      m.addEventListener('click', function (e) {
-        const row = e.target.closest('[data-hash]');
-        if (!row) return;
-        const hash = row.getAttribute('data-hash');
-        const cmd = e.target.closest('[data-cmd]');
-        if (cmd && cmd.getAttribute('data-cmd') === 'diff') fileDiffModal(hash, relPath);
-        else if (cmd && cmd.getAttribute('data-cmd') === 'revert') confirmRevert(hash, false, relPath);
+    openModal('文件历史 · ' + relPath,
+      '<div class="gitsync-fhist">'
+        + '<div class="gitsync-fhist-side" id="gsfh-side">' + side + '</div>'
+        + '<div class="gitsync-fhist-main">'
+          + '<div class="gsfh-mode">'
+            + '<label class="gsfh-toggle" title="开启=对比本地文件；关闭=对比上一版本">'
+            + '<input type="checkbox" id="gsfh-local" checked><span class="gsfh-switch"></span></label>'
+            + '<span class="gsfh-mode-text">对比本地文件</span>'
+          + '</div>'
+          + '<pre class="gsfh-diff" id="gsfh-diff">加载中…</pre>'
+        + '</div>'
+      + '</div>',
+      function (m) {
+        m.classList.add('gitsync-modal-lg');
+        const sideEl = m.querySelector('#gsfh-side');
+        const toggle = m.querySelector('#gsfh-local');
+        const diffEl = m.querySelector('#gsfh-diff');
+        const modeText = m.querySelector('.gsfh-mode-text');
+        let curHash = items[0].hash;
+
+        /* 在右侧对比框渲染指定 hash 在当前开关模式下的 diff（开启=对比本地，关闭=对比上一版本） */
+        async function loadDiff(hash) {
+          modeText.textContent = toggle.checked ? '对比本地文件' : '对比上一版本';
+          diffEl.textContent = '加载中…';
+          const args = toggle.checked ? ['diff', hash, '--', relPath] : ['diff', hash + '^', hash, '--', relPath];
+          const res = await git(args);
+          diffEl.textContent = (res.exit === 0 && res.stdout.trim()) ? res.stdout : '（无差异）';
+        }
+
+        /* 选中左侧某条提交：更新高亮并刷新右侧对比框 */
+        function selectItem(hash) {
+          curHash = hash;
+          const nodes = sideEl.querySelectorAll('.gsfh-item');
+          for (let i = 0; i < nodes.length; i++) {
+            nodes[i].classList.toggle('is-active', nodes[i].getAttribute('data-hash') === hash);
+          }
+          loadDiff(hash);
+        }
+
+        toggle.addEventListener('change', function () { loadDiff(curHash); });
+        sideEl.addEventListener('click', function (e) {
+          const revertBtn = e.target.closest('[data-cmd="revert"]');
+          if (revertBtn) { // 还原收敛到左侧「还原」按钮
+            const hash = revertBtn.closest('[data-hash]').getAttribute('data-hash');
+            confirmRevert(hash, false, relPath);
+            return;
+          }
+          const it = e.target.closest('.gsfh-item');
+          if (it) selectItem(it.getAttribute('data-hash'));
+        });
+        selectItem(items[0].hash); // 默认选中最新一条
       });
-    });
+  }
+
+  /* 当前分支相对跟踪远端（origin/<branch>）的引用；未配置跟踪分支或异常时返回 ''。作者: 火 冰 */
+  async function currentUpstream() {
+    const up = await git(['rev-parse', '--abbrev-ref', '@{upstream}']);
+    if (up.exit !== 0 || !up.stdout.trim()) return '';
+    return up.stdout.trim();
+  }
+
+  /* 合并提交（整仓，右键空白区 Git）：把当前分支所有未推送提交压缩为一笔。
+   * git reset --soft <upstream> 把提交退回暂存区（不动工作区）后再 commit，内容全保留、仅压缩历史。作者: 火 冰 */
+  async function squashAll() {
+    await refreshVault();
+    const upstream = await currentUpstream();
+    if (!upstream) { showToast('未配置跟踪远端分支，无法合并提交'); return; }
+    const cnt = await git(['log', '--oneline', upstream + '..HEAD']);
+    if (cnt.exit === 0 && !cnt.stdout.trim()) { showToast('没有未推送的提交'); return; }
+    const n = cnt.stdout.trim().split('\n').length;
+    const r = await git(['reset', '--soft', upstream]);
+    if (r.exit !== 0) { showToast('合并失败：' + r.stderr.trim()); return; }
+    const cm = await git(['commit', '-m', '合并 ' + n + ' 笔未推送提交']);
+    if (cm.exit !== 0) { showToast('合并提交失败：' + cm.stderr.trim()); return; }
+    showToast('已合并为 1 笔提交');
+    updateUi();
+    if (PluginAPI && PluginAPI.editor && typeof window.edCurrent === 'string' && window.edCurrent) {
+      PluginAPI.editor.reloadNote(window.edCurrent);
+    }
+  }
+
+  /* 合并提交（单文件，右键笔记 Git）：把该文件相对跟踪远端的未推送改动压缩为一笔仅含该文件的提交。
+   * git reset <upstream>（mixed，不动工作区）撤出未推送提交 → 仅暂存该文件 → 单独 commit；
+   * 其它文件的未推送改动降为工作区未暂存（内容不丢）。作者: 火 冰 */
+  async function squashFile(relPath) {
+    await refreshVault();
+    const upstream = await currentUpstream();
+    if (!upstream) { showToast('未配置跟踪远端分支，无法合并提交'); return; }
+    const chk = await git(['diff', upstream, 'HEAD', '--name-only', '--', relPath]);
+    if (chk.exit === 0 && !chk.stdout.trim()) { showToast('该文件在未推送提交中无变更'); return; }
+    const r = await git(['reset', upstream]);
+    if (r.exit !== 0) { showToast('合并失败：' + r.stderr.trim()); return; }
+    const add = await git(['add', '--', relPath]);
+    if (add.exit !== 0) { showToast('合并失败：' + add.stderr.trim()); return; }
+    const cm = await git(['commit', '-m', '合并提交：' + relPath]);
+    if (cm.exit !== 0) { showToast('合并提交失败：' + cm.stderr.trim()); return; }
+    showToast('已把该文件未推送改动合并为 1 笔提交');
+    updateUi();
+    if (PluginAPI && PluginAPI.editor) PluginAPI.editor.reloadNote(relPath);
+  }
+
+  /* 提交该目录（右键目录 Git）：仅暂存并提交该目录下的变更到本地仓库。作者: 火 冰 */
+  async function commitDir(dir) {
+    await refreshVault();
+    const pathArg = dir ? dir : '.';
+    const st = await git(['status', '--porcelain', '--', pathArg]);
+    if (st.exit !== 0 || !st.stdout.trim()) { showToast('该目录下没有可提交的变更'); return; }
+    const add = await git(['add', '--', pathArg]);
+    if (add.exit !== 0) { showToast('git add 失败：' + add.stderr.trim()); return; }
+    const now = new Date();
+    function two(n) { return String(n).padStart(2, '0'); }
+    const msg = '提交目录：' + (dir || '根目录') + ' ' + now.getFullYear() + '-' + two(now.getMonth() + 1)
+      + '-' + two(now.getDate()) + ' ' + two(now.getHours()) + ':' + two(now.getMinutes());
+    const cm = await git(['commit', '-m', msg]);
+    if (cm.exit !== 0) { showToast('提交失败：' + cm.stderr.trim()); return; }
+    showToast('已提交该目录');
+    updateUi();
+  }
+
+  /* 合并提交（目录，右键目录 Git）：把该目录下所有文件相对跟踪远端的未推送改动合并为一笔仅含该目录的提交。
+   * reset(mixed) 撤出未推送提交（不动工作区）→ 仅暂存该目录 → 单独 commit；其它改动留工作区不丢。作者: 火 冰 */
+  async function squashDir(dir) {
+    await refreshVault();
+    const upstream = await currentUpstream();
+    if (!upstream) { showToast('未配置跟踪远端分支，无法合并提交'); return; }
+    const pathArg = dir ? dir : '.';
+    const chk = await git(['diff', upstream, 'HEAD', '--name-only', '--', pathArg]);
+    if (chk.exit === 0 && !chk.stdout.trim()) { showToast('该目录下未推送提交中无变更'); return; }
+    const r = await git(['reset', upstream]);
+    if (r.exit !== 0) { showToast('合并失败：' + r.stderr.trim()); return; }
+    const add = await git(['add', '--', pathArg]);
+    if (add.exit !== 0) { showToast('合并失败：' + add.stderr.trim()); return; }
+    const cm = await git(['commit', '-m', '合并提交目录：' + (dir || '根目录')]);
+    if (cm.exit !== 0) { showToast('合并提交失败：' + cm.stderr.trim()); return; }
+    showToast('已把该目录未推送改动合并为 1 笔提交');
+    updateUi();
+  }
+
+  /* 对比上次提交（右键 Git 二级菜单·对比）：展示该文件工作区相对 HEAD（上次提交）的差异弹框。作者: 火 冰 */
+  async function diffWorkingModal(relPath) {
+    const s = await probe();
+    if (!s || !s.isRepo) { showToast('当前知识库尚未初始化 Git；请先初始化'); return; }
+    const r = await git(['diff', 'HEAD', '--', relPath]);
+    openModal('对比上次提交 · ' + relPath,
+      '<pre class="gsfh-diff">' + escapeHtml(r.exit === 0 && r.stdout ? r.stdout : '（无差异）') + '</pre>',
+      function (m) { m.classList.add('gitsync-modal-lg'); });
+  }
+
+  /* 放弃修改（右键 Git 二级菜单·回滚）：把该文件工作区改动回滚到上次提交内容（git checkout -- <path>），需确认。作者: 火 冰 */
+  async function revertWorkingFile(relPath) {
+    if (!confirm('放弃「' + relPath + '」未提交的修改，回滚到上次提交的内容？')) return;
+    await refreshVault();
+    const r = await git(['checkout', '--', relPath]);
+    if (r.exit !== 0) { showToast('回滚失败：' + r.stderr.trim()); return; }
+    showToast('已放弃修改：' + relPath.split('/').pop());
+    updateUi();
+    // 磁盘已回滚，刷新编辑器到磁盘真实内容（避免旧缓存被失焦自动保存写回覆盖回滚结果）
+    if (PluginAPI && PluginAPI.editor) PluginAPI.editor.reloadNote(relPath);
+  }
+
+  /* 提交该文件（右键 Git 二级菜单·提交）：仅暂存并提交指定笔记到本地仓库。作者: 火 冰 */
+  async function commitFile(relPath) {
+    await refreshVault();
+    const add = await git(['add', '--', relPath]);
+    if (add.exit !== 0) { showToast('git add 失败：' + add.stderr.trim()); return; }
+    const now = new Date();
+    function two(n) { return String(n).padStart(2, '0'); }
+    const msg = 'auto: update ' + now.getFullYear() + '-' + two(now.getMonth() + 1) + '-' + two(now.getDate())
+      + ' ' + two(now.getHours()) + ':' + two(now.getMinutes());
+    const cm = await git(['commit', '-m', msg]);
+    if (cm.exit !== 0) { showToast('提交失败：' + cm.stderr.trim()); return; }
+    showToast('已提交：' + relPath.split('/').pop());
+    updateUi();
   }
 
   /* Diff 弹框：fileRel=null 看整次提交；给定 fileRel 只看单个文件（GIT-10/12） */
@@ -342,6 +560,10 @@
     }
     showToast('已还原到版本 ' + hash.slice(0, 7));
     updateUi();
+    // 工作区已还原，当前打开的笔记也刷新到磁盘最近内容（防止旧缓存/失焦写回覆盖还原结果）
+    if (PluginAPI && PluginAPI.editor && typeof window.edCurrent === 'string' && window.edCurrent) {
+      PluginAPI.editor.reloadNote(window.edCurrent);
+    }
   }
 
   /* Git 设置弹框：自动提交开关/间隔、自动推送、远程地址、初始化/拉取 */
@@ -349,14 +571,17 @@
     const autoCommit = gset('autoCommit', true);
     const intervalMin = gset('intervalMin', 10);
     const autoPush = gset('autoPush', false);
+    const realTime = gset('realTime', false);
     openModal('Git Sync 设置',
       '<div class="gitsync-form">'
       + '<label class="gitsync-field"><input type="checkbox" id="gs-auto" ' + (autoCommit ? 'checked' : '') + '> 启用自动提交</label>'
       + '<label class="gitsync-field">间隔（分钟）<input type="number" id="gs-min" min="1" max="1440" value="' + intervalMin + '"></label>'
+      + '<label class="gitsync-field"><input type="checkbox" id="gs-rt" ' + (realTime ? 'checked' : '') + '> 实时提交（文件变动即提交本地仓库）</label>'
       + '<label class="gitsync-field"><input type="checkbox" id="gs-push" ' + (autoPush ? 'checked' : '') + '> 自动提交后自动推送远程</label>'
       + '<div class="gitsync-field">远程地址<input type="text" id="gs-remote" value="' + (window.__gsRemote || '') + '" placeholder="https:// 或 git@ 仓库地址"></div>'
       + '<div class="gitsync-form-actions">'
       + '<button data-act="set-remote">设置远程</button>'
+      + '<button data-act="gitignore">编辑 .gitignore</button>'
       + '<button data-act="init">初始化仓库</button>'
       + '<button data-act="pull">拉取</button>'
       + '<button data-act="save" class="primary">保存</button>'
@@ -370,14 +595,51 @@
             sset('autoCommit', m.querySelector('#gs-auto').checked);
             sset('intervalMin', Math.max(1, parseInt(m.querySelector('#gs-min').value || '10', 10)));
             sset('autoPush', m.querySelector('#gs-push').checked);
+            sset('realTime', m.querySelector('#gs-rt').checked);
+            window.__gsRealTime = m.querySelector('#gs-rt').checked;
             saveRemote(m.querySelector('#gs-remote').value.trim());
             window.__gsAuto = m.querySelector('#gs-auto').checked;
             startTimer(); // 重启定时器以应用新的开关/间隔
             showToast('设置已保存');
             closeModal();
           } else if (act === 'set-remote') { saveRemote(m.querySelector('#gs-remote').value.trim()); }
+          else if (act === 'gitignore') { editGitignoreModal(); }
           else if (act === 'init') { await initRepo(); statusToast(); }
           else if (act === 'pull') { await pullNow(); }
+        });
+      });
+  }
+
+  /* 编辑当前知识库 .gitignore（自动提交忽略规则，GIT 过滤设置）：读库根 .gitignore 到文本域，
+   * 保存写回库根。git add . 天然尊重 .gitignore，因此忽略的路径不会进入自动提交。作者: 火 冰 */
+  async function editGitignoreModal() {
+    await refreshVault();
+    if (!vaultPath) { showToast('无法定位知识库'); return; }
+    let content = '';
+    try { content = await window.noteDesktop.readNote('.gitignore'); }
+    catch (e) { /* 尚未创建 .gitignore，按空内容处理 */ }
+    openModal('编辑 .gitignore（自动提交忽略规则）',
+      '<div class="gitsync-form">'
+      + '<p class="gitsync-hint">每行一条忽略规则（相对库根），被忽略的文件不会进入自动提交。'
+      + '示例：<code>.obsidian/</code>、<code>downloads/</code>、<code>*.tmp</code></p>'
+      + '<textarea id="gs-gitignore" class="gitsync-gitignore" spellcheck="false">' + escapeHtml(content) + '</textarea>'
+      + '<div class="gitsync-form-actions">'
+      + '<button data-act="cancel">取消</button>'
+      + '<button data-act="save" class="primary">保存</button>'
+      + '</div></div>',
+      function (m) {
+        m.addEventListener('click', async function (e) {
+          const b = e.target.closest('[data-act]');
+          if (!b) return;
+          const act = b.getAttribute('data-act');
+          if (act === 'cancel') { closeModal(); return; }
+          if (act === 'save') {
+            const text = m.querySelector('#gs-gitignore').value;
+            const res = await window.noteDesktop.saveNote('.gitignore', text);
+            closeModal();
+            showToast('已保存 .gitignore');
+            updateUi();
+          }
         });
       });
   }
@@ -423,9 +685,8 @@
     });
   }
 
-  /* ------------------ Git 状态指示 + 目录树着色（GIT-13/14） ------------------ */
+  /* ------------------ 目录树状态着色（GIT-14；GIT-13 常驻状态条已取消） ------------------ */
 
-  var statusEl = null;   // 常驻状态条元素
   var statusBusy = false; // 防并发轮询
   var statusTimer = null;
 
@@ -451,54 +712,56 @@
     return { untracked: untracked, staged: staged, modified: modified };
   }
 
-  /* 目录树状态着色（GIT-14，对齐 IDEA 深色）：未跟踪=红橙 / 暂存=绿 / 修改=蓝 */
+  /* 把 Git 状态集写进全局着色映射 window.__gsColoring（path → 'untracked'|'staged'|'modified'）。
+   * 宿主 renderFileTree 渲染 .tree-file 时直接读取拼接 class，实现「渲染即带状态色」，
+   * 避免 DOM 重建后再异步补色造成闪烁。作者: 火 冰 */
+  function buildColoringMap(g) {
+    const map = window.__gsColoring || (window.__gsColoring = {});
+    for (const k in map) delete map[k];
+    g.untracked.forEach(function (p) { map[p] = 'untracked'; });
+    g.staged.forEach(function (p) { map[p] = 'staged'; });
+    g.modified.forEach(function (p) { map[p] = 'modified'; });
+  }
+
+  /* 目录树状态着色（GIT-14，对齐 IDEA 深色）：未跟踪=红橙 / 暂存=绿 / 修改=蓝。
+   * 更新全局着色映射供宿主渲染时读取；并对已存在 DOM 就地补/改 class（首帧或宿主未重渲染时兜底）。
+   * 目录不单独着色，使用宿主默认色。作者: 火 冰 */
   async function applyTreeColoring() {
     if (!document.querySelector('.tree-file')) return;
     const g = await collectGitState();
+    buildColoringMap(g);
     const nodes = document.querySelectorAll('.tree-file[data-path]');
-    const dirtyFolders = new Set();
-    g.untracked.forEach(addFolder); g.staged.forEach(addFolder); g.modified.forEach(addFolder);
-    function addFolder(p) { const i = p.indexOf('/'); if (i > 0) dirtyFolders.add(p.slice(0, i)); }
     nodes.forEach(function (n) {
       // 已打开(高亮)节点保持原样式，避免绿底上的彩色文字难读
       if ((n.style.cssText || '').indexOf('note-brand-600') !== -1) return;
       const p = n.getAttribute('data-path') || '';
+      const cls = window.__gsColoring[p] || '';
       n.classList.remove('gs-untracked', 'gs-staged', 'gs-modified');
-      if (g.untracked.has(p)) n.classList.add('gs-untracked');
-      else if (g.staged.has(p)) n.classList.add('gs-staged');
-      else if (g.modified.has(p)) n.classList.add('gs-modified');
-    });
-    document.querySelectorAll('.tree-folder[data-folder]').forEach(function (f) {
-      f.classList.toggle('gs-dirty', dirtyFolders.has(f.getAttribute('data-folder') || ''));
+      if (cls) n.classList.add('gs-' + cls);
     });
   }
 
-  /* 常驻状态条创建（懒加载） */
-  function ensureStatusBar() {
-    if (statusEl && statusEl.parentNode) return statusEl;
-    statusEl = document.createElement('button');
-    statusEl.id = 'gitsync-statusbar';
-    statusEl.type = 'button';
-    statusEl.addEventListener('click', function () { statusToast(); });
-    document.body.appendChild(statusEl);
-    return statusEl;
+  /* 清空目录树所有状态着色并清空全局着色映射（非仓库时调用，避免残留过时颜色）。作者: 火 冰 */
+  function clearTreeColoring() {
+    const map = window.__gsColoring;
+    if (map) { for (const k in map) delete map[k]; }
+    const nodes = document.querySelectorAll('.tree-file[data-path]');
+    nodes.forEach(function (n) {
+      n.classList.remove('gs-untracked', 'gs-staged', 'gs-modified');
+    });
   }
-  function showStatus(text) { ensureStatusBar().textContent = text; statusEl.style.display = 'inline-flex'; }
-  function hideStatusBar() { if (statusEl) statusEl.style.display = 'none'; }
 
-  /* 刷新常驻状态条（分支 · 待提交数）并触发目录树着色；失败降级隐藏计数不影响默认样式 */
+  /* 统一刷新目录树着色（GIT-14）：非仓库清空颜色，仓库则更新映射并就地补/改色。
+   * GIT-13 常驻状态条已取消（左下贴边会遮挡目录区），状态反馈收敛到目录树状态着色。作者: 火 冰 */
   async function refreshStatusBar() {
     if (statusBusy) return;
     statusBusy = true;
     try {
       const p = await refreshVault();
       const s = p ? await probe() : null;
-      if (!s || !s.installed) { hideStatusBar(); return; }
-      if (!s.isRepo) { showStatus('Git · 未初始化'); return; }
+      if (!s || !s.installed) { clearTreeColoring(); return; }
+      if (!s.isRepo) { clearTreeColoring(); return; }
       await git(['config', 'core.quotepath', 'false']);
-      const g = await collectGitState();
-      const dirty = g.untracked.size + g.staged.size + g.modified.size;
-      showStatus('Git · ' + (s.branch || '无分支') + (dirty ? ' · 变更 ' + dirty : ''));
       await applyTreeColoring();
     } catch (e) { /* 静默降级 */ }
     finally { statusBusy = false; }
@@ -545,17 +808,34 @@
     }
     startTimer();
     startStatusTimer(); // 常驻状态条 + 目录树着色轮询
+    bindFileTreeObserver(); // 文件变动即时调色 + 实时提交：监听文件树重绘
     refreshStatusBar();
   })();
 
   /* 向宿主注册全部 actionKey 回调 */
   PluginAPI.register(pluginId, {
-    'git-status': statusToast,
+    'git-sync': syncNow,  // Ribbon 同步：未初始化→确认初始化；已初始化→提交
+    'git-status': syncNow, // 兼容旧 ribbon 若仍走 git-status，改为同步
     'git-commit': function () { commitNow(false); },
     'git-log': historyModal,
     'git-revert': historyModal,
     'git-file-log': function () { const p = resolveFileTarget(); if (!p) { showToast('请先右键选择一篇笔记，或打开当前笔记'); return; } fileLogModal(p); },
     'git-file-revert': function () { const p = resolveFileTarget(); if (!p) { showToast('请先右键选择一篇笔记，或打开当前笔记'); return; } fileLogModal(p); },
+    /* 右键 Git 二级菜单（GIT-17）：目标文件来自 resolveFileTarget（右键注入） */
+    'gs-ctx-diff': function () { const p = resolveFileTarget(); if (!p) { showToast('请先右键选择一篇笔记，或打开当前笔记'); return; } diffWorkingModal(p); },
+    'gs-ctx-history': function () { const p = resolveFileTarget(); if (!p) { showToast('请先右键选择一篇笔记，或打开当前笔记'); return; } fileLogModal(p); },
+    'gs-ctx-revert': function () { const p = resolveFileTarget(); if (!p) { showToast('请先右键选择一篇笔记，或打开当前笔记'); return; } revertWorkingFile(p); },
+    'gs-ctx-commit': function () { const p = resolveFileTarget(); if (!p) { showToast('请先右键选择一篇笔记，或打开当前笔记'); return; } commitFile(p); },
+    'gs-ctx-pull': function () { pullNow(); },
+    'gs-ctx-push': function () { pushNow(false); },
+    'gs-ctx-squash': function () { const p = resolveFileTarget(); if (!p) { showToast('请先右键选择一篇笔记，或打开当前笔记'); return; } squashFile(p); },
+    'gs-ctx-repo-commit': function () { commitNow(false); },
+    'gs-ctx-repo-squash': function () { squashAll(); },
+    'gs-ctx-repo-pull': function () { pullNow(); },
+    'gs-ctx-repo-push': function () { pushNow(false); },
+    'gs-ctx-dir-commit': function () { const d = resolveDirTarget(); if (d === null) { showToast('请先右键选择目录'); return; } commitDir(d); },
+    'gs-ctx-dir-squash': function () { const d = resolveDirTarget(); if (d === null) { showToast('请先右键选择目录'); return; } squashDir(d); },
+    'gs-ctx-dir-push': function () { pushNow(false); },
     'git-sync-now': function () { commitNow(true); },
     'git-auto': toggleAutoCommit,
     'git-clone': cloneGit,

@@ -387,16 +387,20 @@ function materializePlugin(rawPlugin) {
       });
     });
   }
-  // contextMenus: 同样把 actionKey 换成函数
+  // contextMenus: 把 actionKey 换成函数（支持 children 二级菜单递归转换，作者: 火 冰）
   if (result.contextMenus) {
     const slots = result.contextMenus;
     Object.keys(slots).forEach(function (slot) {
       if (Array.isArray(slots[slot])) {
-        slots[slot] = slots[slot].map(function (m) {
-          return Object.assign({}, m, {
-            action: actions[m.actionKey] || function () { alert('插件菜单未实现：' + m.actionKey); },
-          });
-        });
+        const walk = function (m) {
+          const out = Object.assign({}, m);
+          if (m.actionKey) {
+            out.action = actions[m.actionKey] || function () { alert('插件菜单未实现：' + m.actionKey); };
+          }
+          if (Array.isArray(m.children)) out.children = m.children.map(walk);
+          return out;
+        };
+        slots[slot] = slots[slot].map(walk);
       }
     });
   }
@@ -678,7 +682,7 @@ const DEFAULT_PLUGIN_DATA = [
     "color": "#22C55E", "cat": "sync", "desc": "Git版本控制同步，为笔记库提供完整的版本历史与分支管理。",
     "downloads": 6700, "rating": 4.5, "installed": false,
     "version": "1.0.0",
-    "ribbon": { "icon": "git-branch", "title": "Git Sync" },
+    "ribbon": { "icon": "git-branch", "title": "Git Sync", "actionKey": "git-sync" },
     "commands": [
       { "icon": "git-commit", "label": "提交当前变更", "actionKey": "git-commit" },
       { "icon": "git-pull", "label": "拉取最新代码", "actionKey": "git-pull" },
@@ -867,6 +871,9 @@ globalThis.PluginAPI = {
     /* 打开任意笔记（编辑区新开页签）：供编辑器能力插件（如 markdown-editor 链接导航）调用。
      *  委托宿主 openNote（editor-host.js 闭包内全局函数）。作者: 火 冰 */
     openNote: function (path) { if (typeof openNote === 'function' && path) openNote(path); },
+    /* 从磁盘强制重载一篇笔记（清缓存后重读）：供插件在外部改动文件（如 Git 回滚/还原）后刷新编辑器。
+     * 委托宿主 reloadNote（editor-host.js）。作者: 火 冰 */
+    reloadNote: function (path) { if (typeof reloadNote === 'function' && path) reloadNote(path); },
     /* 列出知识库全部笔记（含 path/name/folder/mtime/size）：供插件查询笔记列表。作者: 火 冰 */
     listNotes: function () { return (typeof noteStore !== 'undefined' && noteStore && noteStore.list) ? noteStore.list() : Promise.resolve([]); },
     /* 编辑器主题抽象：宿主把 vditor 深浅切换与样式注入收口在内部，插件只读/触发，不直接调 vditor。 */
@@ -1086,6 +1093,10 @@ async function loadDirPlugins() {
     else pluginData.push(full);
 
     // 4) 安装到 PluginManager（刷新 Ribbon / 命令面板 / 右键菜单）
+    //    目录插件与内置 mock 同 id 时，内置 mock 已先被 install（install 按 id 去重会跳过目录插件），
+    //    导致目录插件声明的 toolbar 顶栏按钮 / commands 命令与默认快捷键从未注册。
+    //    修复：install 前先卸载同 id 旧条目，让目录插件的扩展点（顶栏图标、cycle-theme + Ctrl+Q）真正生效。作者: 火 冰
+    if (pluginManager.list().some(function (p) { return p.id === id; })) pluginManager.uninstall(id);
     pluginManager.install(full);
 
     // 5) 配置同步：新解压插件或版本号变化时，为其 settings 补齐默认值并记录版本

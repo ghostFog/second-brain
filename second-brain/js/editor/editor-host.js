@@ -156,6 +156,15 @@
     if (p && !p.hidden) renderIndexPanel();
   }
 
+  /* 从磁盘强制重载一篇笔记（清缓存 + 去脏后重读）：供插件在外部改动文件（如 Git 回滚/还原）后
+   * 刷新编辑器，使编辑区与磁盘真实内容一致，避免把旧缓存内容写回覆盖。作者: 火 冰 */
+  function reloadNote(path) {
+    if (!path) return;
+    if (edOutdated[path] != null) delete edOutdated[path];
+    edDirty.delete(path);
+    if (path === edCurrent) openNote(path);
+  }
+
   /* 把当前打开的标签页路径列表持久化到 .second-brain/recent.json（桌面版桥接）。
    * 持久化时把当前激活（最后打开/切换）的笔记移到列表末尾，启动恢复据此定位「最后打开的文件」。 */
   function persistRecentTabs() {
@@ -233,6 +242,10 @@
     // （串文件/覆盖丢失），或 A 的去抖 timer 被 B 的输入 clearTimeout 清掉导致 A 的修改不保存。
     const p = edCurrent;
     if (!p) return;
+    // 非用户实际修改：内容与已缓存一致且本不是脏文件（失焦同步/程序回灌/blur 重复）→ 忽略，
+    // 不写文件，避免把旧/空内容覆盖回磁盘。作者: 火 冰
+    const prev = edOutdated[p] || '';
+    if (prev === mdText && !edDirty.has(p)) return;
     edOutdated[p] = mdText;
     edDirty.add(p); // 内容变化记为「有未保存更改」
     const cnt = $('ed-count'); if (cnt) cnt.textContent = countChars(mdText) + ' 字';

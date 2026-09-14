@@ -90,6 +90,29 @@
   border-radius: 7px;
 }
 .gitsync-field input:focus { outline: none; border-color: var(--note-brand-500, #8b5cf6); }
+/* .gitignore 编辑文本域（过滤设置） */
+.gitsync-hint { font-size: 12px; line-height: 1.6; color: var(--note-ink-3, #9aa3b5); margin: 0 0 6px; }
+.gitsync-hint code {
+  font-family: ui-monospace, Consolas, monospace;
+  background: var(--note-surface, #292f3d);
+  border: 1px solid var(--note-border, #333a4a);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.gitsync-gitignore {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 200px;
+  resize: vertical;
+  background: var(--note-input-bg, #1a1f2c);
+  border: 1px solid var(--note-border, #333a4a);
+  color: var(--note-ink-1, #e6e9f2);
+  padding: 8px 10px;
+  border-radius: 8px;
+  white-space: pre;
+}
+.gitsync-gitignore:focus { outline: none; border-color: var(--note-brand-500, #8b5cf6); }
 .gitsync-form-actions { display: flex; gap: 8px; margin-top: 4px; }
 .gitsync-form-actions button.primary {
   background: var(--note-brand-600, #7c3aed);
@@ -143,34 +166,113 @@
 .gitsync-file-status.gs-d { color: #FF7043; }
 .gitsync-file-status.gs-r, .gitsync-file-status.gs-c { color: #E8A33D; }
 
-/* 常驻 Git 状态条（GIT-13，左下贴边） */
-.gitsync-statusbar {
-  position: fixed;
-  left: 14px;
-  bottom: 14px;
-  z-index: 120;
-  display: none;
+/* 单文件历史弹框（GIT-10）：左右布局——左列提交列表，右列对比框。弹框加大。 */
+.gitsync-modal-lg { width: 880px; max-width: 96vw; height: 76vh; }
+.gitsync-modal-lg .gitsync-modal-body {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px 16px;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.gitsync-fhist { display: flex; gap: 14px; flex: 1; min-width: 0; min-height: 0; }
+.gitsync-fhist-side {
+  width: 268px;
+  flex-shrink: 0;
+  overflow: auto;
+  border-right: 1px solid var(--note-border, #333a4a);
+  padding-right: 8px;
+}
+.gitsync-fhist-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.gsfh-item {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  font-family: ui-monospace, Consolas, monospace;
-  font-size: 11px;
-  line-height: 1;
-  border-radius: 999px;
-  border: 1px solid var(--note-border, #333a4a);
-  background: var(--note-surface-2, #2b3040);
-  color: var(--note-ink-2, #c3c9d6);
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 7px;
   cursor: pointer;
 }
-.gitsync-statusbar:hover { color: var(--note-brand-400, #a78bfa); border-color: var(--note-brand-500, #8b5cf6); }
+.gsfh-item:hover { background: var(--note-surface-2, #2b3040); }
+.gsfh-item.is-active { background: var(--note-brand-600, #7c3aed); }
+.gsfh-hash {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--note-brand-400, #a78bfa);
+}
+.gsfh-item.is-active .gsfh-hash { color: #fff; }
+.gsfh-time { font-size: 11px; color: var(--note-ink-3, #9aa3b5); }
+.gsfh-item.is-active .gsfh-time { color: #e5e7eb; }
+.gsfh-revert {
+  margin-left: auto;
+  flex-shrink: 0;
+  border: 1px solid var(--note-border, #333a4a);
+  background: transparent;
+  color: var(--note-ink-3, #9aa3b5);
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.gsfh-revert:hover { border-color: #ef4444; color: #fca5a5; }
+.gsfh-mode {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0 10px;
+  border-bottom: 1px solid var(--note-border, #333a4a);
+  margin-bottom: 10px;
+}
+.gsfh-mode-text { font-size: 12px; color: var(--note-ink-3, #9aa3b5); }
+/* 滑动开关：开启=对比本地文件，关闭=对比上一版本 */
+.gsfh-toggle { display: inline-flex; align-items: center; cursor: pointer; }
+.gsfh-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.gsfh-switch {
+  width: 34px;
+  height: 18px;
+  background: var(--note-input-bg, #1a1f2c);
+  border: 1px solid var(--note-border, #333a4a);
+  border-radius: 999px;
+  position: relative;
+  transition: background 0.2s, border-color 0.2s;
+  flex-shrink: 0;
+}
+.gsfh-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--note-ink-3, #9aa3b5);
+  transition: transform 0.2s, background 0.2s;
+}
+.gsfh-toggle input:checked + .gsfh-switch {
+  background: var(--note-brand-600, #7c3aed);
+  border-color: var(--note-brand-600, #7c3aed);
+}
+.gsfh-toggle input:checked + .gsfh-switch::after { transform: translateX(16px); background: #fff; }
+.gsfh-diff {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--note-surface, #292f3d);
+  border: 1px solid var(--note-border, #333a4a);
+  border-radius: 8px;
+  padding: 10px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
 
 /* 目录树状态着色（GIT-14，对齐 IDEA 深色调色板）：
-   未跟踪=红橙 / 已加入跟踪(暂存)=绿 / 修改=蓝 / 未变动=默认白 */
+   未跟踪=红橙 / 已加入跟踪(暂存)=绿 / 修改=蓝 / 未变动=默认白；
+   目录自身用宿主默认色，不再单独着色（避免橙黄干扰整体视觉）。 */
 .tree-file.gs-untracked .flex-1.truncate,
 .tree-file.gs-untracked > i { color: #FF7043 !important; }
 .tree-file.gs-staged .flex-1.truncate,
 .tree-file.gs-staged > i { color: #7CB342 !important; }
 .tree-file.gs-modified .flex-1.truncate,
 .tree-file.gs-modified > i { color: #4D9DE0 !important; }
-/* 含变更的目录：名称加细点+变色提示（不整块着色） */
-.tree-folder.gs-dirty .truncate { color: #E8A33D !important; }

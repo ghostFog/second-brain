@@ -50,6 +50,22 @@ function pluginFileTreeItems(slot, kind, target) {
   if (typeof pluginManager === 'undefined' || !pluginManager || typeof pluginManager.getContextMenus !== 'function') return [];
   const items = pluginManager.getContextMenus(slot);
   if (!items || !items.length) return [];
+  // 菜单项点击时会先 closeFileTreeContextMenu()（其中会把 __pluginCtxNote/__pluginCtxFolder 清空），
+  // 导致插件动作里 resolveFileTarget() 取不到刚才右键的笔记。这里给每个 action（含 children 二级子项）
+  // 包一层：执行前恢复目标路径，保证「右键笔记 → Git 二级菜单」各操作能拿到该笔记路径。作者: 火 冰
+  const bindCtx = function (it) {
+    if (!it) return;
+    if (typeof it.action === 'function') {
+      const orig = it.action;
+      it.action = function () {
+        if (kind === 'note') window.__pluginCtxNote = target;
+        else if (kind === 'folder') window.__pluginCtxFolder = target;
+        return orig.apply(this, arguments);
+      };
+    }
+    if (Array.isArray(it.children)) it.children.forEach(bindCtx);
+  };
+  items.forEach(bindCtx);
   if (kind === 'note') window.__pluginCtxNote = target;
   else if (kind === 'folder') window.__pluginCtxFolder = target;
   return ['-', ...items];
@@ -315,6 +331,7 @@ function bindFileTreeContextMenu() {
       treeSpec((showHidden ? '隐藏隐藏目录' : '显示隐藏目录'), showHidden ? 'eye-off' : 'eye', () => toggleHiddenFiles()),
       '-',
       treeSpec('重建笔记数据', 'refresh-cw', () => rebuildMeta('')),
+      ...pluginFileTreeItems('file-tree-blank', 'root', ''),
     ]);
   });
 

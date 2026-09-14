@@ -9,6 +9,13 @@
   /* 渲染文件树 */
   function renderFileTree(notes) {
     const tree = $('file-tree'); if (!tree) return;
+    // 取 Git 状态着色 class：由 Git Sync 插件写入 window.__gsColoring（path → untracked/staged/modified）。
+    // 渲染时直接拼进 class，避免 DOM 重建后再异步补色造成「先灰白再上色」的闪烁；已打开节点保持高亮白色不上状态色。
+    function gsTreeClass(path) {
+      if (path === edCurrent) return '';
+      const map = window.__gsColoring;
+      return (map && map[path]) ? ' gs-' + map[path] : '';
+    }
     // 默认隐藏以 . 开头的目录/文件（如 .obsidian），可在文件树空白区右键菜单切换显示（作者: 火 冰）
     if (!restoreS('showHidden', false)) {
       notes = notes.filter(n => !n.path.split('/').some(seg => seg.startsWith('.')));
@@ -57,7 +64,7 @@
       (filesByFolder.get(key) || []).forEach(n => {
         if (n.isFolder) return;
         const active = n.path === edCurrent;
-        html += '<div class="tree-file flex items-center gap-1.5 pr-2 py-1 cursor-pointer" draggable="true" data-type="note" data-path="' + esc(n.path) + '" data-name="' + esc(n.name) + '" title="' + esc(n.path) + '" style="' + (fNode.depth ? 'padding-left:' + (24 + fNode.depth * 24) + 'px;' : 'padding-left:24px;') + (active ? 'background: var(--note-brand-600); color: #FFFFFF;' : 'color: var(--note-ink-2);') + '">'
+        html += '<div class="tree-file flex items-center gap-1.5 pr-2 py-1 cursor-pointer' + gsTreeClass(n.path) + '" draggable="true" data-type="note" data-path="' + esc(n.path) + '" data-name="' + esc(n.name) + '" title="' + esc(n.path) + '" style="' + (fNode.depth ? 'padding-left:' + (24 + fNode.depth * 24) + 'px;' : 'padding-left:24px;') + (active ? 'background: var(--note-brand-600); color: #FFFFFF;' : 'color: var(--note-ink-2);') + '">'
           + '<i data-lucide="file-text" class="w-3.5 h-3.5 shrink-0" style="color: ' + (active ? '#FFFFFF' : 'var(--note-ink-3)') + ';"></i>'
           + '<span class="flex-1 truncate">' + esc(n.name) + '</span>'
           + '<span class="text-[10px] shrink-0" style="color: ' + (active ? 'rgba(255,255,255,0.7)' : 'var(--note-ink-3)') + ';">' + relDate(n.mtime) + '</span>'
@@ -69,7 +76,7 @@
     (filesByFolder.get('') || []).forEach(n => {
       if (n.isFolder) return;
       const active = n.path === edCurrent;
-      html += '<div class="tree-file flex items-center gap-1.5 pl-6 pr-2 py-1 cursor-pointer" draggable="true" data-type="note" data-path="' + esc(n.path) + '" data-name="' + esc(n.name) + '" title="' + esc(n.path) + '" style="' + (active ? 'background: var(--note-brand-600); color: #FFFFFF;' : 'color: var(--note-ink-2);') + '">'
+      html += '<div class="tree-file flex items-center gap-1.5 pl-6 pr-2 py-1 cursor-pointer' + gsTreeClass(n.path) + '" draggable="true" data-type="note" data-path="' + esc(n.path) + '" data-name="' + esc(n.name) + '" title="' + esc(n.path) + '" style="' + (active ? 'background: var(--note-brand-600); color: #FFFFFF;' : 'color: var(--note-ink-2);') + '">'
         + '<i data-lucide="file-text" class="w-3.5 h-3.5 shrink-0" style="color: ' + (active ? '#FFFFFF' : 'var(--note-ink-3)') + ';"></i>'
         + '<span class="flex-1 truncate">' + esc(n.name) + '</span>'
         + '<span class="text-[10px] shrink-0" style="color: ' + (active ? 'rgba(255,255,255,0.7)' : 'var(--note-ink-3)') + ';">' + relDate(n.mtime) + '</span>'
