@@ -1617,7 +1617,7 @@ vaultHandle('plugins:reveal', async () => {
 /* Git 允许执行的子命令白名单（缺失在前置位，args[0] 必须命中） */
 const GIT_ALLOWED_SUBCMDS = new Set([
   'init', 'status', 'add', 'commit', 'log', 'show', 'diff',
-  'remote', 'push', 'pull', 'rev-parse', 'ls-files', 'ls-remote', 'config', 'checkout',
+  'remote', 'push', 'pull', 'rev-parse', 'ls-files', 'ls-remote', 'config', 'checkout', 'clean',
 ]);
 
 /* 校验并执行一条 git 命令：req = { cwd, args }。返回 { exit, stdout, stderr }。

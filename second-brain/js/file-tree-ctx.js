@@ -16,6 +16,9 @@ function closeFileTreeContextMenu() {
   const ov = document.getElementById('tree-ctx-backdrop');
   if (m) m.remove();
   if (ov) ov.remove();
+  // 清除注入给插件的右键目标路径（防串库/串操作）
+  window.__pluginCtxNote = null;
+  window.__pluginCtxFolder = null;
 }
 
 /* 便捷：构造一个普通菜单项 */
@@ -36,6 +39,20 @@ async function listDirs() {
     const dirs = Array.from(set).sort((a, b) => a.localeCompare(b, 'zh'));
     return dirs;
   } catch (_) { return []; }
+}
+
+/* 取某 slot 的插件右键菜单项；在弹菜单前把目标路径暴露给插件
+ * （__pluginCtxNote/__pluginCtxFolder），供插件按目标文件/目录操作。
+ * slot: 'file-tree'|'file-tree-folder'；kind: 'note'|'folder'；target: 相对库根路径（可能为空串=根）。
+ * 无已启用的插件菜单项时返回 []（不产生多余分隔线）。
+ * 作者: 火 冰 */
+function pluginFileTreeItems(slot, kind, target) {
+  if (typeof pluginManager === 'undefined' || !pluginManager || typeof pluginManager.getContextMenus !== 'function') return [];
+  const items = pluginManager.getContextMenus(slot);
+  if (!items || !items.length) return [];
+  if (kind === 'note') window.__pluginCtxNote = target;
+  else if (kind === 'folder') window.__pluginCtxFolder = target;
+  return ['-', ...items];
 }
 
 /* 资源管理器定位桌面文件/目录；网页版提示仅桌面版可用。
@@ -261,6 +278,7 @@ function bindFileTreeContextMenu() {
         '-',
         treeSpec('删除目录', 'trash-2', () => actDeleteDir(targetDir)),
         treeSpec('重建笔记数据', 'refresh-cw', () => rebuildMeta(targetDir)),
+        ...pluginFileTreeItems('file-tree-folder', 'folder', targetDir),
       ]);
       return;
     }
@@ -283,6 +301,7 @@ function bindFileTreeContextMenu() {
         treeSpec('重命名', 'edit-3', () => renameNoteFile(targetPath)),
         '-',
         treeSpec('删除笔记', 'trash-2', () => actDeleteNote(targetPath)),
+        ...pluginFileTreeItems('file-tree', 'note', targetPath),
       ]);
       return;
     }

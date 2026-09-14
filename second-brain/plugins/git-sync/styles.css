@@ -114,3 +114,63 @@
   overflow: auto;
   white-space: pre-wrap;
 }
+
+/* 历史弹框：每次提交的改动文件清单（GIT-12） */
+.gitsync-files {
+  margin: 4px 0 8px 6px;
+  border-left: 2px solid var(--note-border, #333a4a);
+  padding-left: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.gitsync-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--note-ink-2, #c3c9d6);
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+  min-width: 0;
+}
+.gitsync-file:hover { background: var(--note-surface-2, #2b3040); color: var(--note-brand-400, #a78bfa); }
+.gitsync-filepath { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gitsync-file-status { width: 14px; text-align: center; font-size: 10px; font-weight: 700; flex-shrink: 0; }
+.gitsync-file-status.gs-m { color: #4D9DE0; }
+.gitsync-file-status.gs-a { color: #7CB342; }
+.gitsync-file-status.gs-d { color: #FF7043; }
+.gitsync-file-status.gs-r, .gitsync-file-status.gs-c { color: #E8A33D; }
+
+/* 常驻 Git 状态条（GIT-13，左下贴边） */
+.gitsync-statusbar {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 120;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 999px;
+  border: 1px solid var(--note-border, #333a4a);
+  background: var(--note-surface-2, #2b3040);
+  color: var(--note-ink-2, #c3c9d6);
+  cursor: pointer;
+}
+.gitsync-statusbar:hover { color: var(--note-brand-400, #a78bfa); border-color: var(--note-brand-500, #8b5cf6); }
+
+/* 目录树状态着色（GIT-14，对齐 IDEA 深色调色板）：
+   未跟踪=红橙 / 已加入跟踪(暂存)=绿 / 修改=蓝 / 未变动=默认白 */
+.tree-file.gs-untracked .flex-1.truncate,
+.tree-file.gs-untracked > i { color: #FF7043 !important; }
+.tree-file.gs-staged .flex-1.truncate,
+.tree-file.gs-staged > i { color: #7CB342 !important; }
+.tree-file.gs-modified .flex-1.truncate,
+.tree-file.gs-modified > i { color: #4D9DE0 !important; }
+/* 含变更的目录：名称加细点+变色提示（不整块着色） */
+.tree-folder.gs-dirty .truncate { color: #E8A33D !important; }

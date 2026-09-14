@@ -19,6 +19,8 @@
     { "icon": "git-commit", "label": "提交当前变更", "actionKey": "git-commit" },
     { "icon": "history", "label": "查看版本历史", "actionKey": "git-log" },
     { "icon": "undo-2", "label": "还原到版本…", "actionKey": "git-revert" },
+    { "icon": "file-history", "label": "Git: 查看当前笔记历史", "actionKey": "git-file-log" },
+    { "icon": "undo-2", "label": "Git: 还原当前笔记到版本…", "actionKey": "git-file-revert" },
     { "icon": "refresh-cw", "label": "立即同步（提交+推送）", "actionKey": "git-sync-now" },
     { "icon": "repeat", "label": "自动提交: 开/关", "actionKey": "git-auto" },
     { "icon": "cloud-upload", "label": "从 Git 打开知识库…", "actionKey": "git-clone" },
@@ -26,7 +28,8 @@
   ],
   "contextMenus": {
     "file-tree": [
-      { "label": "Git: 查看版本历史", "icon": "history", "actionKey": "git-log" }
+      { "label": "Git: 查看此文件历史", "icon": "history", "actionKey": "git-file-log" },
+      { "label": "Git: 还原此文件到版本…", "icon": "undo-2", "actionKey": "git-file-revert" }
     ]
   }
 }
