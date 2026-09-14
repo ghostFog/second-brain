@@ -65,6 +65,7 @@
 | Bug-051 | 已修复（测试完成） | 编辑区点击相对链接触发 404 弹窗：相对链接按 `note://` 基址解析到应用目录而非笔记目录；链接导航逻辑迁至 `md-linknav.js` 插件 + 主进程加 `will-navigate`/`setWindowOpenHandler` 兜底。 | [查看](bugs/Bug-051.md) |
 | Bug-052 | 已修复（测试完成） | 笔记内容被自动清空（文件只剩 1 字节换行）：vditor 首帧渲染完成前（异步窗口期）`blur` 经清空后的 `vdBuffer` 把空内容落入防抖保存覆盖磁盘；blur 加 `vdReady` 守卫 + 构建期保留 `vdBuffer` 兜底。 | [查看](bugs/Bug-052.md) |
 | Bug-053 | 已修复（测试完成） | 关闭主窗口报错「Object has been destroyed」（closed 回调访问已销毁的 webContents）：缓存 `wcId` 替代；主进程异常改走落盘 + 可复制错误弹窗（右键复制 + 日志路径 + 打开日志目录）；托盘菜单动态列出全部知识库。 | [查看](bugs/Bug-053.md) |
+| Bug-054 | 已修复（测试完成） | 多窗口时点击关闭按钮所有窗口都关闭：`win:close` 多窗口分支仍按全局 `closeAction='quit'` 直接 `app.quit()`；多窗口分支统一 `win.close()` 只关当前窗口，最后一个窗口关闭才退出程序。 | [查看](bugs/Bug-054.md) |
 
 > 说明（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——代码块语言选择器(chip)显隐保留为 Bug-011，编辑器链接弹框 `docButton` 那条纠正为 Bug-042。
 

@@ -307,8 +307,8 @@ ipcMain.on('win:devtools', (e) => {
   if (w) w.webContents.toggleDevTools();
 });
 /* 关闭按钮(×)行为分派（窗口级生命周期）：
- * - 多窗口：默认只关闭当前窗口（最后一个窗口关闭后由 window-all-closed 退出程序）；
- *   设置里选了「直接退出/缩小到托盘」则仍尊重设置（退出程序 / 藏当前窗口到托盘）。
+ * - 多窗口：关闭按钮 = 只关闭当前窗口（窗口级），无论 closeAction 设置如何；
+ *   最后一个窗口关闭后由 window-all-closed 退出程序。
  * - 单窗口：保持原有关闭按钮行为：仅首次（closeAsked=false）弹一次并记住选择，
  *   之后按 closeAction 执行（quit=直接退出；tray=缩小到托盘；confirm=设置里选的「每次询问」）。
  * 作者: 火 冰 */
@@ -316,10 +316,8 @@ ipcMain.on('win:close', (e) => {
   const win = winFromEvent(e) || mainWin;
   if (!win) return;
   const alive = BrowserWindow.getAllWindows().filter(function (w) { return !w.isDestroyed(); });
-  if (alive.length > 1) { // 多窗口：关闭按钮 = 关闭当前窗口（窗口级）
-    if (closeAction === 'quit') { app.quit(); return; }           // 设置「直接退出」
-    if (closeAction === 'tray') { hideWindowToTray(win); return; } // 设置「缩小到托盘」
-    win.close();                                                   // confirm/默认：销毁当前窗口
+  if (alive.length > 1) { // 多窗口：只关闭当前窗口，不退出程序（Bug-054 修复前 closeAction='quit' 会 app.quit 关掉全部窗口）
+    win.close();
     return;
   }
   if (!closeAsked) { // 首次询问一次并记住
