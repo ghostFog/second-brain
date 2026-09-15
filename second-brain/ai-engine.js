@@ -61,6 +61,11 @@ const RERANK_MODEL_LIB = [
   { id: 'bge-reranker-v2-m3-ONNX', repo: 'BGLAW/bge-reranker-v2-m3-onnx' },
 ];
 
+/* Ollama keep_alive 保活时长：-1=常驻内存直到手动卸载（卸载用 0 立即释放）。
+ * 设置页「加载（常驻内存）」与每次 Ollama 问答请求都带该值，避免被默认 5 分钟保活覆盖而自动卸载。
+ * 作者: 火 冰 */
+const OLLAMA_KEEP_ALIVE = -1;
+
 /* 系统提示词：约束模型只依据提供的笔记片段作答，避免幻觉 */
 const SYSTEM_PROMPT = [
   '你是一个基于个人知识库的第二大脑问答助手。',
@@ -1305,7 +1310,7 @@ class AiEngine {
    */
   async _streamOllama(messages, m, onToken) {
     const base = String(m.baseUrl || '').replace(/\/+$/, '');
-    const body = { model: m.model, messages, stream: true };
+    const body = { model: m.model, messages, stream: true, keep_alive: OLLAMA_KEEP_ALIVE };
     // 上下文长度 num_ctx：模型配置了则随请求携带（Ollama 用 options.num_ctx 指定）
     if (m.numCtx) body.options = { num_ctx: Number(m.numCtx) };
     const resp = await fetch(base + '/api/chat', {
@@ -1351,17 +1356,40 @@ class AiEngine {
   }
 
   /**
-   * 获取已配置的生成模型列表（用于顶部选择器展示：供应商 + 模型名称）。
-   * @returns {Promise<{models: Array<{id,provider,model}>, currentModelId: string}>}
+   * 获取已配置的生成模型列表（用于顶部选择器展示：供应商 + 模型名称 + 可用标记）。
+   * 可用性：远程 OpenAI 模型始终可用（无「运行中」概念）；本地 Ollama 模型按 baseUrl 去重查询
+   * /api/ps，仅当前正在运行的标记为可用（running=true）。
+   * @returns {Promise<{models: Array<{id,provider,model,running}>, currentModelId: string}>}
    * @author 火 冰
    */
   async listModels() {
-    const models = (this.cfg.models || []).map(m => ({
-      id: m.id,
-      provider: m.provider,
-      model: m.model,
-    }));
-    return { models, currentModelId: this.cfg.currentModelId };
+    const models = (this.cfg.models || []);
+    const urls = [];
+    // 对 Ollama 模型按 baseUrl 去重，避免同地址重复查询
+    models.forEach(function (m) {
+      if (m.provider !== 'ollama') return;
+      const u = String(m.baseUrl || '');
+      if (u && urls.indexOf(u) === -1) urls.push(u);
+    });
+    // key = baseUrl + '\u0000' + model 名，命中表示该 Ollama 模型正在运行
+    const runningSet = new Set();
+    await Promise.all(urls.map(async function (u) {
+      try {
+        const r = await this.listRunningModels(u);
+        (r && Array.isArray(r.models) ? r.models : []).forEach(function (md) {
+          if (md && md.name) runningSet.add(String(u) + '\u0000' + md.name);
+        });
+      } catch (e) { /* 服务不可达：该组 Ollama 模型视为不可用 */ }
+    }.bind(this)));
+    return {
+      models: models.map(m => ({
+        id: m.id,
+        provider: m.provider,
+        model: m.model,
+        running: m.provider === 'openai' || runningSet.has(String(m.baseUrl || '') + '\u0000' + m.model),
+      })),
+      currentModelId: this.cfg.currentModelId,
+    };
   }
 
   /**
@@ -1406,7 +1434,7 @@ class AiEngine {
       model: String(model || ''),
       prompt: '',
       stream: false,
-      keep_alive: isLoad ? '30m' : 0, // 加载保活 30 分钟；卸载立即释放
+      keep_alive: isLoad ? OLLAMA_KEEP_ALIVE : 0, // 加载常驻内存；卸载立即释放
     };
     if (isLoad && numCtx) body.options = { num_ctx: Number(numCtx) };
     const resp = await fetch(base + '/api/generate', {
