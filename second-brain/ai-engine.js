@@ -753,7 +753,7 @@ class AiEngine {
     let items = [];
     try { items = await fs.promises.readdir(dir, { withFileTypes: true }); } catch (e) { return out; }
     for (const it of items) {
-      if (it.name === '.second-brain') continue; // 跳过知识库元数据目录
+      if (it.name.startsWith('.')) continue; // 跳过隐藏目录/文件（.git/.obsidian/.second-brain 等），不建索引
       const abs = path.join(dir, it.name);
       const rel = base ? base + '/' + it.name : it.name;
       if (it.isDirectory()) out.push(...await this._scanMd(abs, rel));

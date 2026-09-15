@@ -1001,7 +1001,7 @@ async function scanVaultMeta() {
     let subBytes = 0, subNotes = 0;
     const dirKids = [];   // children 只记录子目录
     for (const it of items) {
-      if (it.name === META_DIR || it.name === RESOURCE_DIR) continue;                      // 跳过元数据目录与上传资源目录自身
+      if (it.name.startsWith('.')) continue;                                              // 跳过所有隐藏目录/文件（.git/.obsidian/.second-brain/.resources 等），不记录到元数据
       const childAbs = path.join(abs, it.name);
       const childRel = (dirRel ? dirRel + '/' : '') + it.name;
       if (it.isDirectory()) {
