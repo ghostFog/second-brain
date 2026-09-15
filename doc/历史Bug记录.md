@@ -69,7 +69,8 @@
 | Bug-055 | 已修复（待手动验证） | Git 回滚后编辑器仍显示旧内容且被失焦自动保存写回（旧/空内容覆盖回滚结果）：回滚只改磁盘、`edOutdated` 缓存未失效；宿主新增 `editor.reloadNote` 回滚后重载磁盘内容，`onEdInput` 加「内容未变且非脏不写文件」守卫，只有手动修改才写入。 | [查看](bugs/Bug-055.md) |
 | Bug-056 | 已修复（回归通过） | Minimal Theme 顶栏图标丢失 + 切换主题 Ctrl+Q 未生效：内置 mock 与目录插件同 id 被 `install` 按 id 去重跳过，目录插件的 toolbar/命令/快捷键从未注册；`loadDirPlugins` install 前先卸载同 id 旧条目，manifest `cycle-theme` 声明 `shortcut: Ctrl+Q`。 | [查看](bugs/Bug-056.md) |
 | Bug-057 | 已修复 | 托盘知识库列表「我的笔记库」重复：历史库里曾打开的默认库路径键与顶部固定项 `'__default__'` 键不归一，去重失效；`pushVault` 键改为「null 或等于默认库路径统一归一为 `'__default__'`」。 | [查看](bugs/Bug-057.md) |
-| Bug-058 | 已修复（测试完成） | 点击编辑器工具栏链接按钮报错 `Uncaught TypeError: (e.target.className || "").slice is not a function`：`#ed-vditor` 文档级 click 监听把 vditor 工具栏纳入检测，点击按钮时 `e.target` 是 SVG 图标，`className` 为 `SVGAnimatedString` 对象（无 `.slice`）致处理器崩溃；取 className 加类型守卫 / SVG 改用 `getAttribute('class')`。 | [查看](bugs/Bug-058.md) |
+| Bug-058 | 已修复（测试完成） | 点击编辑器工具栏链接按钮报错 `Uncaught TypeError: (e.target.className || "").slice is not a function`：`e.target` 是 SVG 图标时 `className` 为 `SVGAnimatedString` 对象无 `.slice`；取 className 加类型守卫 / SVG 改用 `getAttribute('class')`。 | [查看](bugs/Bug-058.md) |
+| Bug-059 | 已修复（测试完成） | 知识库单库多窗口：默认库每次触发「打开/恢复默认库」都新开窗口（G-13 单库单窗口失效）。`createWindow` 去重检查写在 `if (binding)` 内，默认库被归一为 `null` 直接跳过；改为统一按键查询（默认库 key 用 `vaultKey(binding || defaultVaultRoot())`），命中聚焦旧窗口。 | [查看](bugs/Bug-059.md) |
 
 > 说明（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——代码块语言选择器(chip)显隐保留为 Bug-011，编辑器链接弹框 `docButton` 那条纠正为 Bug-042。
 

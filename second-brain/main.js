@@ -182,13 +182,14 @@ function createWindow(vaultPath) {
   // 窗口绑定自己的知识库（null=跟随默认库）；切到默认库路径时也归一为 null（显示「我的笔记库」）
   const bindingRaw = (vaultPath == null || vaultPath === '') ? null : path.resolve(vaultPath);
   const binding = (bindingRaw && bindingRaw.toLowerCase() === defaultVaultRoot().toLowerCase()) ? null : bindingRaw;
-  if (binding) {
-    const existId = vaultWinId.get(vaultKey(binding));
-    if (existId !== undefined) {
-      const ex = BrowserWindow.fromId(existId);
-      if (ex && !ex.isDestroyed()) { showWindow(ex); return null; }
-      vaultWinId.delete(existId);
-    }
+  // 单库单窗口：无论默认库还是命名库都按「库 key」查已开窗口，命中则聚焦旧窗口（Bug-058 修复默认库也会新开窗口的回归）
+  // 默认库 key 与 syncVaultWinMap 登记口径一致：null → vaultKey(defaultVaultRoot())
+  const key = vaultKey(binding || defaultVaultRoot());
+  const existId = vaultWinId.get(key);
+  if (existId !== undefined) {
+    const ex = BrowserWindow.fromId(existId);
+    if (ex && !ex.isDestroyed()) { showWindow(ex); return null; }
+    vaultWinId.delete(existId);
   }
   const win = new BrowserWindow({
     width: 1280,
