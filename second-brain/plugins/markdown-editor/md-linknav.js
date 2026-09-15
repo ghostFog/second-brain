@@ -176,7 +176,9 @@
     var currentPath = state.current || '';
     var notes = notesCache;
 
-    console.log('[md-linknav] click: tag=' + e.target.tagName + ', class=' + (e.target.className || '').slice(0, 60));
+    /* className 对 SVG 元素是 SVGAnimatedString 对象（无 slice），统一取字符串，避免点击工具栏按钮时报错 */
+    var clickCls = (typeof e.target.className === 'string') ? e.target.className : (e.target.getAttribute && (e.target.getAttribute('class') || ''));
+    console.log('[md-linknav] click: tag=' + e.target.tagName + ', class=' + clickCls.slice(0, 60));
 
     /* 1. WYSIWYG / 预览模式：<a href> 标准链接 */
     var a = e.target.closest('a[href]');

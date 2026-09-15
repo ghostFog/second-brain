@@ -75,19 +75,39 @@
       var ti = document.createElement('div');
       ti.style.cssText = 'font:600 14px/1.2 system-ui,sans-serif;color:#1f2328;';
       ti.textContent = '运行日志（本会话）';
+      /* 操作按钮组：清除（清空会话日志 + 隐藏徽标）+ 关闭 */
+      var btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex;gap:8px;';
+      var clearBtn = document.createElement('button');
+      clearBtn.textContent = '清除';
+      clearBtn.style.cssText = 'padding:5px 12px;border:0;border-radius:7px;font:500 12px/1 system-ui,sans-serif;cursor:pointer;background:#DC2626;color:#fff;';
+      btnRow.appendChild(clearBtn);
       var closeBtn = document.createElement('button');
       closeBtn.textContent = '关闭';
       closeBtn.style.cssText = 'padding:5px 12px;border:0;border-radius:7px;font:500 12px/1 system-ui,sans-serif;cursor:pointer;background:#eff1f3;color:#1f2328;';
-      head.appendChild(ti); head.appendChild(closeBtn);
+      btnRow.appendChild(closeBtn);
+      head.appendChild(ti); head.appendChild(btnRow);
       var ta = document.createElement('textarea');
       ta.readOnly = true;
-      ta.value = recent.map(function (r) {
-        return '[' + r.level + '] ' + r.msg + (r.detail ? '  ' + r.detail : '');
-      }).join('\n');
       ta.style.cssText = 'width:100%;box-sizing:border-box;height:300px;resize:vertical;padding:10px;border:1px solid #d0d7de;border-radius:8px;font:12px/1.5 Consolas,monospace;color:#1f2328;background:#f6f8fa;outline:none;white-space:pre;overflow:auto;';
+      /* 渲染最近日志到 textarea */
+      function renderLogText() {
+        ta.value = recent.map(function (r) {
+          return '[' + r.level + '] ' + r.msg + (r.detail ? '  ' + r.detail : '');
+        }).join('\n');
+      }
+      renderLogText();
       card.appendChild(head); card.appendChild(ta); ov.appendChild(card); document.body.appendChild(ov);
       function close() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
       closeBtn.addEventListener('click', close);
+      /* 清除：清空会话日志、重置错误计数并隐藏右下角红色徽标，随后刷新面板内容 */
+      clearBtn.addEventListener('click', function () {
+        recent = [];
+        errorCount = 0;
+        var old = document.getElementById('sb-log-badge');
+        if (old) old.remove();
+        renderLogText();
+      });
       ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
     } catch (_) { /* 面板失败不影响应用 */ }
   }
