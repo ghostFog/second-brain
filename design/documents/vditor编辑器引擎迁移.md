@@ -18,7 +18,7 @@ vditor 能力范围：
 - **插件加载**：`loadDirPlugins`（[L958](file:///d:/project/aiCode/second-brain/second-brain/js/app-plugins.js#L958-L1037)）**仅在桌面端**运行（需 `noteDesktop.plugins`），脚本以 `new Function('PluginAPI','pluginId', joined)` 独立作用域执行，只能访问 `window/globalThis`。**网页版不加载该插件** → 这正是引擎需放宿主的原因。
 - **宿主编核心**：[editor-host.js](file:///d:/project/aiCode/second-brain/second-brain/js/editor/editor-host.js) 硬编码操作 `#ed-edit`、`#ed-wysiwyg`、`#ed-preview`、`#ed-gutter`、`#ed-current-line`，并绑定自研增强（`bindWysCopyButton`、`bindWysSelToolbar`、块编辑、表格操作、数学块、拖拽重排）。
 - **宿主 markdown 渲染**：`renderMarkdown` 在 [app-note.js](file:///d:/project/aiCode/second-brain/second-brain/js/app-note.js#L224)，仍被 AI 问答展示使用，**保留不动**。`domToMd`（Host 方向量）在 [editor-md.js](file:///d:/project/aiCode/second-brain/second-brain/js/editor/editor-md.js#L46)，仅 `rwGetMd` 兜底使用，迁移后对 `.md` 失效但可无害保留。
-- **视图/样式**：`views/editor.html` 含三套编辑 DOM；`index.html` 按序加载全部本地脚本；vditor 资产目录 `js/vendor/vditor` 尚不存在（node_modules 未装 vditor）。
+- **视图/样式**：`views/vault.html` 含三套编辑 DOM；`index.html` 按序加载全部本地脚本；vditor 资产目录 `js/vendor/vditor` 尚不存在（node_modules 未装 vditor）。
 
 ## 三、Proposed Changes（改动清单）
 
@@ -47,7 +47,7 @@ vditor 能力范围：
 '.otf': 'font/otf', '.eot': 'application/vnd.ms-fontobject', '.map': 'application/json',
 ```
 
-### 4. `second-brain/views/editor.html`（编辑区结构改造）
+### 4. `second-brain/views/vault.html`（编辑区结构改造）
 - 保留：标题 `#ed-title`、元信息 `#editor-meta`、查找条 `#ed-findbar`（如需留则重新挂 vditor 查找，见第 7 条）、索引面板 `#ed-index-panel`、状态栏（`#ed-count`/`#ed-saved`）。
 - 删除：`#ed-split` 整块内容中的 `#ed-pane-src`（含 `#ed-gutter`、`#ed-current-line`、`#ed-edit`、`#ed-wysiwyg`）、`#ed-split-sep`、`#ed-pane-prev`（含 `#ed-preview`）。
 - 新增：以单个容器替代上述区域：
@@ -123,9 +123,9 @@ vditor 能力范围：
 - 其余无关测试保持不动；改后 `npm test` 全绿。
 
 ### 12. 文档同步
-- `doc/需求/需求-编辑器.md`：登记新功能「vditor 引擎迁移（ED-xx）」；将 ED-40（悬浮工具栏）、ED-41（右键格式）、HTML 透传、数学块、代码块复制标记为**被 vditor 承接/退役**。
-- `doc/开发进度.md`：看板保留未完结，登记 vditor 迁移行；把被退役功能的「未完结」行归档到 `doc/进度/进度-编辑器.md`（按归档模板追加），不留在看板。
-- `doc/进度/进度-编辑器.md`：追加 vditor 迁移完成项与说明。
+- `doc/需求/需求-知识库.md`：登记新功能「vditor 引擎迁移（ED-xx）」；将 ED-40（悬浮工具栏）、ED-41（右键格式）、HTML 透传、数学块、代码块复制标记为**被 vditor 承接/退役**。
+- `doc/开发进度.md`：看板保留未完结，登记 vditor 迁移行；把被退役功能的「未完结」行归档到 `doc/进度/进度-知识库.md`（按归档模板追加），不留在看板。
+- `doc/进度/进度-知识库.md`：追加 vditor 迁移完成项与说明。
 
 ## 四、Assumptions & Decisions（假设与决策）
 

@@ -2,7 +2,7 @@
 
 ## Context（背景与目标）
 
-当前「第二脑」的编辑器把 Markdown 的**所有操作**（工具按钮、源码/所见即所得切换、预览、左侧栏索引面板、右侧栏 属性/大纲/反向链接/标签）都内嵌在核心 `app-editor.js` + `views/editor.html`，且识别 Markdown 后缀是硬编码的。需求方希望：
+当前「第二脑」的编辑器把 Markdown 的**所有操作**（工具按钮、源码/所见即所得切换、预览、左侧栏索引面板、右侧栏 属性/大纲/反向链接/标签）都内嵌在核心 `app-editor.js` + `views/vault.html`，且识别 Markdown 后缀是硬编码的。需求方希望：
 
 1. 把 md 文件的操作**完整物理搬迁**进一个独立插件 `markdown-editor`，由插件**注册它支持的文件后缀、打开方式、工具按钮、侧边面板**。
 2. 编辑器的侧边面板承载：文件属性、大纲/目录、当前保留索引面板。
@@ -38,7 +38,7 @@
   - **侧边面板**：`ed-index-panel`（保留案例）+ 属性/大纲/反向链接/标签渲染。
 - styles.css：承接 md 编辑器专属样式（原 `editor-article`、`ed-pane`、`ed-gutter`、`collapse-*` 等，从 `app.css`/`app-editor` 移入或引用）。
 
-### Phase C — 核心宿主瘦身：`js/app-editor.js` + `views/editor.html`
+### Phase C — 核心宿主瘦身：`js/app-editor.js` + `views/vault.html`
 - `app-editor.js` 保留：Tab 栏渲染/锁定/溢出滚动、`openNote` 按后缀路由到 Provider、脏/自动保存、最近标签、查找替换、光标/状态栏。
 - 移除（迁往插件）：`renderArticle` 的 md 渲染、预览实时同步、`edSource` 切换 UI、模式按钮标签、`renderIndexPanel`、右侧栏 属性/大纲/反向链接/标签 渲染。
 - `openNote(path, {mode})`：`ext = 后缀` → `provider = first getEditorProviders(ext) || fallback` → 按 `mode ?? 设置默认` 打开。

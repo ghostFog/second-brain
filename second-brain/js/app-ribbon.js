@@ -5,7 +5,7 @@
  *       最大显示数量控制、三点溢出折叠、持久化顺序
  *
  * 按钮分三类：
- *   1. 内置导航按钮（编辑器/搜索/图谱/插件/AI问答）— 可排序、可置顶
+ *   1. 内置导航按钮（知识库/搜索/图谱/插件/AI问答）— 可排序、可置顶
  *   2. 设置按钮 — 固定在最后，不可排序
  *   3. 插件注入按钮 — 通过 registerPluginButton() 动态加入
  *
@@ -27,7 +27,7 @@ globalThis.RibbonManager = (function () {
    * @type {Object[]}
    */
   var BUILTIN_BUTTONS = [
-    { id: 'editor',  icon: 'file-text', title: '编辑器',     route: '#/editor',          kind: 'built-in' },
+    { id: 'editor',  icon: 'file-text', title: '知识库',     route: '#/editor',          kind: 'built-in' },
     // { id: 'search',   icon: 'search',    title: '搜索',       action: 'open-command',     kind: 'built-in' },
     { id: 'graph',    icon: 'git-fork',  title: '图谱视图',   route: '#/graph',           kind: 'built-in' },
     { id: 'plugins', icon: 'puzzle',    title: '插件市场',   route: '#/plugins',         kind: 'built-in' },

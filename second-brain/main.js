@@ -69,7 +69,7 @@ const MIME = {
 
 /**
  * 将 note:// 协议请求映射为磁盘上的本地文件并返回内容。
- * 这样页面中的 fetch('views/editor.html') 在桌面环境下也能正常工作，
+ * 这样页面中的 fetch('views/vault.html') 在桌面环境下也能正常工作，
  * 无需改动前端路由逻辑。
  */
 function registerNoteProtocol() {

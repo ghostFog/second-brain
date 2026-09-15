@@ -9,7 +9,7 @@
 
   /* ---------- 路由表：视图 key -> 视图文件 ---------- */
   const ROUTES = {
-    editor: { file: 'views/editor.html', name: '编辑器', crumb: null }, // 面包屑按当前打开笔记路径动态生成
+    editor: { file: 'views/vault.html', name: '知识库', crumb: null }, // 面包屑按当前打开笔记路径动态生成
     graph: { file: 'views/graph.html', name: '图谱视图', crumb: ['图谱视图', '2024年9月1日'] },
     plugins: { file: 'views/plugins.html', name: '插件市场', crumb: ['插件市场'] },
     settings: { file: 'views/settings.html', name: '设置', crumb: ['设置'] },
