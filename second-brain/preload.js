@@ -96,6 +96,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   cloneGit: (url) => ipcRenderer.invoke('vault:cloneGit', url),
   /** 迁移默认知识库到新目录（移动语义），返回 {canceled, path, name, history, error} */
   migrateVault: () => ipcRenderer.invoke('vault:migrate'),
+  /** 把指定知识库（绝对路径）设置为新的默认库（不迁移文件，仅持久化默认库指针），返回 {canceled, defaultPath, error} */
+  setDefaultVault: (dir) => ipcRenderer.invoke('vault:setDefault', dir),
 
   /* ---------- AI 问答桥接 ---------- */
   ai: {

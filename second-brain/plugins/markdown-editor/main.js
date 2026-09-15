@@ -37,7 +37,6 @@ try {
         toolbar: [],
         sidebar: [
           { id: 'props', label: '属性' },
-          { id: 'outline', label: '大纲' },
           { id: 'backlinks', label: '反向链接' },
           { id: 'tags', label: '标签' },
         ],
@@ -60,6 +59,8 @@ try {
     'mde-toggle-wrap': function () { /* no-op：换行由 vditor 设置控制 */ },
     /* 查看/收起当前笔记索引面板（宿主侧边索引） */
     'mde-view-index': function () { if (typeof toggleIndexPanel === 'function') toggleIndexPanel(); },
+    /* 显示/隐藏大纲：复用 vditor 内置大纲浮层（宿主 vdToggleOutline） */
+    'mde-outline': function () { if (typeof window.vdToggleOutline === 'function') window.vdToggleOutline(); },
     /* 删除当前笔记 */
     'mde-delete': function () { fireAction('delete-note'); },
     /* 打开当前笔记（命令面板调用） */

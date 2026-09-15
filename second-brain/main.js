@@ -1541,9 +1541,21 @@ vaultHandle('vault:switch', async (event, dir) => {
 });
 
 /* 从历史列表移除某库（仅移出历史，不改当前窗口） */
-vaultHandle('vault:remove', async (_e, dir) => {
-  vaultHistory = vaultHistory.filter(function (h) { return h.path !== dir; });
+vaultHandle('vault:remove', async (event, dir) => {
+  if (!dir) return { history: vaultHistory.slice() };
+  const delKey = vaultKey(dir);
+  // 检测并同步关闭绑定该知识库的已打开窗口（含跟随默认库即绑定 null 但默认库路径等于目标库的情况）
+  for (const [winId, vp] of winVaults) {
+    const w = BrowserWindow.fromId(winId);
+    if (!w || w.isDestroyed()) continue;
+    const wKey = (vp || defaultVaultRoot()) && vaultKey(vp || defaultVaultRoot());
+    // 发起删除的窗口允许保留（渲染端删除后自行关闭下拉，无需关闭发起窗口）；跳过发起窗口
+    if (w.webContents.id === (event.sender && event.sender.id)) continue;
+    if (wKey === delKey) w.close();
+  }
+  vaultHistory = vaultHistory.filter(function (h) { return String(h.path).toLowerCase() !== delKey; });
   saveConfig();
+  syncVaultWinMap(); // 删除后重建 库→窗口 映射
   refreshTrayMenu(); // 历史变化后刷新托盘菜单
   return { history: vaultHistory.slice() };
 });
@@ -1796,6 +1808,34 @@ vaultHandle('vault:migrate', async (event) => {
   } catch (err) {
     return { canceled: true, error: String((err && err.message) || err) };
   }
+});
+
+/* 把指定知识库设置为新的默认库（不迁移文件，仅持久化默认库路径指针）。
+ * 与「迁移」的区别：迁移是做文件移动并清空旧库；设置默认只是让 defaultVaultRoot() 指向该目录，
+ * 现有各窗口绑定不变（仅托盘/后续启动的默认库归口变化）。返回 { canceled, defaultPath, error } */
+vaultHandle('vault:setDefault', async (event, dir) => {
+  if (!dir || typeof dir !== 'string') return { canceled: true, error: '参数无效' };
+  const target = path.resolve(dir);
+  try { await fs.promises.access(target); } catch (e) { return { canceled: true, error: '目录不存在' }; }
+  // 旧默认库先判重后，再改默认库指针并依次记入历史：记录必须放在 defaultVaultPath 变更之后，
+  // 否则旧库仍按「当前默认库」判断记成「我的笔记库」；变更后旧库才会以其真实目录名（basename）退化成普通库
+  const oldRoot = defaultVaultRoot();
+  const needKeepOld = vaultKey(oldRoot) !== vaultKey(target);
+  defaultVaultPath = target; // 默认库根重定向到目标目录
+  if (needKeepOld) recordHistory(oldRoot); // 旧默认库 → 记录为普通库名，保留在「其他知识库」列表（可再次打开）
+  recordHistory(target);     // 新默认库 → 显示名「我的笔记库」
+  saveConfig();
+  // 不切换当前窗口：若发起窗口原为「跟随默认库」（绑定 null），现在默认库已换，需把其绑定
+  // 固化为它真实显示的旧默认库，避免悬浮菜单把新默认库名顶到「当前知识库」头部与实际内容不符
+  const win = winFromEvent(event);
+  if (win && needKeepOld && (winVaults.get(win.webContents.id) ?? null) == null) {
+    winVaults.set(win.webContents.id, oldRoot);
+    try { win.setTitle('第二脑 · ' + path.basename(oldRoot)); } catch (_) { /* 标题更新失败不阻塞 */ }
+  }
+  aiEngine.activateVault();  // 重载（新）默认库索引
+  syncVaultWinMap();
+  refreshTrayMenu();         // 默认库归口变化后刷新托盘知识库列表
+  return { canceled: false, defaultPath: defaultVaultRoot() };
 });
 
 /* ============================================

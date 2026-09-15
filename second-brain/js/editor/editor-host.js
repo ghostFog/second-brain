@@ -382,22 +382,6 @@
     // 字数/保存状态仍由下方状态栏（ed-count/ed-saved）承担
     const cnt = $('ed-count'); if (cnt) cnt.textContent = countChars(md) + ' 字';
     const saved = $('ed-saved'); if (saved) saved.textContent = '已加载';
-    // 大纲
-    const ol = $('ed-outline');
-    if (ol) {
-      const o = extractOutline(md);
-      if (!o.length) {
-        ol.innerHTML = '<p class="text-[11px] pl-9" style="color: var(--note-ink-3);">（无标题）</p>';
-      } else {
-        ol.innerHTML = o.map(function (h) {
-          const isH1 = h.level === 1;
-          const pad = isH1 ? '36px' : (36 + (h.level - 1) * 12) + 'px';
-          const color = isH1 ? 'var(--note-brand-300)' : 'var(--note-ink-2)';
-          const dot = isH1 ? 'var(--note-brand-400)' : 'var(--note-ink-3)';
-          return '<div class="flex items-center gap-1.5 pl-9 pr-3 py-1 cursor-pointer" style="color:' + color + '; padding-left:' + pad + ';"><span class="w-1 h-1 rounded-full shrink-0" style="background:' + dot + ';"></span><span class="text-[12px] truncate">' + esc(h.text) + '</span></div>';
-        }).join('');
-      }
-    }
     // 标签
     const tags = extractTags(md);
     const tagBox = $('ed-tags'); if (tagBox) tagBox.innerHTML = tags.map(t => '<span class="px-2 py-1 rounded text-[12px] border" style="border-color: var(--note-border); background: var(--note-surface-2); color: var(--note-brand-300);">' + esc(t) + '</span>').join('') || '<span class="text-[11px]" style="color: var(--note-ink-3);">（暂无标签）</span>';

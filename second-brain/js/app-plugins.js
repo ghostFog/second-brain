@@ -638,13 +638,13 @@ const DEFAULT_PLUGIN_DATA = [
       ],
       "sidebar": [
         { "id": "props", "label": "属性" },
-        { "id": "outline", "label": "大纲" },
         { "id": "backlinks", "label": "反向链接" },
         { "id": "tags", "label": "标签" }
       ]
     },
     "commands": [
       { "icon": "file-text", "label": "Markdown: 打开当前笔记", "actionKey": "mde-open" },
+      { "icon": "list", "label": "Markdown: 显示大纲", "actionKey": "mde-outline", "shortcut": "Ctrl+Shift+Q" },
     ],
   },
   {

@@ -55,27 +55,37 @@
     pushOther(defaultPath, '我的笔记库');
     history.forEach(function (h) { pushOther(h.path, h.name); });
 
-    let html = '<div class="vault-dropdown-head"><i data-lucide="library" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
-      + '<span class="vault-current"' + (pathOfVault ? ' title="' + pathOfVault + '"' : '') + '>' + name + '</span>'
-      + '<span style="font-size:11px;color:var(--note-ink-3)">当前知识库</span></div>';
+    /* 默认知识库判断：路径与 defaultPath 比对（大小写不敏感），默认库条目用 star 图标，非默认用 archive */
+    const isDefaultPath = function (p) { return !!p && !!defaultPath && p.toLowerCase() === defaultPath.toLowerCase(); };
+
+    let html = '<div class="vault-dropdown-head' + (isDefaultPath(pathOfVault) ? ' is-default-vault' : '') + '" data-vault-current-head>'
+      + '<i data-lucide="' + (isDefaultPath(pathOfVault) ? 'star' : 'library') + '" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
+      + '<span class="vault-current"' + (pathOfVault ? ' data-vault-path="' + pathOfVault + '" title="' + pathOfVault + '"' : '') + '>' + name + '</span>'
+      + (isDefaultPath(pathOfVault) ? '<span class="vault-def-badge">默认</span>' : '')
+      + '<span style="font-size:11px;color:var(--note-ink-3)">当前知识库</span>'
+      + (pathOfVault ? '<i data-lucide="ellipsis" class="vault-h-more w-5 h-5"></i>' : '') + '</div>';
     html += '<div class="vault-dropdown-sep"></div>'; // 当前知识库与「其他知识库」之间的分割线
     html += '<div class="vault-dropdown-head" data-vault-hist-head><i data-lucide="clock-3" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
       + '<span style="color:var(--note-ink-3)">其他知识库</span></div>';
     if (otherList.length) {
       otherList.forEach(function (h) {
-        html += '<div class="vault-dropdown-item vault-history-item" data-vault-act="switch" data-vault-path="' + h.path + '" title="' + h.path + '">'
-          + '<i data-lucide="file-archive" class="w-4 h-4"></i><span class="vault-h-name">' + (h.name || '') + '</span>'
-          + (h.path === defaultPath ? '' : '<i data-lucide="x" class="vault-h-del w-5 h-5"></i>')
+        // 旧默认库退化：记录时名称可能残留「我的笔记库」（当时是默认库），若当前已非默认库则显示真实目录名
+        const dispName = (h.name === '我的笔记库' && !isDefaultPath(h.path)) ? (h.path.split(/[\\/]/).pop() || h.path) : h.name;
+        html += '<div class="vault-dropdown-item vault-history-item' + (isDefaultPath(h.path) ? ' is-default-vault' : '') + '" data-vault-act="switch" data-vault-path="' + h.path + '" title="' + h.path + '">'
+          + '<i data-lucide="' + (isDefaultPath(h.path) ? 'star' : 'file-archive') + '" class="w-4 h-4"></i>'
+          + '<span class="vault-h-name">' + dispName + '</span>'
+          + (isDefaultPath(h.path) ? '<span class="vault-def-badge">默认</span>' : '')
+          + '<i data-lucide="ellipsis" class="vault-h-more w-5 h-5"></i>'
           + '</div>';
       });
     } else {
       // 无其他知识库：灰色占一行
       html += '<div class="vault-dropdown-item vault-history-item vault-empty-hint" style="color:var(--note-ink-3);cursor:default;">无其他知识库</div>';
     }
+    /* 二级菜单按目标库动态生成（append 到 dd 内，复用 dd 点击委托）；delete=仅历史移除，
+     * migrate=迁移默认知识库，default=设为新默认库（不迁移）；isCurrent/isDefault 决定展示项与图标 */
     html += '<div class="vault-dropdown-sep"></div>'
-      + '<div class="vault-dropdown-item" data-vault-act="open"><i data-lucide="folder-open" class="w-4 h-4"></i><span>打开知识库…</span></div>'
-      + '<div class="vault-dropdown-item" data-vault-act="migrate"><i data-lucide="folder-sync" class="w-4 h-4"></i><span>迁移默认知识库…</span></div>'
-      + '<div class="vault-dropdown-item" data-vault-act="reset"><i data-lucide="rotate-ccw" class="w-4 h-4"></i><span>默认知识库</span></div>';
+      + '<div class="vault-dropdown-item" data-vault-act="open"><i data-lucide="folder-open" class="w-4 h-4"></i><span>打开知识库…</span></div>';
     dd.innerHTML = html;
 
     // 距底部不足时改向上展开（高度随其他知识库项数估算）
@@ -88,42 +98,111 @@
     overlay.addEventListener('click', closeVaultDropdown);
 
     // 事件委托：lucide 会把 <i data-lucide> 替换为 <svg>，直接绑定在 <i> 上会丢失监听，
-    // 故统一委托到下拉容器——先处理 × 删除，再处理动作项（切换/打开/默认）
+    // 故统一委托到下拉容器——先处理二级菜单的展开/关闭，再处理动作项；二级菜单 append 在 dd 内以复用委托
+    const closeSubmenu = function () {
+      const mm = document.getElementById('vault-submenu');
+      if (mm) mm.remove();
+    };
+    // 生成二级菜单 HTML：isCurrent（是否是当前库）控制「删除」；isDefault（是否默认库）控制「设置默认」
+    const buildSubItems = function (vpath) {
+      const isCurrent = vpath === pathOfVault;
+      const isDef = isDefaultPath(vpath);
+      let s = '';
+      if (!isCurrent) {
+        s += '<div class="vault-submenu-item" data-vault-sub="del"><i data-lucide="trash-2" class="w-4 h-4"></i><span>删除</span></div>';
+      }
+      s += '<div class="vault-submenu-item" data-vault-sub="migrate"><i data-lucide="folder-sync" class="w-4 h-4"></i><span>迁移</span></div>';
+      if (!isDef) {
+        s += '<div class="vault-submenu-item" data-vault-sub="default"><i data-lucide="star" class="w-4 h-4"></i><span>设置默认</span></div>';
+      }
+      return s;
+    };
     dd.addEventListener('click', function (e) {
-      const hit = e.target && e.target.closest ? e.target.closest('.vault-h-del') : null;
-      if (hit) {
-        // × 删除：不切换，仅从「其他知识库」移除
-        const item = hit.closest('.vault-history-item');
-        const p = item && item.dataset.vaultPath;
+      const more = e.target && e.target.closest ? e.target.closest('.vault-h-more') : null;
+      if (more) {
+        // ⋯ 展开/切换该库的二级菜单；已展开则收起
+        e.stopPropagation();
+        const item = more.closest('.vault-dropdown-head, .vault-dropdown-item');
+        // 路径优先取条目自身 data-vault-path；当前库头部路径挂在 .vault-current 上，回退取它
+        const p = (item && (item.getAttribute('data-vault-path') || (item.querySelector('[data-vault-path]') && item.querySelector('[data-vault-path]').getAttribute('data-vault-path')))) || '';
+        closeSubmenu();
         if (!p) return;
-        // 二次确认：防止误点删除
-        const nmEl = item.querySelector('.vault-h-name');
-        const label = nmEl ? nmEl.textContent : '该知识库';
-        if (!confirm('确定从列表中删除知识库「' + label + '」吗？')) return;
-        window.noteDesktop.removeVault(p).then(function () {
-          if (item) item.remove();
-          const head = dd.querySelector('[data-vault-hist-head]');
-          if (head && !dd.querySelector('.vault-empty-hint')) {
-            const switchLeft = dd.querySelectorAll('.vault-history-item[data-vault-act="switch"]');
-            if (!switchLeft.length) {
-              // 无其他知识库：灰色占位行保持一行高度
-              const hint = document.createElement('div');
-              hint.className = 'vault-dropdown-item vault-history-item vault-empty-hint';
-              hint.style.cssText = 'color:var(--note-ink-3);cursor:default;';
-              hint.textContent = '无其他知识库';
-              head.after(hint);
-            }
-          }
-        }).catch(function () { /* 忽略 */ });
+        const sub = document.createElement('div');
+        sub.id = 'vault-submenu';
+        sub.className = 'vault-submenu';
+        sub.setAttribute('data-vault-path', p);
+        sub.innerHTML = buildSubItems(p);
+        // 定位：相对所属条目右侧展开；右缘超界时改向左/向上
+        const r = more.getBoundingClientRect();
+        sub.style.top = r.top + 'px';
+        let leftPos = r.right + 6;
+        if (leftPos + 150 > window.innerWidth) leftPos = r.left - 150 - 6;
+        if (sub.style.top.replace('px', '') * 1 + 132 > window.innerHeight) sub.style.top = (window.innerHeight - 132) + 'px';
+        sub.style.left = leftPos + 'px';
+        // 挂到 dd 内（fixed 定位不受影响），使点击冒泡进上方委托处理二级操作
+        dd.appendChild(sub);
+        refreshIcons();
+        return;
+      }
+      // 二级菜单内的项目点击：删除/迁移/设置默认
+      const subItem = e.target && e.target.closest ? e.target.closest('[data-vault-sub]') : null;
+      if (subItem) {
+        const sub = subItem.closest('.vault-submenu');
+        const p = sub && sub.getAttribute && sub.getAttribute('data-vault-path');
+        const subAct = subItem.dataset.vaultSub;
+        closeSubmenu();
+        if (!p) return;
+        runVaultSubAction(subAct, p);
         return;
       }
       const act = e.target && e.target.closest ? e.target.closest('[data-vault-act]') : null;
-      if (act) onVaultAction.call(act, e);
+      if (act) { closeSubmenu(); onVaultAction.call(act, e); }
+    });
+    // 点击二级菜单外的任意区域关闭
+    document.addEventListener('mousedown', function subCloseHandler(ev) {
+      if (ev.target && ev.target.closest && ev.target.closest('#vault-submenu, .vault-h-more')) return;
+      closeSubmenu();
+      document.removeEventListener('mousedown', subCloseHandler);
     });
 
     document.body.appendChild(overlay);
     document.body.appendChild(dd);
     refreshIcons();
+  }
+
+  /* 处理知识库条目二级菜单操作：对指定库路径执行
+   * del（从历史/列表移除，不删文件）/ migrate（迁移默认知识库）/ default（设为新的默认库，不迁移）
+   * 迁移成功后关闭下拉并交由主进程重载提示；删除仅移除列表项并同步主进程历史。 */
+  async function runVaultSubAction(subAct, vpath) {
+    const bridge = window.noteDesktop;
+    if (!bridge) return;
+    if (subAct === 'del') {
+      const row = document.querySelector('#vault-dropdown [data-vault-path="' + CSS.escape(vpath) + '"]');
+      // 显示名：历史库用 .vault-h-name；当前库用 .vault-current
+      const labelEl = row && (row.querySelector('.vault-h-name') || row.querySelector('.vault-current'));
+      const label = labelEl ? labelEl.textContent : '该知识库';
+      if (!confirm('确定从列表中删除知识库「' + label + '」吗？')) return;
+      await bridge.removeVault(vpath).catch(function () { /* 忽略 */ });
+      toggleVaultDropdown(document.querySelector('[data-dom-id="vault-picker"]')); // 重新渲染列表
+      return;
+    }
+    if (subAct === 'migrate') {
+      // 迁移默认知识库：主进程负责选目录/确认/移动，成功后在重载页提示
+      const res = await bridge.migrateVault();
+      if (res && res.error) { showToast(res.error); return; }
+      if (!res || res.canceled) return;
+      sessionStorage.setItem('vaultMigrated', '1'); // 重载后 initVaultPicker 提示
+      window.location.reload();
+      return;
+    }
+    if (subAct === 'default') {
+      // 设置默认：把该库设为新的默认库（不迁移文件），成功后刷新列表
+      const res = await bridge.setDefaultVault(vpath);
+      if (res && res.error) { showToast(res.error); return; }
+      if (!res || res.canceled) return;
+      showToast('已将知识库设为默认库');
+      toggleVaultDropdown(document.querySelector('[data-dom-id="vault-picker"]'));
+    }
   }
 
   /* 处理库下拉动作：切换/打开/恢复默认库由主进程在新窗口打开目标库（或聚焦已有窗口），
@@ -141,16 +220,7 @@
       return; // 主进程已新开窗口显示目标库，当前窗口保持原知识库
     }
     closeVaultDropdown();
-    if (act === 'migrate') {
-      // 迁移默认知识库：主进程负责选目录/确认/移动，成功后在重载页提示
-      const res = await bridge.migrateVault();
-      if (res && res.error) { showToast(res.error); return; }
-      if (!res || res.canceled) return;
-      sessionStorage.setItem('vaultMigrated', '1'); // 重载后 initVaultPicker 提示
-      window.location.reload();
-      return;
-    }
-    const res = (act === 'open') ? await bridge.chooseVault() : await bridge.resetVault();
+    const res = (act === 'open') ? await bridge.chooseVault() : null;
     if (!res || res.canceled) return;
     // 主进程已新开窗口显示目标库（或聚焦已有窗口），当前窗口保持原知识库，无需重载
   }

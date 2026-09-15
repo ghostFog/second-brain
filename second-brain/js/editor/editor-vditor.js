@@ -1210,6 +1210,18 @@
     buildVditor();
   };
 
+  /* 大纲面板已从宿主侧边面板移除（改为 vditor 内置大纲浮层），此处提供程序化切换：
+   * 复用 vditor 工具栏「大纲」按钮的点击逻辑（含 sv 源码模式的禁用判断）。
+   * @returns {boolean} 是否成功触发（vditor 实例与大纲按钮就绪时返回 true）
+   * @author 火 冰 */
+  window.vdToggleOutline = function () {
+    const btn = vdInst && vdInst.vditor && vdInst.vditor.toolbar
+      && vdInst.vditor.toolbar.elements && vdInst.vditor.toolbar.elements.outline;
+    if (!btn || !btn.firstElementChild) return false;
+    btn.firstElementChild.click();
+    return true;
+  };
+
   /** 销毁实例（切库/卸载编辑器时释放资源） */
   window.vdDestroy = function () {
     if (vdInst) { try { vdInst.destroy(); } catch (_) { /* 忽略 */ } }
@@ -1283,7 +1295,6 @@
       toolbar: [],
       sidebar: [
         { id: 'props', label: '属性' },
-        { id: 'outline', label: '大纲' },
         { id: 'backlinks', label: '反向链接' },
         { id: 'tags', label: '标签' },
       ],

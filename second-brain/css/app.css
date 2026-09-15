@@ -200,14 +200,36 @@
   cursor: pointer; transition: background-color .12s, color .12s;
 }
 .vault-dropdown-item:hover { background: var(--note-surface-2); color: var(--note-ink); }
+/* 默认库徽标：区分默认知识库与普通知识库 */
+.vault-def-badge { flex: none; font-size: 10px; line-height: 1.4; padding: 1px 6px; border-radius: 9999px; background: rgba(202, 138, 4, .16); color: #a16207; }
+/* 默认库条目整体高亮的浅底，与普通库进一步区分 */
+.vault-dropdown-item.is-default-vault, .vault-dropdown-head.is-default-vault { background: rgba(202, 138, 4, .06); }
+.vault-dropdown-item.is-default-vault:hover, .vault-dropdown-head.is-default-vault:hover { background: rgba(202, 138, 4, .12); }
 /* 当前库高亮项 */
 .vault-dropdown-item.is-active { background: rgba(124, 58, 237, .1); color: var(--note-ink); }
 .vault-dropdown-item.is-active:hover { background: rgba(124, 58, 237, .14); }
-/* 历史库项：库名省略 + 悬浮右侧出现 × */
+/* 历史库项：库名省略 + 悬浮右侧出现 ⋯ 展开二级菜单 */
 .vault-dropdown-item .vault-h-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vault-dropdown-item .vault-h-del { margin-left: auto; flex: none; color: var(--note-ink-3); opacity: 0; cursor: pointer; border-radius: 6px; padding: 5px; font-size: 20px; line-height: 1; }
-.vault-dropdown-item:hover .vault-h-del { opacity: 1; }
-.vault-dropdown-item .vault-h-del:hover { color: var(--note-ink); background: var(--note-surface-2); }
+.vault-dropdown-head { position: relative; }
+.vault-dropdown-head .vault-h-more, .vault-dropdown-item .vault-h-more { margin-left: auto; flex: none; color: var(--note-ink-3); opacity: 0; cursor: pointer; border-radius: 6px; padding: 5px; font-size: 20px; line-height: 1; }
+.vault-dropdown-head:hover .vault-h-more, .vault-dropdown-item:hover .vault-h-more { opacity: 1; }
+.vault-dropdown-head .vault-h-more:hover, .vault-dropdown-item .vault-h-more:hover { color: var(--note-ink); background: var(--note-surface-2); }
+/* 二级菜单（删除/迁移/设置默认）：悬浮在所属库条目右侧 */
+.vault-submenu {
+  position: fixed; z-index: 121; min-width: 140px;
+  border-radius: var(--note-radius-lg);
+  background: var(--note-popover);
+  border: 1px solid var(--note-border);
+  box-shadow: var(--note-shadow-3);
+  padding: 6px; overflow: hidden;
+  animation: vault-drop-in .12s ease-out;
+}
+.vault-submenu-item {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  border-radius: var(--note-radius-md); font-size: 13px; color: var(--note-ink-2);
+  cursor: pointer; transition: background-color .12s, color .12s;
+}
+.vault-submenu-item:hover { background: var(--note-surface-2); color: var(--note-ink); }
 
 /* ============================================
  * 编辑区右键菜单（Markdown 源码/预览，仅当打开 .md 笔记）—— 作者: 火 冰

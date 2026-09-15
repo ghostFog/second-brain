@@ -30,13 +30,13 @@
     ],
     "sidebar": [
       { "id": "props", "label": "属性" },
-      { "id": "outline", "label": "大纲" },
       { "id": "backlinks", "label": "反向链接" },
       { "id": "tags", "label": "标签" }
     ]
   },
   "commands": [
     { "icon": "file-text", "label": "Markdown: 打开当前笔记", "actionKey": "mde-open" },
+    { "icon": "list", "label": "Markdown: 显示大纲", "actionKey": "mde-outline", "shortcut": "Ctrl+Shift+Q" },
     { "icon": "link", "label": "链接: 浏览器打开", "actionKey": "mde-link-open" },
     { "icon": "unlink", "label": "链接: 取消链接", "actionKey": "mde-link-unlink" },
     { "icon": "download", "label": "图片: 下载", "actionKey": "mde-img-download" },
