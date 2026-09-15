@@ -561,15 +561,15 @@ globalThis.RibbonManager = (function () {
   }
 
   /* ============================
-   * 9. Ribbon 空白区右键 — 快速设置最大个数
+   * 9. Ribbon 空白区右键 — 二级菜单（最大个数 / 开发人员工具）
    * ============================ */
 
   var blankMenuEl = null;
+  var subMenuEl = null;
 
   /**
    * 绑定 Ribbon 区域的右键事件：
-   * 只在「非按钮、非三点、非 ribbon-spacer、非 sync-dot」的空白区域弹出快速设置菜单。
-   * 菜单提供 7-15 的数值选项，点击后即时生效。
+   * 只在「非按钮、非三点、非 ribbon-spacer、非 sync-dot」的空白区域弹出二级菜单。
    */
   function bindRibbonBlankAreaContext() {
     var ribbon = document.querySelector('.ribbon');
@@ -583,7 +583,9 @@ globalThis.RibbonManager = (function () {
   }
 
   /**
-   * 弹出 Ribbon 空白区快速设置菜单
+   * 弹出 Ribbon 空白区右键菜单（二级）：
+   * 一级菜单为「Ribbon 最大显示个数」「开发人员工具」两个可展开项，
+   * hover/点击该行即在其右侧展开对应二级菜单；二级项点击后生效并关闭全部菜单。
    * @param {number} x
    * @param {number} y
    */
@@ -596,37 +598,29 @@ globalThis.RibbonManager = (function () {
     menu.style.borderRadius = 'var(--note-radius-md)';
     menu.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)';
     menu.style.padding = '4px';
-    menu.style.minWidth = '160px';
+    menu.style.minWidth = '190px';
 
-    // 标题
-    var html = '<div class="px-3 py-1 text-[11px]" style="color: var(--note-ink-3);">Ribbon 最大显示数量</div>';
-    // 7-15 的快捷选项
-    for (var i = 7; i <= 15; i++) {
-      var checked = (i === maxButtons);
-      html += '<div class="flex items-center justify-between gap-2 px-3 py-1.5 rounded cursor-pointer text-[13px]" data-max="' + i + '" ' +
-              'style="color: var(--note-ink-2);">' +
-              '<span>' + i + ' 个</span>' +
-              (checked ? '<i data-lucide="check" class="w-3 h-3"></i>' : '') +
-              '</div>';
-    }
-    html += '<div class="h-px my-1" style="background: var(--note-border);"></div>' +
-            '<div class="px-3 py-1.5 rounded cursor-pointer text-[13px]" data-max="reset" ' +
-            'style="color: var(--note-ink-3);">恢复默认顺序</div>';
+    menu.innerHTML =
+      '<div class="flex items-center justify-between gap-6 px-3 py-1.5 rounded cursor-pointer text-[13px]" data-sub="ribbon" ' +
+        'style="color: var(--note-ink-2);">' +
+        '<span>Ribbon 最大显示个数</span><i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>' +
+      '</div>' +
+      '<div class="flex items-center justify-between gap-6 px-3 py-1.5 rounded cursor-pointer text-[13px]" data-sub="devtools" ' +
+        'style="color: var(--note-ink-2);">' +
+        '<span>开发人员工具</span><i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>' +
+      '</div>';
 
-    menu.innerHTML = html;
     document.body.appendChild(menu);
     refreshIcons();
     menu.style.left = x + 'px';
     menu.style.top = y + 'px';
     blankMenuEl = menu;
 
-    menu.addEventListener('click', function (e) {
-      var item = e.target.closest('[data-max]');
-      if (!item) return;
-      var val = item.dataset.max;
-      closeBlankAreaMenu();
-      if (val === 'reset') resetOrder();
-      else setMaxButtons(parseInt(val, 10));
+    // 一级项 hover/点击 → 在行右侧展开对应二级菜单
+    menu.querySelectorAll('[data-sub]').forEach(function (row) {
+      var open = function () { openSubMenu(row.dataset.sub, row); };
+      row.addEventListener('mouseenter', open);
+      row.addEventListener('click', open);
     });
 
     setTimeout(function () {
@@ -634,9 +628,78 @@ globalThis.RibbonManager = (function () {
     }, 0);
   }
 
+  /**
+   * 展开一级菜单项的二级子菜单（复用右键菜单样式）。
+   * ribbon 子菜单：7-15 数值选项（当前值打勾）+ 恢复默认顺序；
+   * devtools 子菜单：打开/关闭开发者工具（走 noteDesktop.toggleDevTools）。
+   * @param {string} type 子菜单类型（ribbon/devtools）
+   * @param {HTMLElement} anchor 一级菜单行（定位用）
+   */
+  function openSubMenu(type, anchor) {
+    closeSubMenu();
+    var sub = document.createElement('div');
+    sub.className = 'fixed z-[10000]';
+    sub.style.background = 'var(--note-surface)';
+    sub.style.border = '1px solid var(--note-border)';
+    sub.style.borderRadius = 'var(--note-radius-md)';
+    sub.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)';
+    sub.style.padding = '4px';
+    sub.style.minWidth = '150px';
+
+    if (type === 'ribbon') {
+      var html = '<div class="px-3 py-1 text-[11px]" style="color: var(--note-ink-3);">Ribbon 最大显示数量</div>';
+      for (var i = 7; i <= 15; i++) {
+        var checked = (i === maxButtons);
+        html += '<div class="flex items-center justify-between gap-2 px-3 py-1.5 rounded cursor-pointer text-[13px]" data-subval="' + i + '" ' +
+                'style="color: var(--note-ink-2);">' +
+                '<span>' + i + ' 个</span>' +
+                (checked ? '<i data-lucide="check" class="w-3 h-3"></i>' : '') +
+                '</div>';
+      }
+      html += '<div class="h-px my-1" style="background: var(--note-border);"></div>' +
+              '<div class="px-3 py-1.5 rounded cursor-pointer text-[13px]" data-subval="reset" ' +
+              'style="color: var(--note-ink-3);">恢复默认顺序</div>';
+      sub.innerHTML = html;
+      sub.addEventListener('click', function (e) {
+        var item = e.target.closest('[data-subval]');
+        if (!item) return;
+        var val = item.dataset.subval;
+        closeBlankAreaMenu();
+        if (val === 'reset') resetOrder();
+        else setMaxButtons(parseInt(val, 10));
+      });
+    } else {
+      sub.innerHTML =
+        '<div class="flex items-center gap-2 px-3 py-1.5 rounded cursor-pointer text-[13px]" data-subval="open" ' +
+          'style="color: var(--note-ink-2);">' +
+          '<i data-lucide="bug" class="w-4 h-4"></i>打开 / 关闭开发者工具' +
+        '</div>';
+      sub.addEventListener('click', function (e) {
+        if (!e.target.closest('[data-subval="open"]')) return;
+        closeBlankAreaMenu();
+        // 桌面版走 preload 暴露的 toggleDevTools（IPC → 主进程 win:devtools）；浏览器版无则忽略
+        if (window.noteDesktop && window.noteDesktop.toggleDevTools) window.noteDesktop.toggleDevTools();
+      });
+    }
+
+    document.body.appendChild(sub);
+    refreshIcons();
+    // 定位：一级菜单行右侧 + 垂直对齐
+    var rect = anchor.getBoundingClientRect();
+    sub.style.left = (rect.right + 2) + 'px';
+    sub.style.top = rect.top + 'px';
+    subMenuEl = sub;
+  }
+
+  function closeSubMenu() {
+    if (subMenuEl && subMenuEl.parentElement) subMenuEl.parentElement.removeChild(subMenuEl);
+    subMenuEl = null;
+  }
+
   function onDocCloseBlankAreaMenu() { closeBlankAreaMenu(); }
 
   function closeBlankAreaMenu() {
+    closeSubMenu();
     if (blankMenuEl && blankMenuEl.parentElement) blankMenuEl.parentElement.removeChild(blankMenuEl);
     blankMenuEl = null;
     document.removeEventListener('click', onDocCloseBlankAreaMenu);

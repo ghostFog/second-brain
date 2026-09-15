@@ -507,6 +507,10 @@ function testThemeSavedSnapshot() {
   assert(mainJs.indexOf('ready-to-show') !== -1, 'Bug-041: main.js 在 ready-to-show 后才显示窗口');
   assert(mainJs.indexOf('isVisible') !== -1 && mainJs.indexOf('setTimeout') !== -1,
     'Bug-041: main.js 有超时兜底强制显示，避免渲染异常导致白窗');
+
+  // ST-37: 主进程 console.log 桥接（main:log）——引擎「打印完整提示词」日志在渲染进程 F12/日志面板可见
+  assert(mainJs.indexOf('bridgeMainConsole') !== -1 && mainJs.indexOf("send('main:log'") !== -1,
+    'ST-37: main.js 桥接主进程 console.log 到渲染进程（main:log）');
 })();
 
 /* ---- Bug-043: 自定义/内置配色首屏不再闪默认色；删除「停用」配色档 ----
@@ -580,6 +584,15 @@ function testThemeSavedSnapshot() {
     && /dataset\.ribbonBtn === navKey/.test(rjs44)
     && !/=== 'editor'\)\s*\?\s*'file'/.test(rjs44),
     'Bug-047-1: Ribbon 编辑器按钮 id 统一为 editor，切回编辑器时高亮正常');
+
+  // ST-37: Ribbon 空白区右键二级菜单（Ribbon 最大显示个数 / 开发人员工具），
+  // 一级项 hover/点击右侧展开子菜单，devtools 子项走 noteDesktop.toggleDevTools。
+  assert(/data-sub="ribbon"/.test(rjs44) && /data-sub="devtools"/.test(rjs44),
+    'ST-37: Ribbon 空白区右键一级菜单含「Ribbon 最大显示个数」「开发人员工具」两项');
+  assert(/function openSubMenu\(type, anchor\)/.test(rjs44) && /data-subval/.test(rjs44),
+    'ST-37: 一级菜单项 hover/点击展开二级子菜单（数值/恢复默认/开发工具）');
+  assert(/window\.noteDesktop && window\.noteDesktop\.toggleDevTools/.test(rjs44),
+    'ST-37: 开发人员工具二级项调用 toggleDevTools 打开开发者工具');
 
   // Bug-045: 主题「一次设置、一次渲染」——启动主题由 index.html head 读取 localStorage 一次性渲染；
   // 插件启动不再自动 applyTheme（restore），head 需含「默认配色方案」兜底，避免二次设置。
@@ -1055,6 +1068,48 @@ function testSemanticChunk() {
   assert(semantic.length > 1 && semantic[0].text.indexOf(FILE) === 0, 'AI-16: strategy=semantic 走语义分块并含文件名前缀');
   const fixed = chunkConfigured(text, 200, 40, null, 300);
   assert(fixed[0].text.indexOf(FILE) === -1, 'AI-16: 默认固定分块不含文件名前缀（向后兼容）');
+
+  /* ST-36 Agent 配置：默认配置含 agents 列表与当前选中 id；currentAgent 按 id 解析，未配置/未命中返回 null
+   * 作者: 火 冰 */
+  const { AiEngine } = mod;
+  assert(Array.isArray(DEFAULT_CONFIG.agents) && DEFAULT_CONFIG.currentAgentId === '',
+    'ST-36: 默认配置含 agents:[] 与 currentAgentId:""');
+  const eng = new AiEngine();
+  eng.cfg.agents = [{ id: 'a1', name: '写作助手', systemPrompt: '你是写作助手' }];
+  eng.cfg.currentAgentId = 'a1';
+  const cur = eng.currentAgent();
+  assert(cur && cur.id === 'a1' && cur.systemPrompt === '你是写作助手', 'ST-36: currentAgent 按 currentAgentId 解析');
+  eng.cfg.currentAgentId = 'not-exist';
+  assert(eng.currentAgent() === null, 'ST-36: 未命中的 currentAgentId 返回 null');
+
+  /* ST-38 携带历史数据：默认携带（cfg.carryHistory=true）；关闭时问答每轮只发送当前问题。
+   * 顶栏「携带历史」开关（ai.html #ai-carry-history，默认 checked）+ 设置-AI 开关（data-ai-cfg=carryHistory）
+   * 同写 cfg.carryHistory；app-ai.js 发送处按开关决定 history。 */
+  assert(DEFAULT_CONFIG.carryHistory === true, 'ST-38: 默认配置 carryHistory=true（默认携带历史）');
+  const aiHtml = fs.readFileSync(path.join(__dirname, 'views', 'ai.html'), 'utf8');
+  assert(aiHtml.indexOf('id="ai-carry-history"') !== -1 && aiHtml.indexOf('checked') !== -1,
+    'ST-38: 顶栏含「携带历史」滑动开关（ai-carry-history，默认开启）');
+  const appAi = fs.readFileSync(path.join(__dirname, 'js', 'app-ai.js'), 'utf8');
+  assert(appAi.indexOf("ai.ask(q, carry, agentId)") !== -1 && appAi.indexOf("carryHistory") !== -1,
+    'ST-38: 发送时按开关决定是否携带历史（ai.ask(q, carry, agentId)）');
+  const panels = fs.readFileSync(path.join(__dirname, 'js', 'settings', 'settings-panels.js'), 'utf8');
+  assert(panels.indexOf('data-ai-cfg="carryHistory"') !== -1,
+    'ST-38: 设置-AI 同步新增「携带历史数据」开关（carryHistory）');
+
+  /* AI-24 按组删除问答：消息按 .ai-qa-group 分组渲染（一组 = user 提问 + 其后的 assistant 回答），
+   * 组右上角 hover 删除按钮，删除该组 history 区间并持久化重绘。
+   * 作者: 火 冰 */
+  assert(appAi.indexOf('ai-qa-group') !== -1 && appAi.indexOf('function aiRemoveGroup') !== -1,
+    'AI-24: 消息按问答组渲染，支持按组删除（aiRemoveGroup）');
+  assert(appAi.indexOf('aiCurGroupEl') !== -1 && appAi.indexOf("role === 'user'") !== -1,
+    'AI-24: user 消息开启新组、assistant 归入当前组');
+
+  /* Bug-061 隐藏路径不进向量库：_isDotPath 统一过滤 .gitignore/.second-brain 等点路径，
+   * 与 _scanMd 跳过点文件的索引口径一致（git-sync 写 .gitignore 触发 updateNote 曾误入索引/来源）
+   * 作者: 火 冰 */
+  assert(eng._isDotPath('.gitignore') === true, 'Bug-061: .gitignore 判定为隐藏路径');
+  assert(eng._isDotPath('.second-brain/foo.md') === true, 'Bug-061: .second-brain 目录内文件判定为隐藏路径');
+  assert(eng._isDotPath('我的账号/网络账号.md') === false, 'Bug-061: 普通笔记路径不判定为隐藏路径');
 }
 
 /* ---- 资源上传助手：sbResMarkdown / resolveVaultResUrl ----

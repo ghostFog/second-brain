@@ -13,6 +13,95 @@
 
   let aiSessions = [];           // 会话列表 [{id, title, history:[{role, content, model, firstTokenMs, totalMs, stopped}]}]
   let aiActiveSessionId = null;  // 当前活动会话 id
+  let aiCurGroupEl = null;       // 当前问答组容器（一组 = 一次完整问答：user 提问 + 其后的 assistant 回答）
+
+  /** 会话持久化 IO：仅在桌面桥可用（具备 listSessions 等）时返回 ai 对象，网页版降级为内存态。
+   * @returns {{saveSession:Function, deleteSession:Function, listSessions:Function, readSession:Function, getActiveSession:Function}|null}
+   * @author 火 冰 */
+  function aiSessionIO() {
+    const ai = window.noteDesktop && window.noteDesktop.ai;
+    return (ai && typeof ai.saveSession === 'function' && typeof ai.listSessions === 'function') ? ai : null;
+  }
+
+  /** 持久化单个会话到磁盘（含 id/title/history）；非桌面桥静默跳过。
+   * @param {object} s 会话对象 {id,title,history}
+   * @author 火 冰 */
+  function aiPersistSession(s) {
+    const io = aiSessionIO();
+    if (!io || !s || !s.id) return;
+    io.saveSession({ id: s.id, title: s.title || '', history: s.history || [] }).catch(function () {});
+  }
+
+  /** 记录最近活动会话 id（写 active.json）。
+   * @param {string} id 会话 id
+   * @author 火 冰 */
+  function aiMarkActive(id) {
+    const io = aiSessionIO();
+    if (!io || !id) return;
+    io.saveSession({ id: id, active: true }).catch(function () {});
+  }
+
+  /** 删除会话磁盘文件。
+   * @param {string} id 会话 id
+   * @author 火 冰 */
+  function aiDeletePersist(id) {
+    const io = aiSessionIO();
+    if (!io || !id) return;
+    io.deleteSession(id).catch(function () {});
+  }
+
+  /** 后台运行恢复：切走再切回时重建进行中的助手气泡，使后续 ai.token 能渲染到新节点。
+   * @author 火 冰 */
+  function aiRebuildGeneratingBubble() {
+    const chat = document.getElementById('ai-chat');
+    if (!aiGenerating || !chat) return;
+    aiCurBubble = aiAddMessage('assistant', aiCurText || '…');
+    const md = aiCurBubble && aiCurBubble.querySelector('.ai-md');
+    if (md) md.innerHTML = renderMarkdown(aiCurText || '');
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  /** 启动时从 .session 恢复会话：加载列表，定位上次活动或最近会话并整读渲染；异步完成后刷新 UI。
+   *  无持久化能力（网页版）或目录为空/失败时回落为新建空会话。
+   * @author 火 冰 */
+  function aiRestoreSessions() {
+    const io = aiSessionIO();
+    if (!io) { if (!aiSessions.length) aiNewSession(); renderSessionSidebar(); renderSessionChat(aiActiveSession()); return; }
+    io.listSessions().then(function (list) {
+      return io.getActiveSession().then(function (activeId) {
+        list = list || [];
+        let pick = list.find(function (x) { return x.id === activeId; });
+        if (!pick && list.length) pick = list[0];
+        const reads = list.map(function (x) {
+          return io.readSession(x.id).then(function (full) {
+            return (full && full.id)
+              ? { id: full.id, title: full.title || x.title, history: Array.isArray(full.history) ? full.history : [] }
+              : null;
+          });
+        });
+        return Promise.all(reads).then(function (fulls) {
+          aiSessions = fulls.filter(Boolean);
+          if (!aiSessions.length) { aiNewSession(); }
+          else {
+            aiActiveSessionId = (pick && pick.id) || aiSessions[0].id;
+            if (!aiSessions.some(function (s) { return s.id === aiActiveSessionId; })) aiActiveSessionId = aiSessions[0].id;
+          }
+          renderSessionSidebar();
+          renderSessionChat(aiActiveSession());
+          aiRebuildGeneratingBubble();
+          aiUpdateSendButton();
+          refreshIcons();
+        });
+      });
+    }).catch(function () {
+      if (!aiSessions.length) aiNewSession();
+      renderSessionSidebar();
+      renderSessionChat(aiActiveSession());
+      aiRebuildGeneratingBubble();
+      aiUpdateSendButton();
+      refreshIcons();
+    });
+  }
   let aiGenerating = false;      // 是否正在生成
   let aiCurBubble = null;        // 当前流式输出的助手气泡元素
   let aiCurText = '';            // 当前流式文本缓冲
@@ -47,6 +136,8 @@
     const s = { id: 's' + Date.now(), title: '新会话', history: [] };
     aiSessions.unshift(s);
     aiActiveSessionId = s.id;
+    aiCurGroupEl = null;
+    aiMarkActive(s.id);
     renderSessionSidebar();
     return s;
   }
@@ -95,6 +186,7 @@
       row.appendChild(del);
       row.addEventListener('click', function () {
         aiActiveSessionId = s.id;
+        aiMarkActive(s.id);
         renderSessionSidebar();
         renderSessionChat(s);
       });
@@ -110,9 +202,12 @@
     if (idx < 0) return;
     if (aiGenerating) { if (ai) ai.stop(); aiGenerating = false; aiCurBubble = null; aiCurText = ''; aiCurModel = ''; aiFirstMs = null; aiT0 = 0; aiStopFlag = false; aiUpdateSendButton(); }
     aiSessions.splice(idx, 1);
+    aiDeletePersist(id);
+    aiCurGroupEl = null;
     if (aiActiveSessionId === id) {
       const next = aiSessions[0] || aiNewSession();
       aiActiveSessionId = next.id;
+      aiMarkActive(next.id);
       renderSessionChat(next);
     }
     renderSessionSidebar();
@@ -123,17 +218,86 @@
     const chat = document.getElementById('ai-chat');
     if (!chat) return;
     chat.innerHTML = '';
+    aiCurGroupEl = null;
     if (!session.history.length) { aiRenderEmpty(); return; }
     session.history.forEach(function (m) { aiAddMessage(m.role, m.content, m); });
     chat.scrollTop = chat.scrollHeight;
   }
 
-  /** 追加一条消息气泡（user 右对齐 / assistant 左对齐）；meta 为助手消息附带统计信息（模型/首token时长/总耗时/打断标记） */
+  /** 新建一个问答组容器（一组 = 一次完整问答），右上角 hover 显示「删除本组」按钮。
+   * @returns {HTMLElement} 组容器元素
+   * @author 火 冰 */
+  function aiCreateGroup() {
+    const chat = document.getElementById('ai-chat');
+    if (!chat) return null;
+    const g = document.createElement('div');
+    g.className = 'ai-qa-group relative group';
+    const del = document.createElement('button');
+    del.className = 'flex items-center justify-center w-6 h-6 rounded-md transition-colors opacity-0 group-hover:opacity-100 absolute right-2 top-2';
+    del.style.cssText = 'color: var(--note-ink-3); background: transparent;';
+    del.title = '删除本组问答';
+    del.innerHTML = '<i data-lucide="trash-2" class="w-3.5 h-3.5"></i>';
+    del.addEventListener('click', function (e) {
+      e.stopPropagation();
+      aiRemoveGroup(g);
+    });
+    g.appendChild(del);
+    chat.appendChild(g);
+    return g;
+  }
+
+  /** 按组删除：删除第 gidx 组（组序号按 DOM 中 .ai-qa-group 顺序），即该组 user 提问
+   * 及其后直到下一个 user 之前的所有 assistant 回答；删除后持久化并重绘。
+   * @param {HTMLElement} g 组容器元素
+   * @author 火 冰 */
+  function aiRemoveGroup(g) {
+    const chat = document.getElementById('ai-chat');
+    if (!g || !chat || !g.parentElement) return;
+    const s = aiActiveSession();
+    if (!s) return;
+    const groups = chat.querySelectorAll('.ai-qa-group');
+    const gidx = Array.prototype.indexOf.call(groups, g);
+    if (gidx < 0) return;
+    // 定位该组在 history 中的区间：[start, end)，end = 下一个 user 或数组末尾
+    let start = -1, seen = 0, i;
+    for (i = 0; i < s.history.length; i++) {
+      if (s.history[i].role === 'user') {
+        if (seen === gidx) { start = i; break; }
+        seen++;
+      }
+    }
+    if (start < 0) return;
+    let end = s.history.length;
+    for (i = start + 1; i < s.history.length; i++) {
+      if (s.history[i].role === 'user') { end = i; break; }
+    }
+    // 删除的若是生成中的组，先停止（stop 后 aiFinish 因 aiCurText 已清空不会再写历史）
+    if (aiGenerating && aiCurGroupEl === g) {
+      const ai = window.noteDesktop && window.noteDesktop.ai;
+      if (ai) ai.stop();
+      aiGenerating = false; aiCurBubble = null; aiCurText = ''; aiCurModel = ''; aiFirstMs = null; aiT0 = 0; aiStopFlag = false; aiUpdateSendButton();
+    }
+    s.history.splice(start, end - start);
+    if (aiCurGroupEl === g) aiCurGroupEl = null;
+    aiPersistSession(s);
+    renderSessionChat(s);
+    aiRebuildGeneratingBubble();
+    aiSetStatus('已删除本组问答', 'var(--note-ink-3)');
+  }
+
+  /** 追加一条消息气泡（user 右对齐 / assistant 左对齐）；meta 为助手消息附带统计信息（模型/首token时长/总耗时/打断标记）。
+   *  消息按「问答组」归组：user 开启新组，assistant 归入当前组。 */
   function aiAddMessage(role, text, meta) {
     const chat = document.getElementById('ai-chat');
     if (!chat) return;
     const empty = chat.querySelector('.h-full');
     if (empty) chat.innerHTML = '';
+    // 分组：user 开启新组；assistant 归入当前组（无组则补建，兜底异常数据）
+    let g = aiCurGroupEl;
+    if (role === 'user' || !g || !g.parentElement) {
+      g = aiCreateGroup();
+      aiCurGroupEl = g;
+    }
     const isUser = role === 'user';
     const wrap = document.createElement('div');
     wrap.className = 'flex ' + (isUser ? 'justify-end' : 'justify-start') + ' px-5 py-2.5';
@@ -148,7 +312,7 @@
       if (meta && meta.model) aiAppendMeta(bubble, meta);
     }
     wrap.appendChild(bubble);
-    chat.appendChild(wrap);
+    if (g) g.appendChild(wrap); else chat.appendChild(wrap);
     chat.scrollTop = chat.scrollHeight;
     return bubble;
   }
@@ -184,10 +348,12 @@
     const totalMs = aiT0 ? (Date.now() - aiT0) : 0;
     const text = aiCurText;
     if (text) {
-      aiActiveSession().history.push({
+      const sess = aiActiveSession();
+      sess.history.push({
         role: 'assistant', content: text,
         model: aiCurModel, firstTokenMs: aiFirstMs, totalMs: totalMs, stopped: !!stopped,
       });
+      aiPersistSession(sess);
     }
     if (aiCurBubble) {
       aiAppendMeta(aiCurBubble, { model: aiCurModel, firstTokenMs: aiFirstMs, totalMs: totalMs, stopped: !!stopped });
@@ -246,6 +412,7 @@
     const s = aiActiveSession();
     s.history.push({ role: 'user', content: q });
     if (s.title === '新会话') { s.title = q.length > 20 ? q.slice(0, 20) + '…' : q; renderSessionSidebar(); }
+    aiPersistSession(s);
     aiGenerating = true;
     aiStopFlag = false;
     aiT0 = Date.now();
@@ -257,7 +424,13 @@
     aiCurBubble = aiAddMessage('assistant', '…');
     aiSetStatus('生成中', 'var(--note-brand-400)');
     aiUpdateSendButton();
-    ai.ask(q, s.history.slice(0, -1)).catch(function () { /* 错误经 ai:ask-error 事件处理 */ });
+    // 当前选中的 Agent id（无配置/未选中时为空串 → 引擎走默认助手）
+    const agentSel = document.getElementById('ai-agent');
+    const agentId = (agentSel && agentSel.value) ? agentSel.value : '';
+    // 顶栏「携带历史数据」开关：关闭时每轮只发送当前问题（不带上文对话历史）
+    const carryEl = document.getElementById('ai-carry-history');
+    const carry = (carryEl && !carryEl.checked) ? [] : s.history.slice(0, -1);
+    ai.ask(q, carry, agentId).catch(function () { /* 错误经 ai:ask-error 事件处理 */ });
   }
 
   /** 输入框高度自适应 */
@@ -354,6 +527,41 @@
         ai.saveConfig({ currentModelId: id }).then(function (cfg) {
           const m = ((cfg && cfg.models) || []).find(function (x) { return x.id === id; });
           aiSetStatus('已切换 · ' + (m ? m.model : ''), 'var(--state-success)');
+        }).catch(function () {});
+      });
+    }
+
+    // Agent 选择器（底部输入区）：从配置的 agents 列表填充（value=agent id），切换保存 currentAgentId
+    const agentSel = document.getElementById('ai-agent');
+    if (agentSel && ai.getConfig) {
+      ai.getConfig().then(function (cfg) {
+        const agents = ((cfg && cfg.agents) || []).slice();
+        agentSel.innerHTML = '<option value="">默认助手</option>'
+          + agents.map(function (a) {
+            return '<option value="' + esc(a.id) + '">' + esc(a.name || '未命名') + '</option>';
+          }).join('');
+        const cur = (cfg && cfg.currentAgentId) || '';
+        if (agents.some(function (x) { return x.id === cur; })) agentSel.value = cur;
+      }).catch(function () {});
+      agentSel.addEventListener('change', function () {
+        const id = agentSel.value;
+        const name = agentSel.selectedOptions && agentSel.selectedOptions[0]
+          ? agentSel.selectedOptions[0].textContent : '';
+        ai.saveConfig({ currentAgentId: id }).then(function () {
+          aiSetStatus('已切换 · ' + (id ? name : '默认助手'), 'var(--state-success)');
+        }).catch(function () {});
+      });
+    }
+
+    // 「携带历史数据」开关（顶栏）：回填 cfg.carryHistory（默认携带），切换即持久化
+    const carryEl = document.getElementById('ai-carry-history');
+    if (carryEl && ai.getConfig) {
+      ai.getConfig().then(function (cfg) {
+        carryEl.checked = cfg.carryHistory !== false;
+      }).catch(function () {});
+      carryEl.addEventListener('change', function () {
+        ai.saveConfig({ carryHistory: carryEl.checked }).then(function () {
+          aiSetStatus(carryEl.checked ? '已开启：携带历史数据' : '已关闭：每轮仅发送当前问题', 'var(--state-success)');
         }).catch(function () {});
       });
     }
@@ -506,18 +714,8 @@
       sideOpen.classList.remove('show');
     });
 
-    // 恢复上次活动会话并渲染会话列表与对话
-    if (!aiSessions.length) aiNewSession();
-    renderSessionSidebar();
-    renderSessionChat(aiActiveSession());
-    // 后台运行恢复：切走再切回时，若仍处于生成中，重建进行中的助手气泡并回灌已累计内容，
-    // 使后续 ai.token 能继续渲染到新节点（旧节点已被 loadView 重建销毁）
-    if (aiGenerating) {
-      aiCurBubble = aiAddMessage('assistant', aiCurText || '…');
-      const md = aiCurBubble && aiCurBubble.querySelector('.ai-md');
-      if (md) md.innerHTML = renderMarkdown(aiCurText || '');
-      chat.scrollTop = chat.scrollHeight;
-    }
+    // 恢复会话并渲染会话列表与对话（持久化到 .session；异步完成后重建进行中气泡）
+    aiRestoreSessions();
     aiUpdateSendButton();
     refreshIcons();
   }

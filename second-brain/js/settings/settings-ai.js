@@ -83,6 +83,8 @@
     const idxEl = document.getElementById('ai-index-status');
     let aiModels = [];        // 生成模型列表状态
     let currentModelId = '';  // 当前选中模型 id
+    let aiAgents = [];        // Agent 配置列表状态（自定义角色）
+    let currentAgentId = '';  // 当前选中 Agent id
     // Ollama 运行状态表：key = baseUrl + '\u0000' + model 名，value=true 表示正在运行
     // 由 refreshOne/refreshAllGroups 按刷新频率（modelRefreshSec）轮询 /api/ps 更新
     let runningMap = {};
@@ -207,12 +209,15 @@
       window.__aiRefreshTimer = setInterval(tick, sec * 1000);
     };
 
-    /* 持久化：本地字段 + 模型列表 + 当前模型 */
+    /* 持久化：本地字段 + 模型列表 + 当前模型 + Agent 列表 + 当前 Agent */
     const persist = function (extra) {
-      return ai.saveConfig(Object.assign({}, collectLocal(), { models: aiModels, currentModelId }, extra || {})).then(function (c) {
+      return ai.saveConfig(Object.assign({}, collectLocal(), { models: aiModels, currentModelId, agents: aiAgents, currentAgentId }, extra || {})).then(function (c) {
         aiModels = (c && c.models) || aiModels;
         currentModelId = (c && c.currentModelId) || currentModelId;
+        aiAgents = (c && c.agents) || aiAgents;
+        currentAgentId = (c && c.currentAgentId) || currentAgentId;
         renderModelList();
+        renderAgentList();
         return c;
       });
     };
@@ -559,13 +564,119 @@
       persist().then(function () { showToast('模型已复制：' + copy.model); }).catch(function () { showToast('保存失败'); });
     };
 
-    // 读取配置并渲染本地字段 + 模型列表
+    /* 渲染 Agent 配置列表：行内 名称 + 提示词首行预览 + 当前标记 + 编辑/删除 */
+    const renderAgentList = function () {
+      const box = document.getElementById('ai-agent-list');
+      if (!box) return;
+      if (!aiAgents.length) {
+        box.innerHTML = '<div class="px-4 py-6 text-center text-caption" style="color:var(--note-ink-3);">尚未配置 Agent，点击「添加 Agent」创建自定义角色</div>';
+        return;
+      }
+      box.innerHTML = aiAgents.map(function (a) {
+        const active = a.id === currentAgentId;
+        const preview = String(a.systemPrompt || '').split('\n')[0] || '';
+        return '<div class="flex items-center gap-2 px-3 py-2.5" style="border-color:var(--note-border);">'
+          + '<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:' + (active ? 'var(--state-success)' : 'var(--note-ink-3)') + ';"></span>'
+          + '<div class="flex-1 min-w-0"><div class="text-[13px] truncate" style="color:var(--note-ink);">' + esc(a.name || '未命名') + '</div>'
+          + '<div class="text-caption truncate" style="color:var(--note-ink-3);">' + esc(preview || '（未填写系统提示词）') + '</div></div>'
+          + (active ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style="background:rgba(124,58,237,0.15); color:var(--note-brand-400);">当前</span>' : '')
+          + '<button class="ai-agent-edit w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" data-aid="' + esc(a.id) + '" title="编辑"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>'
+          + '<button class="ai-agent-del w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" data-aid="' + esc(a.id) + '" title="删除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>'
+          + '</div>';
+      }).join('');
+      if (window.lucide && window.lucide.createIcons) window.lucide.createIcons({});
+    };
+
+    /* 打开添加/编辑 Agent 弹层：名称 + 系统提示词 */
+    const openAgentForm = function (item) {
+      const isEdit = !!item;
+      const ov = document.createElement('div');
+      ov.id = 'ai-agent-overlay';
+      ov.className = 'fixed inset-0 z-50 flex items-center justify-center';
+      ov.style.cssText = 'background:rgba(0,0,0,0.45);';
+      ov.innerHTML =
+        '<div class="w-[440px] max-w-[92vw] rounded-xl border p-5" style="background:var(--note-surface); border-color:var(--note-border); box-shadow:0 12px 40px rgba(0,0,0,0.35);">'
+        + '<div class="flex items-center justify-between mb-4"><h3 class="text-[15px] font-semibold" style="color:var(--note-ink);">' + (isEdit ? '编辑 Agent' : '添加 Agent') + '</h3>'
+        + '<button class="ai-form-close w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80" style="color:var(--note-ink-3);"><i data-lucide="x" class="w-4 h-4"></i></button></div>'
+        + '<div class="space-y-3">'
+        + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">名称</div>'
+        + '<input type="text" data-ai-form="name" class="w-full rounded-md px-3 py-2 text-[13px] outline-none" placeholder="如：写作助手 / 翻译助手 / 代码助手" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
+        + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">系统提示词</div>'
+        + '<textarea data-ai-form="systemPrompt" rows="6" class="w-full rounded-md px-3 py-2 text-[13px] outline-none resize-y" placeholder="定义该 Agent 的角色、行为与回答风格，问答时作为系统提示词注入" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></textarea></div>'
+        + '<div class="grid grid-cols-3 gap-2">'
+        + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">温度</div>'
+        + '<input type="number" step="0.1" min="0" max="2" data-ai-form="temperature" class="w-full rounded-md px-3 py-2 text-[13px] outline-none" placeholder="默认 0.7" title="temperature（0~2），留空用默认" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
+        + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">top_p</div>'
+        + '<input type="number" step="0.05" min="0" max="1" data-ai-form="topP" class="w-full rounded-md px-3 py-2 text-[13px] outline-none" placeholder="默认 1" title="top_p（0~1），留空用默认" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
+        + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">最大 token</div>'
+        + '<input type="number" step="1" min="1" data-ai-form="maxTokens" class="w-full rounded-md px-3 py-2 text-[13px] outline-none" placeholder="默认不限" title="max_tokens（正整数），留空不限制" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
+        + '</div>'
+        + '</div>'
+        + '<div class="flex justify-end gap-2 mt-5">'
+        + '<button class="ai-form-cancel px-4 py-2 rounded-md text-[13px] border" style="border-color:var(--note-border); color:var(--note-ink-2); background:var(--note-surface-2);">取消</button>'
+        + '<button class="ai-form-save px-4 py-2 rounded-md text-[13px] font-medium" style="background:var(--note-brand-600); color:#FFFFFF;">保存</button>'
+        + '</div></div>';
+      document.body.appendChild(ov);
+      if (window.lucide && window.lucide.createIcons) window.lucide.createIcons({});
+      if (item) {
+        ov.querySelector('[data-ai-form="name"]').value = item.name || '';
+        ov.querySelector('[data-ai-form="systemPrompt"]').value = item.systemPrompt || '';
+        ov.querySelector('[data-ai-form="temperature"]').value = (typeof item.temperature === 'number' && !isNaN(item.temperature)) ? item.temperature : '';
+        ov.querySelector('[data-ai-form="topP"]').value = (typeof item.topP === 'number' && !isNaN(item.topP)) ? item.topP : '';
+        ov.querySelector('[data-ai-form="maxTokens"]').value = Number.isInteger(item.maxTokens) ? item.maxTokens : '';
+      }
+      const close = function () { ov.remove(); };
+      ov.querySelector('.ai-form-close').addEventListener('click', close);
+      ov.querySelector('.ai-form-cancel').addEventListener('click', close);
+      ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
+      ov.querySelector('.ai-form-save').addEventListener('click', function () {
+        // 生成参数：空串不保存（undefined），非法数字按未配置处理
+        const numField = function (f) {
+          const v = ov.querySelector('[data-ai-form="' + f + '"]').value.trim();
+          if (v === '') return undefined;
+          const n = Number(v);
+          return isNaN(n) ? undefined : n;
+        };
+        const a = {
+          id: item ? item.id : genModelId(),
+          name: ov.querySelector('[data-ai-form="name"]').value.trim(),
+          systemPrompt: ov.querySelector('[data-ai-form="systemPrompt"]').value.trim(),
+          temperature: numField('temperature'),
+          topP: numField('topP'),
+          maxTokens: numField('maxTokens'),
+        };
+        if (!a.name) { showToast('请填写 Agent 名称'); return; }
+        if (item) {
+          aiAgents = aiAgents.map(function (x) { return x.id === a.id ? a : x; });
+        } else {
+          aiAgents.push(a);
+          if (!currentAgentId) currentAgentId = a.id;
+        }
+        close();
+        persist().then(function () { showToast(isEdit ? 'Agent 已更新' : 'Agent 已添加'); })
+          .catch(function () { showToast('保存失败'); });
+      });
+    };
+
+    /* 删除 Agent（当前 Agent 被删则回退到第一个） */
+    const removeAgent = function (id) {
+      aiAgents = aiAgents.filter(function (a) { return a.id !== id; });
+      if (currentAgentId === id) currentAgentId = aiAgents.length ? aiAgents[0].id : '';
+      persist().then(function () { showToast('Agent 已删除'); }).catch(function () { showToast('保存失败'); });
+    };
+
+    // 读取配置并渲染本地字段 + 模型列表 + Agent 列表
     ai.getConfig().then(function (cfg) {
       if (!cfg) return;
       fillLocal(cfg);
       aiModels = (cfg.models && cfg.models.slice()) || [];
       currentModelId = cfg.currentModelId || (aiModels.length ? aiModels[0].id : '');
+      aiAgents = (cfg.agents && cfg.agents.slice()) || [];
+      currentAgentId = cfg.currentAgentId || (aiAgents.length ? aiAgents[0].id : '');
       renderModelList();
+      renderAgentList();
+      // 配置回填输入框后重绘模型库：避免与 loadModelLib 异步竞态导致「已使用」判定丢失
+      renderAllLib();
       // 配置加载完成（含持久化的刷新频率）后重启自动轮询定时器
       if (canTrack) startAutoRefresh();
       // 「自动加载」开关：切换时即时加载/卸载嵌入模型（持久化 + 立即生效）
@@ -585,6 +696,33 @@
               if (stEl) stEl.textContent = st && st.embeddingLoaded ? '已加载' : '未加载';
               showToast(st && st.embeddingLoaded ? '嵌入模型已加载' : '嵌入模型加载失败');
             });
+          }).catch(function (e) { showToast('保存失败：' + ((e && e.message) || e)); });
+        });
+      }
+      // 「启动常驻」开关：切换即持久化（Ollama 问答模型在下次应用启动时自动常驻）
+      const residentEl = root.querySelector('[data-ai-cfg="autoResidentOnStart"]');
+      if (residentEl) {
+        residentEl.addEventListener('change', function () {
+          persist().then(function () {
+            showToast(residentEl.checked ? '已开启：启动自动常驻问答模型' : '已关闭启动常驻');
+          }).catch(function (e) { showToast('保存失败：' + ((e && e.message) || e)); });
+        });
+      }
+      // 「打印完整提示词」开关：切换即持久化（否则切走面板再回来会还原为未勾选）
+      const printEl = root.querySelector('[data-ai-cfg="printFullPrompt"]');
+      if (printEl) {
+        printEl.addEventListener('change', function () {
+          persist().then(function () {
+            showToast(printEl.checked ? '已开启：问答时打印完整提示词' : '已关闭打印完整提示词');
+          }).catch(function (e) { showToast('保存失败：' + ((e && e.message) || e)); });
+        });
+      }
+      // 「携带历史数据」开关：切换即持久化（顶栏「携带历史」开关同步同一 cfg.carryHistory）
+      const carryEl = root.querySelector('[data-ai-cfg="carryHistory"]');
+      if (carryEl) {
+        carryEl.addEventListener('change', function () {
+          persist().then(function () {
+            showToast(carryEl.checked ? '已开启：问答携带历史数据' : '已关闭：每轮仅发送当前问题');
           }).catch(function (e) { showToast('保存失败：' + ((e && e.message) || e)); });
         });
       }
@@ -694,11 +832,27 @@
       });
     }
 
-    // 工具栏按钮（添加模型 / 保存 / 加载嵌入 / 重建索引）
+    // Agent 列表事件委托（编辑 / 删除）
+    const agentListBox = document.getElementById('ai-agent-list');
+    if (agentListBox) {
+      agentListBox.addEventListener('click', function (e) {
+        const editBtn = e.target.closest('.ai-agent-edit');
+        const delBtn = e.target.closest('.ai-agent-del');
+        if (editBtn) {
+          const it = aiAgents.find(function (a) { return a.id === editBtn.dataset.aid; });
+          if (it) openAgentForm(it);
+        } else if (delBtn) {
+          removeAgent(delBtn.dataset.aid);
+        }
+      });
+    }
+
+    // 工具栏按钮（添加模型 / 添加 Agent / 保存 / 加载嵌入 / 重建索引）
     root.querySelectorAll('[data-ai-saction]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         const act = btn.dataset.aiSaction;
         if (act === 'add') openModelForm(null);
+        else if (act === 'agent-add') openAgentForm(null);
         else if (act === 'save') {
           persist().then(function () { showToast('AI 配置已保存'); }).catch(function () { showToast('保存失败'); });
         } else if (act === 'load') {

@@ -71,6 +71,8 @@
 | Bug-057 | 已修复 | 托盘知识库列表「我的笔记库」重复：历史库里曾打开的默认库路径键与顶部固定项 `'__default__'` 键不归一，去重失效；`pushVault` 键改为「null 或等于默认库路径统一归一为 `'__default__'`」。 | [查看](bugs/Bug-057.md) |
 | Bug-058 | 已修复（测试完成） | 点击编辑器工具栏链接按钮报错 `Uncaught TypeError: (e.target.className || "").slice is not a function`：`e.target` 是 SVG 图标时 `className` 为 `SVGAnimatedString` 对象无 `.slice`；取 className 加类型守卫 / SVG 改用 `getAttribute('class')`。 | [查看](bugs/Bug-058.md) |
 | Bug-059 | 已修复（测试完成） | 知识库单库多窗口：默认库每次触发「打开/恢复默认库」都新开窗口（G-13 单库单窗口失效）。`createWindow` 去重检查写在 `if (binding)` 内，默认库被归一为 `null` 直接跳过；改为统一按键查询（默认库 key 用 `vaultKey(binding || defaultVaultRoot())`），命中聚焦旧窗口。 | [查看](bugs/Bug-059.md) |
+| Bug-060 | 已修复（测试完成） | 嵌入式模型库启动后不显示「已使用」：`renderAllLib`（getModelLib 扫描）与 `fillLocal`（getConfig 回填输入框）为并行异步，渲染先于回填时 `cfgPathValue` 得空串判定失败且不再刷新。修复：回填后主动补一次 `renderAllLib`。 | [查看](bugs/Bug-060.md) |
+| Bug-061 | 已修复（测试完成） | AI 问答「来源」出现 `.gitignore`：增量索引 `updateNote` 无隐藏路径过滤（与 `_scanMd` 跳过点文件口径不一致），git-sync 写 `.gitignore` 触发 `updateNote` 把过滤文件索引进向量库被检索召回。修复：新增 `_isDotPath` 统一判定，`updateNote` 跳过+清除、`_loadIndexFrom` 加载过滤、`retrieve` 兜底过滤。 | [查看](bugs/Bug-061.md) |
 
 > 说明（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——代码块语言选择器(chip)显隐保留为 Bug-011，编辑器链接弹框 `docButton` 那条纠正为 Bug-042。
 

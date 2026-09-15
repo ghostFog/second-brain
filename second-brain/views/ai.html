@@ -32,6 +32,10 @@
         <span id="ai-status-dot" class="w-1.5 h-1.5 rounded-full" style="background: var(--note-ink-3);"></span>
         <span id="ai-status-text">未加载</span>
       </span>
+      <label class="flex items-center gap-1.5 shrink-0 cursor-pointer select-none" title="问答时是否携带上文对话历史（关闭则每轮只发送当前问题）" style="color: var(--note-ink-2);">
+        <span class="text-[11px]">携带历史</span>
+        <span class="ai-switch"><input type="checkbox" id="ai-carry-history" checked><span class="ai-switch-slider"></span></span>
+      </label>
       <div class="relative" id="ai-index-dd">
         <button data-ai="index-menu-toggle" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-medium border transition-colors hover:opacity-80" style="border-color: var(--note-border); color: var(--note-ink-2); background: var(--note-surface-2);" title="管理各知识库索引：重建 / 清理残留">
           <i data-lucide="database" class="w-3.5 h-3.5"></i><span>索引库</span><i data-lucide="chevron-down" class="w-3 h-3"></i>
@@ -52,9 +56,16 @@
     <!-- ===== 对话区 ===== -->
     <div id="ai-chat" class="flex-1 overflow-y-auto app-scroll"></div>
 
-    <!-- ===== 底部输入区：左「模型选择器」下拉 + 中输入框 + 右「发送」 ===== -->
+    <!-- ===== 底部输入区：左「Agent + 模型选择器」下拉 + 中输入框 + 右「发送」 ===== -->
     <div class="shrink-0 px-4 py-3 border-t" style="border-color: var(--note-border); background: var(--note-surface);">
       <div class="flex items-center gap-2 max-w-3xl mx-auto">
+        <div class="relative flex items-center shrink-0" title="选择 Agent（自定义角色助手）">
+          <i data-lucide="bot" class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style="color: var(--note-ink-3);"></i>
+          <select id="ai-agent" class="select-box text-[12px] py-2" style="padding-left: 30px; padding-right: 30px;" aria-label="选择 Agent">
+            <option value="">默认助手</option>
+          </select>
+          <i data-lucide="chevron-down" class="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style="color: var(--note-ink-3);"></i>
+        </div>
         <div class="relative flex items-center shrink-0" title="选择生成模型">
           <i data-lucide="cpu" class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style="color: var(--note-ink-3);"></i>
           <select id="ai-model" class="select-box text-[12px] py-2" style="padding-left: 30px; padding-right: 30px;" aria-label="选择生成模型">

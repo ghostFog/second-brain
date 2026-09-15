@@ -74,11 +74,39 @@
     showToast(bits.join(' · '));
   }
 
-  /* 初始化当前知识库为 Git 仓库（git init）；随后关闭路径转义（中文文件名可读） */
+  /* 默认 .gitignore 内容：首次初始化知识库时写入库根（过滤文件），
+   * 忽略应用内部数据与系统/临时文件；被忽略的路径不会进入自动提交（git add . 天然尊重 .gitignore）。
+   * 注意：.resources/（上传的资源文件）需要版本管理，不在此忽略。作者: 火 冰 */
+  var DEFAULT_GITIGNORE = '# 第二脑 Git Sync 默认忽略规则\n'
+    + '# 作者：火 冰\n'
+    + '# 被忽略的路径不会进入自动提交（git add . 天然尊重 .gitignore）\n\n'
+    + '# 应用内部数据\n'
+    + '.second-brain/\n'
+    + '.session/\n\n'
+    + '# Obsidian 配置与回收站\n'
+    + '.obsidian/\n'
+    + '.trash/\n\n'
+    + '# 临时与日志文件\n'
+    + '*.tmp\n'
+    + '*.log\n\n'
+    + '# 操作系统文件\n'
+    + '.DS_Store\n'
+    + 'Thumbs.db\n'
+    + 'Desktop.ini\n';
+
+  /* 初始化当前知识库为 Git 仓库（git init）；库根若无 .gitignore 则写入默认忽略规则（过滤文件），
+   * 已存在则保留用户自定义内容；随后关闭路径转义（中文文件名可读）。作者: 火 冰 */
   async function initRepo() {
     await refreshVault();
     const r = await git(['init']);
     if (r.exit !== 0) { showToast('初始化失败：' + r.stderr.trim()); return; }
+    // 首次初始化创建默认 .gitignore（readNote 在文件不存在时抛错，据此判断是否已存在）
+    try {
+      await window.noteDesktop.readNote('.gitignore');
+    } catch (e) {
+      try { await window.noteDesktop.saveNote('.gitignore', DEFAULT_GITIGNORE); }
+      catch (e2) { /* 写 .gitignore 失败不阻塞初始化 */ }
+    }
     await git(['config', 'core.quotepath', 'false']);
     showToast('已初始化 Git 仓库');
     updateUi();

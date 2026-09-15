@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   setCloseAction: (val) => ipcRenderer.invoke('win:setCloseAction', val),
   /** 写运行日志（落盘到 userData/logs/app.log） */
   log: (level, msg, detail) => ipcRenderer.send('app:log', { level: level, msg: msg, detail: detail }),
+  /** 监听主进程 console 日志（main:log，渲染进程用于 F12 控制台 / 日志面板展示） */
+  onMainLog: (cb) => ipcRenderer.on('main:log', (_e, text) => cb && cb(text)),
   /** 打开运行日志目录（主进程错误弹窗「打开日志目录」按钮用，文件管理器定位到 logs/） */
   openLogDir: () => ipcRenderer.invoke('shell:openLogDir'),
   /** 同步确认对话框（window.confirm 的 Electron 实现，返回是否确定） */
@@ -131,8 +133,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     rebuildIndexFor: (vaultPath) => ipcRenderer.invoke('ai:rebuildIndexFor', vaultPath),
     /** 删除指定知识库索引文件 */
     deleteIndex: (vaultPath) => ipcRenderer.invoke('ai:deleteIndex', vaultPath),
-    /** 发起问答：question + 历史消息，token 经 onToken 流式回调 */
-    ask: (question, history) => ipcRenderer.invoke('ai:ask', question, history),
+    /** 发起问答：question + 历史消息 + 当前 Agent id（可空，未配置时走默认助手），token 经 onToken 流式回调 */
+    ask: (question, history, agentId) => ipcRenderer.invoke('ai:ask', question, history, agentId),
     /** 停止当前流式生成 */
     stop: () => ipcRenderer.send('ai:stop'),
     /** 注册流式 token 回调（自动替换旧监听） */
@@ -170,5 +172,15 @@ contextBridge.exposeInMainWorld('noteDesktop', {
       ipcRenderer.removeAllListeners('ai:modelProgress');
       ipcRenderer.on('ai:modelProgress', (_e, p) => cb(p));
     },
+    /** 列出知识库内全部 AI 会话（轻量元信息，按最近更新倒序） */
+    listSessions: () => ipcRenderer.invoke('ai:listSessions'),
+    /** 读取单个 AI 会话完整内容 */
+    readSession: (id) => ipcRenderer.invoke('ai:readSession', id),
+    /** 保存 AI 会话：{id,title,history} 或 {id,active:true} */
+    saveSession: (data) => ipcRenderer.invoke('ai:saveSession', data),
+    /** 删除指定 AI 会话 */
+    deleteSession: (id) => ipcRenderer.invoke('ai:deleteSession', id),
+    /** 读取最近活动会话 id */
+    getActiveSession: () => ipcRenderer.invoke('ai:getActiveSession'),
   },
 });

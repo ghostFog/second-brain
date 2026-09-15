@@ -27,8 +27,15 @@ const DEFAULT_CONFIG = {
   currentModelId: '',
   // 设置页「生成模型」各组运行状态自动刷新频率（秒）
   modelRefreshSec: 10,
+  // 设置页「Agent 配置」：自定义角色列表 { id, name, systemPrompt } 与当前选中 id（问答时注入 systemPrompt）
+  agents: [],
+  currentAgentId: '',
   // 应用启动时是否自动加载嵌入模型
   autoLoadEmbedding: false,
+  // 应用启动时是否自动常驻「最后使用的问答模型」（Ollama keep_alive=-1，加速首次问答）
+  autoResidentOnStart: true,
+  // AI 问答时是否携带上文对话历史（关闭则每轮只发送当前问题；顶栏「携带历史」开关与设置页同步此配置）
+  carryHistory: true,
   // 索引分块全局默认：块大小（字符）与相邻重叠（字符）；未单独设置的笔记按此生成
   blockSize: 200,
   overlap: 40,
@@ -350,7 +357,30 @@ class AiEngine {
     }
     this._loadConfig();
     this.activateVault();
+    this._residentOnStart(); // 启动常驻最后使用的问答模型（异步执行，不阻塞应用启动）
     return this.getStatus();
+  }
+
+  /**
+   * 应用启动时自动常驻「最后使用的问答模型」：开关开启且当前模型为本地 Ollama 时，
+   * 以 keep_alive=-1 加载并常驻内存（首次加载可能较慢，异步执行不阻塞应用启动）。
+   * Ollama 服务未启动等错误静默忽略，用户问答或手动加载时再自然处理。
+   * @author 火 冰
+   */
+  _residentOnStart() {
+    const task = async function () {
+      if (!this.cfg.autoResidentOnStart) return;
+      const list = Array.isArray(this.cfg.models) ? this.cfg.models : [];
+      if (!list.length || !this.cfg.currentModelId) return;
+      const cur = list.find((m) => m && m.id === this.cfg.currentModelId);
+      if (!cur || cur.provider !== 'ollama' || !cur.model) return;
+      try {
+        await this.manageOllamaModel({
+          baseUrl: cur.baseUrl, model: cur.model, action: 'load', numCtx: cur.numCtx,
+        });
+      } catch (e) { /* Ollama 未启动等错误不阻塞启动，静默忽略 */ }
+    };
+    task.call(this);
   }
 
   /* ---------- 配置持久化 ---------- */
@@ -828,13 +858,15 @@ class AiEngine {
       const j = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (j && Array.isArray(j.chunks)) {
         const files = new Set();
+        // 加载时即过滤历史误入的隐藏路径 chunk（如 git-sync 写 .gitignore 触发的增量索引脏数据）
+        const clean = j.chunks.filter(function (c) { return !this._isDotPath(c.path); }, this);
         this.index = {
           vaultName: j.vaultName || '',
           vaultPath: j.vaultPath || '',
           builtAt: j.builtAt || Date.now(),
           files: 0,
           noteIndexAt: (j && typeof j.noteIndexAt === 'object') ? j.noteIndexAt : {},
-          chunks: j.chunks.map(function (c) {
+          chunks: clean.map(function (c) {
             files.add(c.noteId || c.path);
             return { id: c.id || c.noteId + '#b' + (c.block || 0), noteId: c.noteId || c.path, path: c.path, block: c.block || 0, text: c.text, start: c.start, end: c.end, vec: new Float32Array(Buffer.from(c.v, 'base64').buffer) };
           }),
@@ -880,6 +912,18 @@ class AiEngine {
     const s = new Set();
     (this.index ? this.index.chunks : []).forEach(function (c) { s.add(c.noteId); });
     return s.size;
+  }
+
+  /**
+   * 判断相对路径是否属于「隐藏路径」：任一路径段以 . 开头（如 .gitignore、.second-brain/x.md）。
+   * 与元数据扫描 _scanMd 跳过点文件的索引口径一致，确保过滤文件/内部目录不进入向量库与检索来源。
+   * @param {string} rel 相对路径
+   * @returns {boolean}
+   * @author 火 冰
+   */
+  _isDotPath(rel) {
+    const segs = String(rel || '').split(/[\\/]+/).filter(Boolean);
+    return segs.some(function (s) { return s.charAt(0) === '.'; });
   }
 
   /**
@@ -932,6 +976,17 @@ class AiEngine {
       const root = this.getVaultRoot ? this.getVaultRoot() : null;
       if (!root) return;
       if (!this.index) this.activateVault();
+      // 与 _scanMd 口径一致：隐藏路径（.gitignore/.second-brain 等）或非 .md 文件不建索引；
+      // 若历史误入索引（如 git-sync 写 .gitignore 触发）则清除该路径的脏 chunk
+      const relStr = String(rel || '');
+      if (this._isDotPath(relStr) || !/\.md$/i.test(relStr.split(/[\\/]+/).pop() || '')) {
+        if (this.index.chunks.some(function (c) { return c.path === relStr; })) {
+          this.index.chunks = this.index.chunks.filter(function (c) { return c.path !== relStr; });
+          this.index.files = this._distinctNotes();
+          this._saveIndex();
+        }
+        return;
+      }
       let text = '';
       try { text = fs.readFileSync(path.join(root, rel), 'utf8'); } catch (e) { return this._removeNoteWork(rel); }
       const noteId = await this._metaNoteIdFor(rel, text);
@@ -1193,7 +1248,10 @@ class AiEngine {
     const k = topK || 20;
     if (!this.index || !this.index.chunks.length) return [];
     const qv = await this.embed(query);
-    const scored = this.index.chunks.map(c => ({ path: c.path, text: c.text, vec: c.vec, sim: cosine(qv, c.vec) }));
+    // 兜底：过滤隐藏路径 chunk（.gitignore 等），与索引口径一致，双保险
+    const scored = this.index.chunks
+      .filter(c => !this._isDotPath(c.path))
+      .map(c => ({ path: c.path, text: c.text, vec: c.vec, sim: cosine(qv, c.vec) }));
     scored.sort((a, b) => b.sim - a.sim);
     let cand = scored.slice(0, k);
     // 重排序：模型可用时按相关性精排，失败则回退余弦排序
@@ -1226,27 +1284,47 @@ class AiEngine {
   }
 
   /**
+   * 获取当前选中的 Agent（自定义角色，按 currentAgentId；未配置/未选中返回 null）。
+   * @returns {{id: string, name: string, systemPrompt: string}|null}
+   * @author 火 冰
+   */
+  currentAgent() {
+    const list = this.cfg.agents || [];
+    if (!list.length) return null;
+    return list.find(a => a.id === this.cfg.currentAgentId) || null;
+  }
+
+  /**
    * 发起一次 AI 问答：检索上下文 → 组装消息 → 流式生成。
-   * @param {{question: string, history: Array}} opts 参数
+   * @param {{question: string, history: Array, agent: object|null}} opts 参数
+   *        agent 为当前选中的自定义 Agent（含 systemPrompt），未配置时为 null
    * @param {Function} onToken 流式 token 回调
    * @returns {Promise<{sources: Array}>}
    * @author 火 冰
    */
-  async ask({ question, history, onToken }) {
+  async ask({ question, history, onToken, agent }) {
     const m = this.currentModel();
     if (!m) throw new Error('尚未配置生成模型，请到设置页添加');
     this.abort = new AbortController();
     let sources = [];
     try { sources = await this.retrieve(question, 20); } catch (e) { sources = []; }
     const ctx = sources.map((s, i) => '[来源' + (i + 1) + '] ' + s.path + '\n' + s.text).join('\n\n');
+    // Agent 自定义系统提示词前置（角色/行为指令），未配置时使用默认 SYSTEM_PROMPT
+    const prompt = (agent && agent.systemPrompt && String(agent.systemPrompt).trim())
+      ? String(agent.systemPrompt).trim() + '\n\n' + SYSTEM_PROMPT
+      : SYSTEM_PROMPT;
     const messages = [
-      { role: 'system', content: SYSTEM_PROMPT + (ctx ? '\n\n参考笔记片段：\n' + ctx : '\n\n（当前没有可用的笔记片段，请直接作答）') },
+      { role: 'system', content: prompt + (ctx ? '\n\n参考笔记片段：\n' + ctx : '\n\n（当前没有可用的笔记片段，请直接作答）') },
       ...(history || []),
       { role: 'user', content: question },
     ];
+    // 调试：设置-AI「打印完整提示词」开启时，把完整请求消息（含系统提示词）打印到控制台
+    if (this.cfg.printFullPrompt) {
+      console.log('[调试·完整提示词] ' + JSON.stringify(messages, null, 2));
+    }
     try {
-      if (m.provider === 'openai') await this._streamOpenAI(messages, m, onToken);
-      else await this._streamOllama(messages, m, onToken);
+      if (m.provider === 'openai') await this._streamOpenAI(messages, m, onToken, agent);
+      else await this._streamOllama(messages, m, onToken, agent);
     } finally {
       this.abort = null;
     }
@@ -1257,21 +1335,42 @@ class AiEngine {
   stop() { if (this.abort) this.abort.abort(); }
 
   /**
+   * 提取 Agent 生成参数（仅返回已配置且合法的字段；未配置/非法值忽略，流式函数走各自默认）。
+   * @param {object|null} agent 当前 Agent
+   * @returns {{temperature?: number, topP?: number, maxTokens?: number}}
+   * @author 火 冰
+   */
+  _agentParams(agent) {
+    const p = {};
+    if (agent && typeof agent.temperature === 'number' && !isNaN(agent.temperature)) p.temperature = agent.temperature;
+    if (agent && typeof agent.topP === 'number' && !isNaN(agent.topP)) p.topP = agent.topP;
+    if (agent && Number.isInteger(agent.maxTokens) && agent.maxTokens > 0) p.maxTokens = agent.maxTokens;
+    return p;
+  }
+
+  /**
    * OpenAI 兼容接口流式生成（SSE）。
    * @param {Array} messages 消息列表
    * @param {object} m 生成模型配置（baseUrl/apiKey/model）
    * @param {Function} onToken token 回调
+   * @param {object|null} agent 当前 Agent（生成参数覆盖默认 temperature，top_p/max_tokens 仅配置时携带）
    * @author 火 冰
    */
-  async _streamOpenAI(messages, m, onToken) {
+  async _streamOpenAI(messages, m, onToken, agent) {
     const base = String(m.baseUrl || '').replace(/\/+$/, '');
+    const body = { model: m.model, messages, stream: true, temperature: 0.7 };
+    // Agent 生成参数：temperature 覆盖默认 0.7；top_p / max_tokens 配置了才随请求携带
+    const ap = this._agentParams(agent);
+    if (ap.temperature !== undefined) body.temperature = ap.temperature;
+    if (ap.topP !== undefined) body.top_p = ap.topP;
+    if (ap.maxTokens !== undefined) body.max_tokens = ap.maxTokens;
     const resp = await fetch(base + '/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + (m.apiKey || ''),
       },
-      body: JSON.stringify({ model: m.model, messages, stream: true, temperature: 0.7 }),
+      body: JSON.stringify(body),
       signal: this.abort.signal,
     });
     if (!resp.ok || !resp.body) {
@@ -1308,11 +1407,17 @@ class AiEngine {
    * @param {Function} onToken token 回调
    * @author 火 冰
    */
-  async _streamOllama(messages, m, onToken) {
+  async _streamOllama(messages, m, onToken, agent) {
     const base = String(m.baseUrl || '').replace(/\/+$/, '');
     const body = { model: m.model, messages, stream: true, keep_alive: OLLAMA_KEEP_ALIVE };
-    // 上下文长度 num_ctx：模型配置了则随请求携带（Ollama 用 options.num_ctx 指定）
-    if (m.numCtx) body.options = { num_ctx: Number(m.numCtx) };
+    // 生成参数合并：num_ctx（模型级）+ Agent 级 temperature / top_p / max_tokens（num_predict），仅配置的字段才携带
+    const ap = this._agentParams(agent);
+    const opts = {};
+    if (m.numCtx) opts.num_ctx = Number(m.numCtx);
+    if (ap.temperature !== undefined) opts.temperature = ap.temperature;
+    if (ap.topP !== undefined) opts.top_p = ap.topP;
+    if (ap.maxTokens !== undefined) opts.num_predict = ap.maxTokens;
+    if (Object.keys(opts).length) body.options = opts;
     const resp = await fetch(base + '/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -14,6 +14,22 @@ const grayMatter = require('gray-matter'); // 解析笔记 frontmatter（获取 
 const { default: SnowflakeId } = require('snowflake-id'); // 雪花算法：生成全局唯一文档 id，方便索引/元数据稳定定位
 const { AiEngine, chunkConfigured } = require('./ai-engine');
 
+/* 主进程 console 日志桥接到渲染进程（F12 控制台 / 日志面板可见）：
+ * 「打印完整提示词」等主进程调试日志保留终端输出，同时转发给所有窗口 webContents
+ * （渲染进程 app-log.js 监听 main:log → SBLog.info + console.log） */
+(function bridgeMainConsole() {
+  const rawLog = console.log.bind(console);
+  console.log = function () {
+    rawLog.apply(console, arguments);
+    try {
+      const text = Array.prototype.map.call(arguments, String).join(' ');
+      BrowserWindow.getAllWindows().forEach(function (w) {
+        if (!w.isDestroyed()) w.webContents.send('main:log', text);
+      });
+    } catch (_) { /* 转发失败不影响主进程 */ }
+  };
+})();
+
 /* 项目根目录（即本文件所在目录） */
 const ROOT = __dirname;
 
@@ -1944,13 +1960,17 @@ vaultHandle('ai:deleteIndex', async (_e, vaultPath) => {
   return aiEngine.deleteIndex(vaultPath);
 });
 
-/* 发起 AI 问答：检索上下文 → 流式生成，token 经 ai:token 推送 */
-vaultHandle('ai:ask', async (e, question, history) => {
+/* 发起 AI 问答：检索上下文 → 流式生成，token 经 ai:token 推送；agentId 为当前选中的自定义 Agent（可空） */
+vaultHandle('ai:ask', async (e, question, history, agentId) => {
   const sender = e.sender;
   try {
+    // 按 agentId 解析当前 Agent（自定义角色），未命中/未配置时为 null（走默认助手）
+    const agents = aiEngine.getConfig().agents || [];
+    const agent = agents.find(function (a) { return a.id === String(agentId || ''); }) || null;
     const { sources } = await aiEngine.ask({
       question: String(question || ''),
       history: Array.isArray(history) ? history : [],
+      agent: agent,
       onToken: function (t) { if (!sender.isDestroyed()) sender.send('ai:token', t); },
     });
     if (!sender.isDestroyed()) sender.send('ai:ask-done', { sources });
@@ -1964,6 +1984,88 @@ vaultHandle('ai:ask', async (e, question, history) => {
 
 /* 停止当前流式生成 */
 ipcMain.on('ai:stop', () => aiEngine.stop());
+
+/* ---------- AI 会话持久化（知识库根 .session 目录） ---------- */
+/* AI 会话统一隐藏目录（位于各知识库根；每会话一个 <id>.json，另存 active.json 记录最近活动会话） */
+const SESSION_DIR = '.session';
+
+/** 当前知识库的 .session 目录绝对路径。
+ * @returns {string} <vaultRoot>/.session
+ * @author 火 冰 */
+function sessionDir() {
+  return path.join(vaultRoot(), SESSION_DIR);
+}
+
+/** 校验会话文件 id，仅允许纯字母数字（文件名前缀，防路径穿越）。
+ * @param {unknown} id 会话 id
+ * @returns {string} 清洗后的安全 id；非法返回空串
+ * @author 火 冰 */
+function safeSessionId(id) {
+  const s = String(id == null ? '' : id);
+  return /^[A-Za-z0-9]+$/.test(s) ? s : '';
+}
+
+/* 列出知识库内全部 AI 会话（轻量元信息，不整读消息正文），按最近更新倒序 */
+vaultHandle('ai:listSessions', async () => {
+  let names = [];
+  try { names = await fs.promises.readdir(sessionDir()); } catch (e) { return []; }
+  const items = [];
+  for (const name of names) {
+    if (!/^[A-Za-z0-9]+\.json$/.test(name) || name === 'active.json') continue;
+    const abs = path.join(sessionDir(), name);
+    try {
+      const j = JSON.parse(await fs.promises.readFile(abs, 'utf8'));
+      const st = await fs.promises.stat(abs);
+      items.push({
+        id: String(j.id == null ? '' : j.id),
+        title: String(j.title == null ? '' : j.title),
+        mtime: st.mtimeMs,
+        msgCount: Array.isArray(j.history) && j.history.length ? j.history.length : 0,
+      });
+    } catch (e) { /* 单份文件损坏则跳过，不影响其余 */ }
+  }
+  items.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+  return items;
+});
+
+/* 读取单个 AI 会话完整内容；不存在或 id 非法返回 null */
+vaultHandle('ai:readSession', async (_e, id) => {
+  const safe = safeSessionId(id);
+  if (!safe) return null;
+  try { return JSON.parse(await fs.promises.readFile(path.join(sessionDir(), safe + '.json'), 'utf8')); }
+  catch (e) { return null; }
+});
+
+/* 保存 AI 会话：data={id,title,history} 写 <id>.json；data={id,active:true} 写 active.json（幂等建目录） */
+vaultHandle('ai:saveSession', async (_e, data) => {
+  const isActive = !!(data && data.active);
+  const safe = isActive ? 'active' : safeSessionId(data && data.id);
+  if (!safe) return { ok: false };
+  try {
+    await fs.promises.mkdir(sessionDir(), { recursive: true });
+    const payload = isActive
+      ? { activeId: String((data && data.id) || '') }
+      : { id: data.id, title: (data && data.title) || '', history: Array.isArray(data && data.history) ? data.history : [] };
+    await fs.promises.writeFile(path.join(sessionDir(), safe + '.json'), JSON.stringify(payload), 'utf8');
+    return { ok: true };
+  } catch (e) { return { ok: false }; }
+});
+
+/* 删除指定 AI 会话文件（不存在静默忽略） */
+vaultHandle('ai:deleteSession', async (_e, id) => {
+  const safe = safeSessionId(id);
+  if (!safe) return { ok: false };
+  try { await fs.promises.unlink(path.join(sessionDir(), safe + '.json')); } catch (e) { /* 忽略 */ }
+  return { ok: true };
+});
+
+/* 读取最近活动会话 id（active.json 中的 activeId） */
+vaultHandle('ai:getActiveSession', async () => {
+  try {
+    const j = JSON.parse(await fs.promises.readFile(path.join(sessionDir(), 'active.json'), 'utf8'));
+    return String(j && j.activeId || '');
+  } catch (e) { return ''; }
+});
 
 /* ---------- 应用生命周期 ---------- */
 /* 启动耗时打点：记录 whenReady 各阶段与窗口加载完成耗时，便于排查「启动慢/界面空白」类问题。

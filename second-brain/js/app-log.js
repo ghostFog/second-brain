@@ -139,5 +139,16 @@
     errorCount: function () { return errorCount; },
   };
 
+  /* 主进程 console 日志桥接：桌面端引擎（如「打印完整提示词」调试日志）经 IPC main:log 转发，
+   * 进日志面板/落盘 + 打印到渲染进程控制台（F12 可见） */
+  if (window.noteDesktop && window.noteDesktop.onMainLog) {
+    try {
+      window.noteDesktop.onMainLog(function (text) {
+        log('info', String(text || ''));
+        try { console.log(String(text || '')); } catch (_) { /* 忽略 */ }
+      });
+    } catch (_) { /* 忽略 */ }
+  }
+
   hookGlobal();
 })();

@@ -84,6 +84,8 @@
 | CD-44 | 必须 | 默认库（「我的笔记库」）的「身份标识」须用同一索引用法判定：凡按库去重/归一（托盘菜单、历史库、窗口绑定等）之处，默认库要么用 `null` 键、要么用与实际默认库路径统一比较（`vaultKey(p) === defaultVaultRoot().toLowerCase()`）后归一为同一键；禁止出现 null 形式与路径形式键不同，导致同一默认库被重复列出/重复处理 | Bug-057 |
 | CD-45 | 必须 | 读取事件目标 `className` 前必须先判型：HTML 元素是字符串、而 **SVG 元素 `className` 是 `SVGAnimatedString` 对象（无 `.slice`/`.split`/`.match` 等字符串方法）**；凡对 `e.target.className`（或任意可能为 SVG 的元素）做字符串操作，须用 `typeof === 'string'` 守卫或改用 `getAttribute('class')`，禁止直接调字符串方法致「is not a function」 | Bug-058 |
 | CD-46 | 必须 | 任何「按实体归一后以 `null` 代表默认态」的去重/归一逻辑（默认库 `binding=null` 等），其**去重检查不得只写在 `if (binding)` / `if (p)` 等仅覆盖「有值分支」的守卫内**——那样默认态会整个跳过检查，导致默认实体每次都新建资源（多窗口）而非复用；应先算出默认态对应的非空查找键（如 `vaultKey(binding || defaultVaultRoot())`），与登记表口径一致后**无条件**执行查重覆盖全部态 | Bug-059 |
+| CD-47 | 必须 | 渲染结果若依赖「输入框/配置值」的解析（如「已使用」需 `cfgPathValue` 展开 `{modelDir}` 与本地 `localPath` 比较），而回填该值（`fillLocal`）与实际渲染（`renderAllLib`）分属**不同的并行异步链**（如 `getConfig` 回填 vs `getModelLib` 扫描）时，必须在**配置回填完成后主动重绘一次**，不得只依赖异步结果链自身触发——否则竞态下由配置驱动显示的状态（如「已使用」）会丢失且不再刷新 | Bug-060 |
+| CD-48 | 必须 | 凡写入/更新 vault 文件的路径，其**进入向量索引的入口（增量 `updateNote`、全量扫描）必须使用同一套隐藏路径判定**（任一路径段以 `.` 开头即隐藏路径，覆盖 `.gitignore`/`.obsidian`/`.second-brain` 等）；且对历史已误入的脏 chunk 要在**索引加载（`_loadIndexFrom`）与检索（`retrieve`）时兜底过滤**，防止过滤文件/配置类文件污染检索来源 | Bug-061 |
 
 ## 维护要求
 
