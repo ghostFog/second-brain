@@ -13,6 +13,26 @@ const _ort = require('onnxruntime-node');
 const ORT = (_ort && _ort.InferenceSession) ? _ort : (_ort && _ort.default);
 const grayMatter = require('gray-matter'); // 解析笔记 frontmatter（获取笔记 id 元数据）
 
+/* 系统提示词：约束模型只依据提供的笔记片段作答，避免幻觉 */
+const SYSTEM_PROMPT = [
+  '你是一个基于个人知识库的第二大脑问答助手。',
+  '请优先依据下面提供的「参考笔记片段」回答用户问题；',
+  '若片段不足以回答，请明确说明，不要编造事实。',
+  '回答使用中文，保持简洁、条理清晰，可用 Markdown 列表。',
+].join('');
+
+/* 内置默认 Agent「知识库助手」：不可删除、可编辑内容、可还原为初始化介绍。
+ * 开启「使用知识库」（useKnowledge=true）时，调用大模型前先检索知识库并把片段拼入系统提示词。
+ * 该 Agent 始终可用：即使 cfg.agents 被清空，currentAgent() 也会回退到此处定义。
+ * 作者: 火 冰 */
+const DEFAULT_AGENT = {
+  id: 'kb-assistant',
+  name: '知识库助手',
+  systemPrompt: SYSTEM_PROMPT,
+  useKnowledge: true,
+  builtin: true,
+};
+
 /* 默认 AI 配置：本地模型路径默认空，由设置页通过模型库「使用」选择；生成模型为列表（可配置多个） */
 const DEFAULT_CONFIG = {
   embedModelPath: '',
@@ -26,16 +46,18 @@ const DEFAULT_CONFIG = {
   models: [],
   currentModelId: '',
   // 设置页「生成模型」各组运行状态自动刷新频率（秒）
-  modelRefreshSec: 10,
+  modelRefreshSec: 5,
   // 设置页「Agent 配置」：自定义角色列表 { id, name, systemPrompt } 与当前选中 id（问答时注入 systemPrompt）
-  agents: [],
-  currentAgentId: '',
+  agents: [Object.assign({}, DEFAULT_AGENT)],
+  currentAgentId: 'kb-assistant',
   // 应用启动时是否自动加载嵌入模型
   autoLoadEmbedding: false,
   // 应用启动时是否自动常驻「最后使用的问答模型」（Ollama keep_alive=-1，加速首次问答）
   autoResidentOnStart: true,
   // AI 问答时是否携带上文对话历史（关闭则每轮只发送当前问题；顶栏「携带历史」开关与设置页同步此配置）
   carryHistory: true,
+  // 知识库检索相关度阈值（0~100）：低于该百分比的索引块不作为参考资料；0=不过滤（默认）。设置页「知识库索引」与顶栏可调
+  minSimilarity: 0,
   // 索引分块全局默认：块大小（字符）与相邻重叠（字符）；未单独设置的笔记按此生成
   blockSize: 200,
   overlap: 40,
@@ -72,14 +94,6 @@ const RERANK_MODEL_LIB = [
  * 设置页「加载（常驻内存）」与每次 Ollama 问答请求都带该值，避免被默认 5 分钟保活覆盖而自动卸载。
  * 作者: 火 冰 */
 const OLLAMA_KEEP_ALIVE = -1;
-
-/* 系统提示词：约束模型只依据提供的笔记片段作答，避免幻觉 */
-const SYSTEM_PROMPT = [
-  '你是一个基于个人知识库的第二大脑问答助手。',
-  '请优先依据下面提供的「参考笔记片段」回答用户问题；',
-  '若片段不足以回答，请明确说明，不要编造事实。',
-  '回答使用中文，保持简洁、条理清晰，可用 Markdown 列表。',
-].join('');
 
 /**
  * 将文本按固定长度 + 重叠切分为片段。
@@ -330,6 +344,10 @@ class AiEngine {
     this._embedPromise = null;
     this._rerankPromise = null;
     this._tfPromise = null;       // @xenova/transformers 动态 import 缓存
+    this._runningMap = {};        // Ollama 运行状态缓存：baseUrl\0model -> true（后台轮询维护）
+    this._pollTimer = null;       // 可用模型后台轮询定时器
+    this._available = {};         // 可用模型全局缓存：baseUrl -> { provider, models:[{name,size,modifiedAt}], updatedAt }
+    this._modelCbs = [];          // 可用模型/运行状态更新回调（后台轮询刷新后触发，页面监听即实时刷新）
   }
 
   /**
@@ -1253,7 +1271,9 @@ class AiEngine {
       .filter(c => !this._isDotPath(c.path))
       .map(c => ({ path: c.path, text: c.text, vec: c.vec, sim: cosine(qv, c.vec) }));
     scored.sort((a, b) => b.sim - a.sim);
-    let cand = scored.slice(0, k);
+    // 相关度阈值过滤：低于 minSimilarity（0~100，cfg.minSimilarity）的索引块不作为参考资料；0=不过滤
+    const minSim = (this.cfg && this.cfg.minSimilarity) ? this.cfg.minSimilarity : 0;
+    const cand = (minSim > 0 ? scored.filter(c => c.sim * 100 >= minSim) : scored).slice(0, k);
     // 重排序：模型可用时按相关性精排，失败则回退余弦排序
     let rerankOk = false;
     try { await this._loadReranker(); rerankOk = true; } catch (e) { rerankOk = false; }
@@ -1265,8 +1285,9 @@ class AiEngine {
     } else {
       cand.forEach(c => { c.score = c.sim; });
     }
+    // fullText 为索引块完整文本（供前端「查看来源块」按钮弹窗展示），text 为截断片段用于拼提示词
     return cand.slice(0, 5).map(c => ({
-      path: c.path, sim: c.sim, score: c.score, text: c.text.slice(0, 300),
+      path: c.path, sim: c.sim, score: c.score, text: c.text.slice(0, 300), fullText: c.text,
     }));
   }
 
@@ -1279,47 +1300,89 @@ class AiEngine {
    */
   currentModel() {
     const list = this.cfg.models || [];
-    if (!list.length) return null;
-    return list.find(m => m.id === this.cfg.currentModelId) || list[0];
+    if (!list.length && !this.cfg.currentModelId) return null;
+    return this._modelById(this.cfg.currentModelId || (list[0] && list[0].id)) || list[0] || null;
   }
 
   /**
-   * 获取当前选中的 Agent（自定义角色，按 currentAgentId；未配置/未选中返回 null）。
-   * @returns {{id: string, name: string, systemPrompt: string}|null}
+   * 解析模型：优先从已配置 models 查找；未命中且 id 形如 avail:<baseUrl>:<provider>:<model> 时，
+   * 从可用模型全局缓存 _available 构造临时模型（AI 问答页直接选用实时可用模型）。
+   * @param {string} id 模型 id（或 avail: 临时 id）
+   * @returns {object|null} 模型配置 { id, provider, baseUrl, apiKey, model } 或 null
+   * @author 火 冰
+   */
+  _modelById(id) {
+    const list = this.cfg.models || [];
+    const hit = list.find(function (m) { return m.id === id; });
+    if (hit) return hit;
+    if (id && String(id).indexOf('avail:') === 0) {
+      const parts = String(id).split(':');
+      const baseUrl = parts[1] || '';
+      const provider = parts[2] || '';
+      const model = parts.slice(3).join(':');
+      const a = this._available && this._available[baseUrl];
+      const exists = a && a.models && a.models.some(function (x) { return x.name === model; });
+      if (exists) {
+        const same = list.find(function (m) { return m.baseUrl === baseUrl && m.provider === provider; });
+        return { id: id, provider: provider, baseUrl: baseUrl, apiKey: (same && same.apiKey) || '', model: model };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 获取当前选中的 Agent（自定义角色，按 currentAgentId；未选中取列表首个；列表为空回退内置默认「知识库助手」）。
+   * @returns {{id: string, name: string, systemPrompt: string, useKnowledge: boolean}|object} 内置默认 Agent（始终可用）
    * @author 火 冰
    */
   currentAgent() {
     const list = this.cfg.agents || [];
-    if (!list.length) return null;
-    return list.find(a => a.id === this.cfg.currentAgentId) || null;
+    const cur = this.cfg.currentAgentId;
+    // 优先 currentAgentId；未命中取列表首个；列表为空回退内置默认「知识库助手」（不可删除，始终可用）
+    let a = (cur && list.length) ? list.find(x => x.id === cur) || null : null;
+    if (!a && list.length) a = list[0];
+    return a || DEFAULT_AGENT;
   }
 
   /**
    * 发起一次 AI 问答：检索上下文 → 组装消息 → 流式生成。
-   * @param {{question: string, history: Array, agent: object|null}} opts 参数
+   * @param {{question: string, history: Array, agent: object|null, devMode?: boolean}} opts 参数
    *        agent 为当前选中的自定义 Agent（含 systemPrompt），未配置时为 null
+   *        devMode 为「开发者模式」开关（外层设置-常规存储），开启时打印完整提示词并返回检索耗时
    * @param {Function} onToken 流式 token 回调
-   * @returns {Promise<{sources: Array}>}
+   * @returns {Promise<{sources: Array, retrieveMs: number}>}
    * @author 火 冰
    */
-  async ask({ question, history, onToken, agent }) {
-    const m = this.currentModel();
+  async ask({ question, history, onToken, agent, modelId, devMode }) {
+    const m = modelId ? this._modelById(String(modelId)) : this.currentModel();
     if (!m) throw new Error('尚未配置生成模型，请到设置页添加');
     this.abort = new AbortController();
+    // 是否使用知识库：Agent 关闭（useKnowledge=false）则不检索、不拼接笔记片段，直接问答
+    const useKb = agent ? (agent.useKnowledge !== false) : true;
     let sources = [];
-    try { sources = await this.retrieve(question, 20); } catch (e) { sources = []; }
-    const ctx = sources.map((s, i) => '[来源' + (i + 1) + '] ' + s.path + '\n' + s.text).join('\n\n');
-    // Agent 自定义系统提示词前置（角色/行为指令），未配置时使用默认 SYSTEM_PROMPT
-    const prompt = (agent && agent.systemPrompt && String(agent.systemPrompt).trim())
-      ? String(agent.systemPrompt).trim() + '\n\n' + SYSTEM_PROMPT
+    let ctx = '';
+    let retrieveMs = 0;
+    if (useKb) {
+      const _rt = Date.now();
+      try { sources = await this.retrieve(question, 20); } catch (e) { sources = []; }
+      retrieveMs = Date.now() - _rt;
+      ctx = sources.map((s, i) => '[来源' + (i + 1) + '] ' + s.path + '\n' + s.text).join('\n\n');
+    }
+    // Agent 自定义系统提示词即完整系统提示词（含角色/行为指令）；未配置时使用默认 SYSTEM_PROMPT
+    const sys = (agent && agent.systemPrompt && String(agent.systemPrompt).trim())
+      ? String(agent.systemPrompt).trim()
       : SYSTEM_PROMPT;
+    let sysContent = sys;
+    if (useKb) {
+      sysContent += ctx ? '\n\n参考笔记片段：\n' + ctx : '\n\n（当前没有可用的笔记片段，请直接作答）';
+    }
     const messages = [
-      { role: 'system', content: prompt + (ctx ? '\n\n参考笔记片段：\n' + ctx : '\n\n（当前没有可用的笔记片段，请直接作答）') },
+      { role: 'system', content: sysContent },
       ...(history || []),
       { role: 'user', content: question },
     ];
-    // 调试：设置-AI「打印完整提示词」开启时，把完整请求消息（含系统提示词）打印到控制台
-    if (this.cfg.printFullPrompt) {
+    // 调试：开发者模式开启（或旧配置 printFullPrompt 残留）时，把完整请求消息（含系统提示词）打印到控制台
+    if (devMode || this.cfg.printFullPrompt) {
       console.log('[调试·完整提示词] ' + JSON.stringify(messages, null, 2));
     }
     try {
@@ -1328,7 +1391,7 @@ class AiEngine {
     } finally {
       this.abort = null;
     }
-    return { sources };
+    return { sources, retrieveMs };
   }
 
   /** 停止当前流式生成 */
@@ -1509,7 +1572,7 @@ class AiEngine {
     const resp = await fetch(base + '/api/tags', {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(3000),
     });
     if (!resp.ok) throw new Error('Ollama 拉取模型列表失败 ' + resp.status);
     const j = await resp.json();
@@ -1565,7 +1628,7 @@ class AiEngine {
     const resp = await fetch(base + '/api/ps', {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(3000),
     });
     if (!resp.ok) throw new Error('Ollama 获取运行模型失败 ' + resp.status);
     const j = await resp.json();
@@ -1578,6 +1641,161 @@ class AiEngine {
         expiresAt: m.expires_at || '',
       })),
     };
+  }
+
+  /**
+   * 刷新所有配置的 Ollama 服务运行状态到 _runningMap 缓存（baseUrl\0model -> true）。
+   * 服务不可达/超时静默保留旧状态。由后台轮询与设置页手动刷新共用。
+   * @returns {Promise<Object>} 最新运行状态映射
+   * @author 火 冰
+   */
+  async refreshRunningMap() {
+    const urls = [];
+    (this.cfg.models || []).forEach(function (m) {
+      if (m.provider !== 'ollama') return;
+      const u = String(m.baseUrl || '');
+      if (u && urls.indexOf(u) === -1) urls.push(u);
+    });
+    const next = {};
+    await Promise.all(urls.map(async function (u) {
+      try {
+        const r = await this.listRunningModels(u);
+        (r && Array.isArray(r.models) ? r.models : []).forEach(function (md) {
+          if (md && md.name) next[String(u) + '\u0000' + md.name] = true;
+        });
+      } catch (e) { /* 服务不可达：该组视为无运行中模型 */ }
+    }.bind(this)));
+    this._runningMap = next;
+    return next;
+  }
+
+  /**
+   * 从 OpenAI 兼容服务拉取可用模型列表（GET /models），供可用模型全局缓存与设置页选择。
+   * @param {string} baseUrl 服务地址
+   * @param {string} apiKey API Key（可为空）
+   * @returns {Promise<{models: Array<{name: string}>}>}
+   * @throws {Error} 服务不可达或返回非 2xx
+   * @author 火 冰
+   */
+  async listOpenAiModels(baseUrl, apiKey) {
+    const base = String(baseUrl || '').replace(/\/+$/, '');
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
+    const resp = await fetch(base + '/models', {
+      method: 'GET',
+      headers: headers,
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!resp.ok) throw new Error('OpenAI 获取模型列表失败 ' + resp.status);
+    const j = await resp.json();
+    const models = Array.isArray(j.data) ? j.data : [];
+    return {
+      models: models.map(function (m) { return { name: m.id || m.model || '', size: 0, modifiedAt: '' }; }),
+    };
+  }
+
+  /**
+   * 刷新可用模型全局缓存 _available（baseUrl -> { provider, models, updatedAt }）：
+   * 按已配置模型去重 baseUrl，Ollama 走 /api/tags、OpenAI 兼容走 /models。
+   * 服务不可达时缓存置 { error } 并保留旧数据？不：失败即标记，下次轮询恢复。
+   * @returns {Promise<Object>} 最新可用模型缓存
+   * @author 火 冰
+   */
+  async refreshAvailableModels() {
+    const models = this.cfg.models || [];
+    const seen = {};
+    models.forEach(function (m) {
+      const u = String(m.baseUrl || '');
+      if (u && !seen[u]) seen[u] = m;
+    });
+    await Promise.all(Object.keys(seen).map(async function (u) {
+      const m = seen[u];
+      try {
+        const r = m.provider === 'openai'
+          ? await this.listOpenAiModels(u, m.apiKey)
+          : await this.listOllamaModels(u);
+        this._available[u] = {
+          provider: m.provider,
+          models: (r && Array.isArray(r.models) ? r.models : []),
+          updatedAt: Date.now(),
+          error: '',
+        };
+      } catch (e) {
+        this._available[u] = { provider: m.provider, models: [], updatedAt: Date.now(), error: String((e && e.message) || e) };
+      }
+    }.bind(this)));
+    return this._available;
+  }
+
+  /**
+   * 启动可用模型后台轮询：立即执行一次（刷新运行状态 + 可用模型全局缓存），
+   * 之后每 interval 毫秒同步一次。由 main.js 在引擎初始化（配置加载完成）后调用。
+   * @param {number} interval 轮询间隔毫秒（默认 5000）
+   * @returns {void}
+   * @author 火 冰
+   */
+  startModelPolling(interval) {
+    if (this._pollTimer) return;
+    const run = () => {
+      // 并行刷新运行状态与可用模型缓存，全部完成后触发更新钩子（页面监听即实时刷新）
+      Promise.all([
+        this.refreshRunningMap().catch(() => {}),
+        this.refreshAvailableModels().catch(() => {}),
+      ]).then(() => this._notifyModelsUpdated());
+    };
+    run(); // 打开软件后台调用一次（配置已加载，立即可查）
+    this._pollTimer = setInterval(run, interval || 5000);
+  }
+
+  /**
+   * 注册「模型数据更新」钩子：后台轮询（或手动刷新）完成一次数据刷新后触发，页面监听后即可实时刷新。
+   * 与 stopModelPolling 解耦——轮询停止后回调数组保留，重启轮询仍可继续通知。
+   * @param {Function} cb 更新回调（无参）
+   * @returns {void}
+   * @author 火 冰
+   */
+  onModelsUpdated(cb) {
+    if (typeof cb !== 'function') return;
+    if (this._modelCbs.indexOf(cb) === -1) this._modelCbs.push(cb);
+  }
+
+  /**
+   * 遍历通知所有已注册的模型数据更新回调（内部调用，含异常隔离，单个回调报错不影响其余）。
+   * @returns {void}
+   * @author 火 冰
+   */
+  _notifyModelsUpdated() {
+    this._modelCbs.forEach(function (cb) {
+      try { cb(); } catch (e) { /* 单回调异常隔离 */ }
+    });
+  }
+
+  /**
+   * 停止可用模型后台轮询（应用退出时调用，防残留定时器）。
+   * @returns {void}
+   * @author 火 冰
+   */
+  stopModelPolling() {
+    if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+  }
+
+  /**
+   * 获取当前后台轮询缓存的 Ollama 运行状态映射（baseUrl\0model -> true）。
+   * @returns {Object} 运行状态映射（可能为空对象）
+   * @author 火 冰
+   */
+  getRunningMap() {
+    return this._runningMap || {};
+  }
+
+  /**
+   * 获取可用模型全局缓存（baseUrl -> { provider, models:[{name,size,modifiedAt}], updatedAt, error }）。
+   * 软件启动后即由后台轮询维护，设置页与 AI 问答页共用同一份实时数据。
+   * @returns {Object} 可用模型缓存
+   * @author 火 冰
+   */
+  getAvailableModels() {
+    return this._available || {};
   }
 }
 

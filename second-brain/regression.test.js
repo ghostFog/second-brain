@@ -513,6 +513,68 @@ function testThemeSavedSnapshot() {
     'ST-37: main.js 桥接主进程 console.log 到渲染进程（main:log）');
 })();
 
+/* ---- 开发者模式（设置-常规-通用 + AI 问答调试信息）——ST-37 打印提示词改由开发者模式接管 ----
+ * ①设置-常规-通用新增「开发者模式」开关（data-skey=devMode，localStorage note-app:settings.devMode）；
+ * ②设置-AI「打印完整提示词」独立开关移除，改由开发者模式驱动（引擎 ask 按 devMode||cfg.printFullPrompt 打印）；
+ * ③AI 问答回答统计（检索时长/首token/每秒token/总耗时）与资料相关度分数仅开发者模式显示；
+ *   首token 拆分为「检索时长」+「真正的首token」。 */
+(() => {
+  const panels = fs.readFileSync(path.join(__dirname, 'js', 'settings', 'settings-panels.js'), 'utf8');
+  assert(panels.indexOf('data-skey="devMode"') !== -1 && panels.indexOf('开发者模式') !== -1,
+    'ST-37: 设置-常规-通用新增「开发者模式」滑动开关（data-skey=devMode）');
+  assert(panels.indexOf('data-ai-cfg="printFullPrompt"') === -1,
+    'ST-37: 设置-AI 已移除「打印完整提示词」独立开关，改由开发者模式接管');
+  const core = fs.readFileSync(path.join(__dirname, 'js', 'settings', 'settings-core.js'), 'utf8');
+  assert(core.indexOf("key === 'devMode'") !== -1,
+    'ST-37: devMode 开关变更提示副作用已注册');
+  const appAi = fs.readFileSync(path.join(__dirname, 'js', 'app-ai.js'), 'utf8');
+  assert(appAi.indexOf('function aiDevMode()') !== -1
+    && appAi.indexOf('note-app:settings') !== -1 && appAi.indexOf('.devMode') !== -1,
+    'ST-37: AI 问答读取开发者模式开关（localStorage note-app:settings.devMode）');
+  assert(appAi.indexOf("ai.ask(q, carry, agentId, modelId, dev)") !== -1,
+    'ST-37: AI 问答发送时透传开发者模式给引擎（控制打印完整提示词）');
+  assert(appAi.indexOf("if (!aiDevMode()) return") !== -1
+    && appAi.indexOf('meta.retrieveMs') !== -1 && appAi.indexOf('首token') !== -1,
+    'ST-37: 回答统计（检索时长/首token/每秒token）仅在开发者模式显示，且首token拆分检索时长');
+  const preload = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
+  assert(preload.indexOf("ipcRenderer.invoke('ai:ask', question, history, agentId, modelId, devMode)") !== -1,
+    'ST-37: preload ai.ask 透传开发者模式参数');
+  const main = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+  assert(main.indexOf("devMode: !!devMode") !== -1 && main.indexOf('retrieveMs') !== -1,
+    'ST-37: 主进程 ai:ask 透传 devMode 并返回检索耗时 retrieveMs');
+})();
+
+/* ST-42b: 参考资料「查看完整索引块」按钮 —— 开发者模式下查看索引块完整内容 */
+(() => {
+  const eng = fs.readFileSync(path.join(__dirname, 'ai-engine.js'), 'utf8');
+  assert(eng.indexOf('fullText: c.text') !== -1,
+    'ST-42b: 引擎检索来源返回完整索引块文本 fullText（供查看弹窗）');
+  const appAi = fs.readFileSync(path.join(__dirname, 'js', 'app-ai.js'), 'utf8');
+  assert(appAi.indexOf('function aiShowSourceModal') !== -1 && appAi.indexOf('function closeAiSourceModal') !== -1,
+    'ST-42b: AI 问答提供「查看完整索引块」弹窗打开/关闭函数');
+  assert(appAi.indexOf('data-ai-view-src') !== -1 && appAi.indexOf('aiShowSourceModal(s)') !== -1
+    && appAi.indexOf('s.fullText || s.text') !== -1,
+    'ST-42b: 开发者模式下参考资料项含「查看完整索引块」按钮（点击弹窗展示完整块内容）');
+})();
+
+/* ST-43: 知识库检索相关度阈值（minSimilarity）——设置页 + 顶栏两处可调，低于阈值的索引块不作为参考资料 */
+(() => {
+  const eng = fs.readFileSync(path.join(__dirname, 'ai-engine.js'), 'utf8');
+  assert(eng.indexOf('minSimilarity: 0') !== -1,
+    'ST-43: 引擎默认配置含相关度阈值 minSimilarity（0=不过滤）');
+  assert(eng.indexOf('c.sim * 100 >= minSim') !== -1 && eng.indexOf('minSim > 0') !== -1,
+    'ST-43: 引擎 retrieve 按阈值过滤低相关度索引块（0 时不过滤）');
+  const panels = fs.readFileSync(path.join(__dirname, 'js', 'settings', 'settings-panels.js'), 'utf8');
+  assert(panels.indexOf('data-ai-cfg="minSimilarity"') !== -1 && panels.indexOf('相关度阈值') !== -1,
+    'ST-43: 设置-AI「知识库索引」含相关度阈值输入（minSimilarity）');
+  const view = fs.readFileSync(path.join(__dirname, 'views', 'ai.html'), 'utf8');
+  assert(view.indexOf('ai-min-sim') !== -1 && view.indexOf('相关度≥') !== -1,
+    'ST-43: AI 问答顶部工具栏含相关度阈值输入（ai-min-sim）');
+  const appAi = fs.readFileSync(path.join(__dirname, 'js', 'app-ai.js'), 'utf8');
+  assert(appAi.indexOf("ai.saveConfig({ minSimilarity: v })") !== -1 && appAi.indexOf("getElementById('ai-min-sim')") !== -1,
+    'ST-43: 顶栏阈值变更即时保存（minSimilarity 持久化）');
+})();
+
 /* ---- Bug-043: 自定义/内置配色首屏不再闪默认色；删除「停用」配色档 ----
  * 根因: minimal-theme 配色（mt-theme-N / custom 变量）挂在 body，宿主 head 首屏脚本只恢复宿主明暗，
  *       配色要等插件异步加载后才应用 → 自定义配色首帧用默认色、插件加载后再突变（闪烁）。
@@ -1069,18 +1131,22 @@ function testSemanticChunk() {
   const fixed = chunkConfigured(text, 200, 40, null, 300);
   assert(fixed[0].text.indexOf(FILE) === -1, 'AI-16: 默认固定分块不含文件名前缀（向后兼容）');
 
-  /* ST-36 Agent 配置：默认配置含 agents 列表与当前选中 id；currentAgent 按 id 解析，未配置/未命中返回 null
-   * 作者: 火 冰 */
+  /* ST-36 Agent 配置：默认配置含内置默认 Agent「知识库助手」（不可删除、可还原）；currentAgent 按 id 解析，
+   * 未命中回退列表首个，列表为空回退内置默认。作者: 火 冰 */
   const { AiEngine } = mod;
-  assert(Array.isArray(DEFAULT_CONFIG.agents) && DEFAULT_CONFIG.currentAgentId === '',
-    'ST-36: 默认配置含 agents:[] 与 currentAgentId:""');
+  assert(DEFAULT_CONFIG.agents.length === 1 && DEFAULT_CONFIG.agents[0].id === 'kb-assistant'
+    && DEFAULT_CONFIG.agents[0].name === '知识库助手' && DEFAULT_CONFIG.agents[0].useKnowledge === true
+    && DEFAULT_CONFIG.currentAgentId === 'kb-assistant',
+    'ST-36: 默认配置含内置默认 Agent「知识库助手」（useKnowledge=true）且当前选中');
   const eng = new AiEngine();
   eng.cfg.agents = [{ id: 'a1', name: '写作助手', systemPrompt: '你是写作助手' }];
   eng.cfg.currentAgentId = 'a1';
   const cur = eng.currentAgent();
   assert(cur && cur.id === 'a1' && cur.systemPrompt === '你是写作助手', 'ST-36: currentAgent 按 currentAgentId 解析');
   eng.cfg.currentAgentId = 'not-exist';
-  assert(eng.currentAgent() === null, 'ST-36: 未命中的 currentAgentId 返回 null');
+  assert(eng.currentAgent().id === 'a1', 'ST-36: 未命中的 currentAgentId 回退列表首个');
+  eng.cfg.agents = [];
+  assert(eng.currentAgent().id === 'kb-assistant', 'ST-36: agents 为空回退内置默认「知识库助手」');
 
   /* ST-38 携带历史数据：默认携带（cfg.carryHistory=true）；关闭时问答每轮只发送当前问题。
    * 顶栏「携带历史」开关（ai.html #ai-carry-history，默认 checked）+ 设置-AI 开关（data-ai-cfg=carryHistory）
@@ -1090,11 +1156,69 @@ function testSemanticChunk() {
   assert(aiHtml.indexOf('id="ai-carry-history"') !== -1 && aiHtml.indexOf('checked') !== -1,
     'ST-38: 顶栏含「携带历史」滑动开关（ai-carry-history，默认开启）');
   const appAi = fs.readFileSync(path.join(__dirname, 'js', 'app-ai.js'), 'utf8');
-  assert(appAi.indexOf("ai.ask(q, carry, agentId)") !== -1 && appAi.indexOf("carryHistory") !== -1,
-    'ST-38: 发送时按开关决定是否携带历史（ai.ask(q, carry, agentId)）');
+  assert(appAi.indexOf("ai.ask(q, carry, agentId, modelId, dev)") !== -1 && appAi.indexOf("carryHistory") !== -1 && appAi.indexOf("function aiDevMode()") !== -1,
+    'ST-38: 发送时按开关决定是否携带历史（ai.ask(q, carry, agentId, modelId, dev)）且传入开发者模式');
   const panels = fs.readFileSync(path.join(__dirname, 'js', 'settings', 'settings-panels.js'), 'utf8');
   assert(panels.indexOf('data-ai-cfg="carryHistory"') !== -1,
     'ST-38: 设置-AI 同步新增「携带历史数据」开关（carryHistory）');
+
+  /* ST-39 Agent 增强：useKnowledge 开关（false 不检索知识库）+ 顶栏 Agent 长下拉 + 设置页还原/内置不可删 */
+  const engineSrc = fs.readFileSync(path.join(__dirname, 'ai-engine.js'), 'utf8');
+  assert(engineSrc.indexOf('useKb') !== -1 && engineSrc.indexOf('DEFAULT_AGENT') !== -1
+    && engineSrc.indexOf('参考笔记片段') !== -1,
+    'ST-39: ask 按 useKnowledge 决定是否检索知识库并拼接笔记片段，内置默认 Agent 兜底');
+  assert(appAi.indexOf("document.getElementById('ai-agent')") !== -1 && appAi.indexOf('已切换 · ') !== -1,
+    'ST-39: 顶部工具栏 Agent 长下拉填充 agents 并切换保存');
+  assert(aiHtml.indexOf('id="ai-agent"') !== -1 && aiHtml.indexOf('知识库助手') !== -1
+    && aiHtml.indexOf('选择生成模型') !== -1,
+    'ST-39: 顶栏含 Agent 下拉，底部输入区保留模型选择器');
+  const settingsAi = fs.readFileSync(path.join(__dirname, 'js', 'settings', 'settings-ai.js'), 'utf8');
+  assert(settingsAi.indexOf('AGENT_DEFAULT_PROMPT') !== -1 && settingsAi.indexOf('ai-agent-reset') !== -1
+    && settingsAi.indexOf('useKnowledge') !== -1 && settingsAi.indexOf('默认 Agent 不可删除') !== -1
+    && settingsAi.indexOf('内置默认「知识库助手」始终存在') !== -1,
+    'ST-39: 设置页 Agent 弹层含「使用知识库」开关、内置不可删除、还原按钮，旧配置升级自动补内置默认');
+
+  /* ST-40 可用模型实时列表：打开软件后台调用一次 + 每 5 秒定时更新（引擎后台轮询缓存，设置页读缓存渲染） */
+  const mainSrc = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+  const preloadSrc = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
+  const settingsPanels = fs.readFileSync(path.join(__dirname, 'js', 'settings', 'settings-panels.js'), 'utf8');
+  assert(engineSrc.indexOf('startModelPolling') !== -1 && engineSrc.indexOf('refreshRunningMap') !== -1
+    && engineSrc.indexOf('getRunningMap') !== -1 && engineSrc.indexOf('modelRefreshSec: 5') !== -1
+    && engineSrc.indexOf('refreshAvailableModels') !== -1 && engineSrc.indexOf('getAvailableModels') !== -1
+    && engineSrc.indexOf('_modelById') !== -1 && engineSrc.indexOf('listOpenAiModels') !== -1,
+    'ST-40: 引擎提供后台轮询（运行状态 + 可用模型全局缓存 _available + avail: 临时模型解析），刷新频率默认 5 秒');
+  assert(mainSrc.indexOf('aiEngine.startModelPolling(5000)') !== -1 && mainSrc.indexOf("ai:runningMap") !== -1
+    && mainSrc.indexOf('ai:availableModels') !== -1 && mainSrc.indexOf('stopModelPolling') !== -1
+    && mainSrc.indexOf('modelId') !== -1,
+    'ST-40: main.js 引擎初始化（配置加载）后启动 5 秒轮询、退出停止，暴露 runningMap/availableModels IPC，ask 支持 modelId');
+  assert(preloadSrc.indexOf('getRunningMap') !== -1 && preloadSrc.indexOf("ai:runningMap") !== -1
+    && preloadSrc.indexOf('getAvailableModels') !== -1 && preloadSrc.indexOf('modelId') !== -1,
+    'ST-40: preload 暴露 getRunningMap/getAvailableModels 桥接，ask 携带 modelId');
+  assert(settingsAi.indexOf("typeof ai.getRunningMap !== 'function'") !== -1
+    && settingsAi.indexOf('|| 5') !== -1 && settingsAi.indexOf('refreshAllGroups') !== -1,
+    'ST-40: 设置页刷新读引擎运行状态缓存、默认频率 5 秒');
+  assert(settingsAi.indexOf('renderAvailableModels') === -1 && settingsPanels.indexOf('ai-avail-models') === -1
+    && settingsPanels.indexOf('ai-avail-ts') === -1,
+    'ST-40: 设置-AI 不再包含「可用模型（实时）」区块（已移除，问答页下拉仍用后台轮询）');
+  assert(appAi.indexOf('getRunningMap') !== -1 && appAi.indexOf("'avail:' + baseUrl") !== -1
+    && appAi.indexOf('__aiModelSyncTimer') !== -1 && appAi.indexOf('ai.ask(q, carry, agentId, modelId, dev)') !== -1,
+    'ST-40: AI 问答页模型下拉显示运行中（已加载到内存）模型（配置运行中 + 运行状态缓存合并），每 5 秒同步，发送携带 modelId 与开发者模式');
+
+  /* ST-41 模型数据钩子实时刷新（类似 Vue 响应式）：引擎轮询/刷新完成触发 onModelsUpdated → 主进程推
+   * ai:models-updated 事件 → preload 暴露 onModelsUpdated → 设置页与 AI 问答页立即重绘（不等 5 秒兜底）；
+   * 查询超时 3 秒快速失败（消除服务不可达时首屏 10 秒阻塞） */
+  assert(engineSrc.indexOf('onModelsUpdated') !== -1 && engineSrc.indexOf('_notifyModelsUpdated') !== -1
+    && engineSrc.indexOf('_modelCbs') !== -1 && engineSrc.indexOf('AbortSignal.timeout(3000)') !== -1,
+    'ST-41: 引擎提供模型数据更新钩子（onModelsUpdated/_notifyModelsUpdated/_modelCbs），查询超时 3 秒');
+  assert(mainSrc.indexOf('aiEngine.onModelsUpdated(function ()') !== -1
+    && mainSrc.indexOf('ai:models-updated') !== -1,
+    'ST-41: main.js 注册钩子回调，轮询/刷新完成后向所有窗口推送 ai:models-updated 事件');
+  assert(preloadSrc.indexOf('onModelsUpdated') !== -1 && preloadSrc.indexOf('ai:models-updated') !== -1,
+    'ST-41: preload 暴露 onModelsUpdated 事件监听桥接');
+  assert(appAi.indexOf('ai.onModelsUpdated') !== -1,
+    'ST-41: AI 问答页监听钩子事件，模型数据变化立即刷新下拉');
+  assert(settingsAi.indexOf('ai.onModelsUpdated') !== -1,
+    'ST-41: 设置页监听钩子事件，模型数据变化立即重绘');
 
   /* AI-24 按组删除问答：消息按 .ai-qa-group 分组渲染（一组 = user 提问 + 其后的 assistant 回答），
    * 组右上角 hover 删除按钮，删除该组 history 区间并持久化重绘。
@@ -1103,6 +1227,8 @@ function testSemanticChunk() {
     'AI-24: 消息按问答组渲染，支持按组删除（aiRemoveGroup）');
   assert(appAi.indexOf('aiCurGroupEl') !== -1 && appAi.indexOf("role === 'user'") !== -1,
     'AI-24: user 消息开启新组、assistant 归入当前组');
+  assert(appAi.indexOf('ai-del-btn') !== -1 && appAi.indexOf('refreshIcons()') !== -1,
+    'AI-24: 删除按钮类 ai-del-btn（hover 红色）+ 重绘后刷新图标');
 
   /* Bug-061 隐藏路径不进向量库：_isDotPath 统一过滤 .gitignore/.second-brain 等点路径，
    * 与 _scanMd 跳过点文件的索引口径一致（git-sync 写 .gitignore 触发 updateNote 曾误入索引/来源）

@@ -182,30 +182,38 @@
         return true;
       }).catch(function () { return false; }); // 服务不可达/超时：保留旧状态，静默
     };
-    /* 刷新全部 Ollama 组（去重 baseUrl），完成后若列表仍挂载则重绘（运行中→卸载/未运行→加载） */
+    /* 刷新全部组运行状态：优先读引擎后台轮询缓存（main.js 启动时 startModelPolling(5000) 每 5 秒更新），
+     * 避免设置页再逐组请求；无缓存桥接（旧网页版）时退回逐组直查。面板挂载才重绘。 */
     const refreshAllGroups = function () {
-      const urls = [];
-      aiModels.forEach(function (m) {
-        if (m.provider === 'ollama' && m.baseUrl && urls.indexOf(m.baseUrl) === -1) urls.push(m.baseUrl);
-      });
-      if (!urls.length) return Promise.resolve();
-      return Promise.all(urls.map(refreshOne)).then(function () {
+      if (!ai || typeof ai.getRunningMap !== 'function') {
+        const urls = [];
+        aiModels.forEach(function (m) {
+          if (m.provider === 'ollama' && m.baseUrl && urls.indexOf(m.baseUrl) === -1) urls.push(m.baseUrl);
+        });
+        if (!urls.length) return Promise.resolve();
+        return Promise.all(urls.map(refreshOne)).then(function () {
+          if (document.getElementById('ai-model-list')) renderModelList();
+        });
+      }
+      return ai.getRunningMap().then(function (map) {
+        runningMap = map || {};
         if (document.getElementById('ai-model-list')) renderModelList();
-      });
+      }).catch(function () {});
     };
-    /* 启动/重启自动刷新定时器（频率 = modelRefreshSec 秒，默认 10）；面板切走后自动停止 */
+    /* 启动/重启面板刷新定时器（频率 = modelRefreshSec 秒，默认 5）；面板切走后定时器常驻但仅挂载时刷新重绘 */
     const startAutoRefresh = function () {
       if (window.__aiRefreshTimer) { clearInterval(window.__aiRefreshTimer); window.__aiRefreshTimer = null; }
-      const sec = Math.max(1, parseInt(document.querySelector('[data-ai-cfg="modelRefreshSec"]').value, 10) || 10);
+      const sec = Math.max(1, parseInt(document.querySelector('[data-ai-cfg="modelRefreshSec"]').value, 10) || 5);
       const tick = function () {
-        if (!document.getElementById('ai-model-list')) { // 已切到其他分类：停止轮询
-          clearInterval(window.__aiRefreshTimer);
-          window.__aiRefreshTimer = null;
-          return;
+        if (document.getElementById('ai-model-list')) {
+          refreshAllGroups();
         }
-        refreshAllGroups();
       };
-      tick(); // 进入面板立即刷新一次
+      tick(); // 进入面板立即刷新一次（读引擎缓存，即开即显示）
+      // 钩子实时刷新：主进程每次轮询/手动刷新完成后推送 ai:models-updated 事件，挂载中的面板立即重绘（类似 Vue 响应式）
+      if (ai && typeof ai.onModelsUpdated === 'function') ai.onModelsUpdated(function () {
+        if (document.getElementById('ai-model-list')) { refreshAllGroups(); }
+      });
       window.__aiRefreshTimer = setInterval(tick, sec * 1000);
     };
 
@@ -564,45 +572,61 @@
       persist().then(function () { showToast('模型已复制：' + copy.model); }).catch(function () { showToast('保存失败'); });
     };
 
-    /* 渲染 Agent 配置列表：行内 名称 + 提示词首行预览 + 当前标记 + 编辑/删除 */
+    /* 内置默认 Agent「知识库助手」：不可删除、可编辑内容、可还原为初始化介绍。
+     * 初始介绍与 ai-engine.js 的 DEFAULT_AGENT.systemPrompt 保持一致。作者: 火 冰 */
+    const AGENT_BUILTIN_ID = 'kb-assistant';
+    const AGENT_DEFAULT_PROMPT = '你是一个基于个人知识库的第二大脑问答助手。请优先依据下面提供的「参考笔记片段」回答用户问题；若片段不足以回答，请明确说明，不要编造事实。回答使用中文，保持简洁、条理清晰，可用 Markdown 列表。';
+    const isBuiltinAgent = function (a) { return !!(a && (a.builtin === true || a.id === AGENT_BUILTIN_ID)); };
+
+    /* 渲染 Agent 配置列表：行内 名称 + 提示词首行预览 + 当前标记 + 内置徽标 + 编辑 /（内置=还原，自定义=删除） */
     const renderAgentList = function () {
       const box = document.getElementById('ai-agent-list');
       if (!box) return;
       if (!aiAgents.length) {
-        box.innerHTML = '<div class="px-4 py-6 text-center text-caption" style="color:var(--note-ink-3);">尚未配置 Agent，点击「添加 Agent」创建自定义角色</div>';
+        box.innerHTML = '<div class="px-4 py-6 text-center text-caption" style="color:var(--note-ink-3);">默认「知识库助手」始终内置可用，可点击「添加 Agent」创建自定义角色</div>';
         return;
       }
       box.innerHTML = aiAgents.map(function (a) {
         const active = a.id === currentAgentId;
         const preview = String(a.systemPrompt || '').split('\n')[0] || '';
+        const builtin = isBuiltinAgent(a);
         return '<div class="flex items-center gap-2 px-3 py-2.5" style="border-color:var(--note-border);">'
           + '<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:' + (active ? 'var(--state-success)' : 'var(--note-ink-3)') + ';"></span>'
           + '<div class="flex-1 min-w-0"><div class="text-[13px] truncate" style="color:var(--note-ink);">' + esc(a.name || '未命名') + '</div>'
           + '<div class="text-caption truncate" style="color:var(--note-ink-3);">' + esc(preview || '（未填写系统提示词）') + '</div></div>'
           + (active ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style="background:rgba(124,58,237,0.15); color:var(--note-brand-400);">当前</span>' : '')
+          + (builtin ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style="background:rgba(124,58,237,0.12); color:var(--note-brand-300);">内置</span>' : '')
           + '<button class="ai-agent-edit w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" data-aid="' + esc(a.id) + '" title="编辑"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>'
-          + '<button class="ai-agent-del w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" data-aid="' + esc(a.id) + '" title="删除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>'
+          + (builtin
+            ? '<button class="ai-agent-reset w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" data-aid="' + esc(a.id) + '" title="还原为初始化介绍"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i></button>'
+            : '<button class="ai-agent-del w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80 shrink-0" data-aid="' + esc(a.id) + '" title="删除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>')
           + '</div>';
       }).join('');
       if (window.lucide && window.lucide.createIcons) window.lucide.createIcons({});
     };
 
-    /* 打开添加/编辑 Agent 弹层：名称 + 系统提示词 */
+    /* 打开添加/编辑 Agent 弹层：名称 + 系统提示词 + 使用知识库开关 + 生成参数；
+     * 内置默认 Agent 名称不可改（保持「知识库助手」），可编辑内容与开关 */
     const openAgentForm = function (item) {
       const isEdit = !!item;
+      const builtin = isBuiltinAgent(item);
       const ov = document.createElement('div');
       ov.id = 'ai-agent-overlay';
       ov.className = 'fixed inset-0 z-50 flex items-center justify-center';
       ov.style.cssText = 'background:rgba(0,0,0,0.45);';
       ov.innerHTML =
         '<div class="w-[440px] max-w-[92vw] rounded-xl border p-5" style="background:var(--note-surface); border-color:var(--note-border); box-shadow:0 12px 40px rgba(0,0,0,0.35);">'
-        + '<div class="flex items-center justify-between mb-4"><h3 class="text-[15px] font-semibold" style="color:var(--note-ink);">' + (isEdit ? '编辑 Agent' : '添加 Agent') + '</h3>'
+        + '<div class="flex items-center justify-between mb-4"><h3 class="text-[15px] font-semibold" style="color:var(--note-ink);">' + (isEdit ? (builtin ? '编辑 Agent（内置）' : '编辑 Agent') : '添加 Agent') + '</h3>'
         + '<button class="ai-form-close w-7 h-7 flex items-center justify-center rounded-md hover:opacity-80" style="color:var(--note-ink-3);"><i data-lucide="x" class="w-4 h-4"></i></button></div>'
         + '<div class="space-y-3">'
-        + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">名称</div>'
-        + '<input type="text" data-ai-form="name" class="w-full rounded-md px-3 py-2 text-[13px] outline-none" placeholder="如：写作助手 / 翻译助手 / 代码助手" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
+        + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">名称' + (builtin ? '（内置，不可修改）' : '') + '</div>'
+        + '<input type="text" data-ai-form="name" class="w-full rounded-md px-3 py-2 text-[13px] outline-none" placeholder="如：写作助手 / 翻译助手 / 代码助手" ' + (builtin ? 'disabled ' : '') + 'style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);' + (builtin ? ' opacity:0.6;' : '') + '"></div>'
         + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">系统提示词</div>'
         + '<textarea data-ai-form="systemPrompt" rows="6" class="w-full rounded-md px-3 py-2 text-[13px] outline-none resize-y" placeholder="定义该 Agent 的角色、行为与回答风格，问答时作为系统提示词注入" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></textarea></div>'
+        + '<div class="flex items-center justify-between gap-3 px-3 py-2 rounded-md" style="background:var(--note-surface-2);">'
+        + '<div class="flex-1"><div class="text-[13px]" style="color:var(--note-ink);">使用知识库</div>'
+        + '<div class="text-caption" style="color:var(--note-ink-3);">开启后，调用大模型前先检索知识库并把笔记片段拼入系统提示词</div></div>'
+        + '<label class="ai-switch shrink-0" style="cursor:pointer;"><input type="checkbox" data-ai-form="useKnowledge" checked><span class="ai-switch-slider"></span></label></div>'
         + '<div class="grid grid-cols-3 gap-2">'
         + '<div><div class="text-[13px] mb-1.5" style="color:var(--note-ink);">温度</div>'
         + '<input type="number" step="0.1" min="0" max="2" data-ai-form="temperature" class="w-full rounded-md px-3 py-2 text-[13px] outline-none" placeholder="默认 0.7" title="temperature（0~2），留空用默认" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
@@ -621,6 +645,7 @@
       if (item) {
         ov.querySelector('[data-ai-form="name"]').value = item.name || '';
         ov.querySelector('[data-ai-form="systemPrompt"]').value = item.systemPrompt || '';
+        ov.querySelector('[data-ai-form="useKnowledge"]').checked = item.useKnowledge !== false;
         ov.querySelector('[data-ai-form="temperature"]').value = (typeof item.temperature === 'number' && !isNaN(item.temperature)) ? item.temperature : '';
         ov.querySelector('[data-ai-form="topP"]').value = (typeof item.topP === 'number' && !isNaN(item.topP)) ? item.topP : '';
         ov.querySelector('[data-ai-form="maxTokens"]').value = Number.isInteger(item.maxTokens) ? item.maxTokens : '';
@@ -639,12 +664,15 @@
         };
         const a = {
           id: item ? item.id : genModelId(),
-          name: ov.querySelector('[data-ai-form="name"]').value.trim(),
+          // 内置 Agent 名称固定为「知识库助手」，不可修改
+          name: builtin ? (item.name || '知识库助手') : ov.querySelector('[data-ai-form="name"]').value.trim(),
           systemPrompt: ov.querySelector('[data-ai-form="systemPrompt"]').value.trim(),
+          useKnowledge: ov.querySelector('[data-ai-form="useKnowledge"]').checked,
           temperature: numField('temperature'),
           topP: numField('topP'),
           maxTokens: numField('maxTokens'),
         };
+        if (builtin) a.builtin = true;
         if (!a.name) { showToast('请填写 Agent 名称'); return; }
         if (item) {
           aiAgents = aiAgents.map(function (x) { return x.id === a.id ? a : x; });
@@ -658,11 +686,21 @@
       });
     };
 
-    /* 删除 Agent（当前 Agent 被删则回退到第一个） */
+    /* 删除 Agent（默认内置 Agent 不可删除；当前 Agent 被删则回退到第一个） */
     const removeAgent = function (id) {
+      if (id === AGENT_BUILTIN_ID) { showToast('默认 Agent 不可删除'); return; }
       aiAgents = aiAgents.filter(function (a) { return a.id !== id; });
       if (currentAgentId === id) currentAgentId = aiAgents.length ? aiAgents[0].id : '';
       persist().then(function () { showToast('Agent 已删除'); }).catch(function () { showToast('保存失败'); });
+    };
+
+    /* 还原默认 Agent 为初始化介绍：清空自定义提示词/生成参数，恢复使用知识库 */
+    const resetAgent = function (id) {
+      aiAgents = aiAgents.map(function (x) {
+        if (x.id !== id) return x;
+        return { id: x.id, name: x.name || '知识库助手', systemPrompt: AGENT_DEFAULT_PROMPT, useKnowledge: true, builtin: true };
+      });
+      persist().then(function () { showToast('已还原为初始化介绍'); }).catch(function () { showToast('保存失败'); });
     };
 
     // 读取配置并渲染本地字段 + 模型列表 + Agent 列表
@@ -672,7 +710,12 @@
       aiModels = (cfg.models && cfg.models.slice()) || [];
       currentModelId = cfg.currentModelId || (aiModels.length ? aiModels[0].id : '');
       aiAgents = (cfg.agents && cfg.agents.slice()) || [];
-      currentAgentId = cfg.currentAgentId || (aiAgents.length ? aiAgents[0].id : '');
+      // 内置默认「知识库助手」始终存在：旧配置升级后 agents 为空/不含内置时补上（不可删除、可编辑、可还原）
+      if (!aiAgents.some(function (a) { return a.id === AGENT_BUILTIN_ID; })) {
+        aiAgents.unshift({ id: AGENT_BUILTIN_ID, name: '知识库助手', systemPrompt: AGENT_DEFAULT_PROMPT, useKnowledge: true, builtin: true });
+      }
+      currentAgentId = cfg.currentAgentId || '';
+      if (!aiAgents.some(function (a) { return a.id === currentAgentId; })) currentAgentId = aiAgents.length ? aiAgents[0].id : '';
       renderModelList();
       renderAgentList();
       // 配置回填输入框后重绘模型库：避免与 loadModelLib 异步竞态导致「已使用」判定丢失
@@ -705,15 +748,6 @@
         residentEl.addEventListener('change', function () {
           persist().then(function () {
             showToast(residentEl.checked ? '已开启：启动自动常驻问答模型' : '已关闭启动常驻');
-          }).catch(function (e) { showToast('保存失败：' + ((e && e.message) || e)); });
-        });
-      }
-      // 「打印完整提示词」开关：切换即持久化（否则切走面板再回来会还原为未勾选）
-      const printEl = root.querySelector('[data-ai-cfg="printFullPrompt"]');
-      if (printEl) {
-        printEl.addEventListener('change', function () {
-          persist().then(function () {
-            showToast(printEl.checked ? '已开启：问答时打印完整提示词' : '已关闭打印完整提示词');
           }).catch(function (e) { showToast('保存失败：' + ((e && e.message) || e)); });
         });
       }
@@ -832,17 +866,20 @@
       });
     }
 
-    // Agent 列表事件委托（编辑 / 删除）
+    // Agent 列表事件委托（编辑 / 删除 / 还原）
     const agentListBox = document.getElementById('ai-agent-list');
     if (agentListBox) {
       agentListBox.addEventListener('click', function (e) {
         const editBtn = e.target.closest('.ai-agent-edit');
         const delBtn = e.target.closest('.ai-agent-del');
+        const resetBtn = e.target.closest('.ai-agent-reset');
         if (editBtn) {
           const it = aiAgents.find(function (a) { return a.id === editBtn.dataset.aid; });
           if (it) openAgentForm(it);
         } else if (delBtn) {
           removeAgent(delBtn.dataset.aid);
+        } else if (resetBtn) {
+          resetAgent(resetBtn.dataset.aid);
         }
       });
     }

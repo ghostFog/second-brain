@@ -14,6 +14,17 @@
   let aiSessions = [];           // 会话列表 [{id, title, history:[{role, content, model, firstTokenMs, totalMs, stopped}]}]
   let aiActiveSessionId = null;  // 当前活动会话 id
   let aiCurGroupEl = null;       // 当前问答组容器（一组 = 一次完整问答：user 提问 + 其后的 assistant 回答）
+  let aiRetrieveMs = 0;          // 本次问答检索上下文耗时（毫秒，由引擎 ask 返回；开发者模式下展示）
+
+  /** 读取「开发者模式」开关（设置-常规-通用，持久化于 localStorage note-app:settings.devMode）。
+   *  开启时：AI 问答显示 检索时长/首token/每秒token 与资料相关度，并自动打印完整提示词。
+   * @returns {boolean} 是否开启开发者模式
+   * @author 火 冰 */
+  function aiDevMode() {
+    try {
+      return !!(JSON.parse(localStorage.getItem('note-app:settings') || '{}').devMode);
+    } catch (e) { return false; }
+  }
 
   /** 会话持久化 IO：仅在桌面桥可用（具备 listSessions 等）时返回 ai 对象，网页版降级为内存态。
    * @returns {{saveSession:Function, deleteSession:Function, listSessions:Function, readSession:Function, getActiveSession:Function}|null}
@@ -110,6 +121,8 @@
   let aiT0 = 0;                  // 本次生成开始时间戳（计算首 token 与总耗时）
   let aiFirstMs = null;          // 首 token 耗时（毫秒），首次 token 到达时记录
   let aiCurModel = '';           // 本次生成使用的模型显示名
+  let aiTokCount = 0;            // 本次生成累计 token 数（onToken 调用次数：Ollama 每 chunk 一个 token）
+  let aiTokLastUi = 0;           // 上次刷新速率 UI 的时间戳（节流 ~500ms，避免每 token 重绘状态栏）
 
   /** 设置顶部状态徽标（文本 + 指示点颜色） */
   function aiSetStatus(text, color) {
@@ -221,10 +234,12 @@
     aiCurGroupEl = null;
     if (!session.history.length) { aiRenderEmpty(); return; }
     session.history.forEach(function (m) { aiAddMessage(m.role, m.content, m); });
+    // 重绘后刷新 lucide 图标（组删除按钮等新插入的 data-lucide 依赖 createIcons 替换）
+    refreshIcons();
     chat.scrollTop = chat.scrollHeight;
   }
 
-  /** 新建一个问答组容器（一组 = 一次完整问答），右上角 hover 显示「删除本组」按钮。
+  /** 新建一个问答组容器（一组 = 一次完整问答）。删除按钮随用户消息气泡创建（对齐气泡中心线）。
    * @returns {HTMLElement} 组容器元素
    * @author 火 冰 */
   function aiCreateGroup() {
@@ -232,16 +247,6 @@
     if (!chat) return null;
     const g = document.createElement('div');
     g.className = 'ai-qa-group relative group';
-    const del = document.createElement('button');
-    del.className = 'flex items-center justify-center w-6 h-6 rounded-md transition-colors opacity-0 group-hover:opacity-100 absolute right-2 top-2';
-    del.style.cssText = 'color: var(--note-ink-3); background: transparent;';
-    del.title = '删除本组问答';
-    del.innerHTML = '<i data-lucide="trash-2" class="w-3.5 h-3.5"></i>';
-    del.addEventListener('click', function (e) {
-      e.stopPropagation();
-      aiRemoveGroup(g);
-    });
-    g.appendChild(del);
     chat.appendChild(g);
     return g;
   }
@@ -283,6 +288,10 @@
     renderSessionChat(s);
     aiRebuildGeneratingBubble();
     aiSetStatus('已删除本组问答', 'var(--note-ink-3)');
+    // 提示短暂展示后恢复默认状态（避免徽标一直残留「已删除」）
+    if (!aiGenerating) {
+      setTimeout(function () { aiSetStatus('就绪', 'var(--state-success)'); }, 2000);
+    }
   }
 
   /** 追加一条消息气泡（user 右对齐 / assistant 左对齐）；meta 为助手消息附带统计信息（模型/首token时长/总耗时/打断标记）。
@@ -300,12 +309,21 @@
     }
     const isUser = role === 'user';
     const wrap = document.createElement('div');
-    wrap.className = 'flex ' + (isUser ? 'justify-end' : 'justify-start') + ' px-5 py-2.5';
+    // 右内边距 pr-8 为右侧删除图标留出空间；用户消息 wrap 内嵌删除按钮（相对定位）
+    wrap.className = 'flex ' + (isUser ? 'justify-end' : 'justify-start') + ' py-2.5 pl-5 pr-8' + (isUser ? ' relative group' : '');
     const bubble = document.createElement('div');
     bubble.className = 'max-w-[78%] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed shadow-sm';
     if (isUser) {
       bubble.style.cssText = 'background: var(--note-brand-600); color: #FFFFFF; border-top-right-radius: 4px; white-space: pre-wrap; word-break: break-word;';
       bubble.textContent = text;
+      // 删除按钮：悬浮到气泡上显示，始终红色，垂直中心线与本组绿色气泡中心对齐（right-1 位于气泡右内边距留出的空隙）
+      const del = document.createElement('button');
+      del.className = 'ai-del-btn flex items-center justify-center w-6 h-6 rounded-md transition-colors opacity-0 group-hover:opacity-100 absolute right-1 top-1/2 -translate-y-1/2';
+      del.style.cssText = 'color: #ef4444; background: transparent;';
+      del.title = '删除本组问答';
+      del.innerHTML = '<i data-lucide="trash-2" class="w-3.5 h-3.5"></i>';
+      del.addEventListener('click', function (e) { e.stopPropagation(); aiRemoveGroup(g); });
+      wrap.appendChild(del);
     } else {
       bubble.style.cssText = 'background: var(--note-surface-2); color: var(--note-ink); border: 1px solid var(--note-border); border-top-left-radius: 4px;';
       bubble.innerHTML = '<div class="ai-md">' + renderMarkdown(text) + '</div>';
@@ -326,13 +344,23 @@
     btn.title = aiGenerating ? '停止生成（打断）' : '发送（Enter）';
   }
 
-  /** 在助手气泡尾部追加回答统计行（模型 / 首 token 时长 / 总耗时 / 打断标记） */
+  /** 在助手气泡尾部追加回答统计行（检索时长 / 首 token / 总耗时 / 每秒 tokens / 打断标记）。
+   *  仅「开发者模式」开启时展示（非开发者模式为普通用户隐藏调试统计）。 */
   function aiAppendMeta(bubble, meta) {
     if (!bubble || !meta) return;
+    if (!aiDevMode()) return;   // 非开发者模式：隐藏回答统计行
     const parts = [];
     if (meta.model) parts.push('模型 ' + esc(meta.model));
-    if (meta.firstTokenMs != null) parts.push('首token ' + (meta.firstTokenMs / 1000).toFixed(1) + 's');
+    // 首 token 拆分为「检索时长」与「真正的首 token」：检索检索上下文所耗，首token 为剔除检索后的首个 token 生成耗时
+    const retrieveSec = meta.retrieveMs != null ? meta.retrieveMs / 1000 : null;
+    if (retrieveSec != null) parts.push('检索 ' + retrieveSec.toFixed(2) + 's');
+    if (meta.firstTokenMs != null) {
+      let first = meta.firstTokenMs / 1000;
+      if (meta.retrieveMs != null) first = Math.max(0, first - meta.retrieveMs / 1000);
+      parts.push('首token ' + first.toFixed(2) + 's');
+    }
     if (meta.totalMs != null) parts.push('总耗时 ' + (meta.totalMs / 1000).toFixed(1) + 's');
+    if (meta.tokens && meta.tokSec > 0) parts.push((meta.tokens / meta.tokSec).toFixed(1) + ' tok/s');
     if (meta.stopped) parts.push('已打断');
     if (!parts.length) return;
     const div = document.createElement('div');
@@ -351,12 +379,13 @@
       const sess = aiActiveSession();
       sess.history.push({
         role: 'assistant', content: text,
-        model: aiCurModel, firstTokenMs: aiFirstMs, totalMs: totalMs, stopped: !!stopped,
+        model: aiCurModel, firstTokenMs: aiFirstMs, totalMs: totalMs, retrieveMs: aiRetrieveMs, stopped: !!stopped,
       });
       aiPersistSession(sess);
     }
     if (aiCurBubble) {
-      aiAppendMeta(aiCurBubble, { model: aiCurModel, firstTokenMs: aiFirstMs, totalMs: totalMs, stopped: !!stopped });
+      const tokSec = totalMs ? (totalMs / 1000) : 0;
+      aiAppendMeta(aiCurBubble, { model: aiCurModel, firstTokenMs: aiFirstMs, totalMs: totalMs, retrieveMs: aiRetrieveMs, tokens: aiTokCount, tokSec: tokSec, stopped: !!stopped });
       aiRenderSources(aiCurBubble, sources || []);
       aiSetStatus(stopped ? '已停止' : (text ? '就绪' : '无回答'), stopped ? 'var(--warning)' : (text ? 'var(--state-success)' : 'var(--state-danger)'));
     }
@@ -365,14 +394,54 @@
     aiCurModel = '';
     aiFirstMs = null;
     aiT0 = 0;
+    aiRetrieveMs = 0;
     aiStopFlag = false;
     refreshIcons();
     aiUpdateSendButton();
   }
 
-  /** 渲染检索来源区（点击打开对应笔记） */
+  /** 关闭「查看索引块」弹窗（若无则空操作）。
+   * @author 火 冰 */
+  function closeAiSourceModal() {
+    const m = document.getElementById('ai-source-modal');
+    if (m) m.remove();
+  }
+
+  /** 弹出「查看索引块完整内容」弹窗：覆盖层 + 居中卡片，pre 展示 fullText（纯文本防注入）。
+   *  仅供开发者模式下的参考资料「查看近内容」按钮调用。
+   * @param {{path:string,fullText:string,text:string}} s 来源项（含完整块文本）
+   * @author 火 冰 */
+  function aiShowSourceModal(s) {
+    closeAiSourceModal();
+    const overlay = document.createElement('div');
+    overlay.id = 'ai-source-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,0.6);backdrop-filter:blur(3px);';
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) closeAiSourceModal(); });
+    const card = document.createElement('div');
+    card.style.cssText = 'max-width:720px;width:100%;max-height:80vh;display:flex;flex-direction:column;border-radius:12px;overflow:hidden;background:var(--note-surface-2, var(--note-bg));border:1px solid rgba(255,255,255,0.16);box-shadow:0 10px 40px rgba(0,0,0,0.5);';
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);';
+    head.innerHTML = (s.sim != null
+        ? '<span class="text-[10px] nums px-1.5 py-0.5 rounded shrink-0" style="background:rgba(124,58,237,0.16);color:var(--note-brand-400);">相关度 ' + (s.sim * 100).toFixed(0) + '%</span>'
+        : '')
+      + '<span class="flex-1 text-[12px] truncate" style="color:var(--note-ink);">索引块 · ' + esc(s.path || '') + '</span>'
+      + '<button data-ai-close class="w-6 h-6 flex items-center justify-center rounded hover:opacity-80" style="color:var(--note-ink-3);"><i data-lucide="x" class="w-4 h-4"></i></button>';
+    const body = document.createElement('pre');
+    body.style.cssText = 'flex:1;overflow:auto;padding:14px 16px;margin:0;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word;color:var(--note-ink);background:rgba(255,255,255,0.03);';
+    body.textContent = s.fullText || s.text || '';
+    card.appendChild(head);
+    card.appendChild(body);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    const closeBtn = overlay.querySelector('[data-ai-close]');
+    if (closeBtn) closeBtn.addEventListener('click', closeAiSourceModal);
+    refreshIcons();
+  }
+
   function aiRenderSources(container, sources) {
     if (!sources || !sources.length) return;
+    // 相关度分数 + 「查看完整索引块」按钮仅「开发者模式」展示（普通用户只看到来源列表，不暴露调试数值）
+    const showSim = aiDevMode();
     const box = document.createElement('div');
     box.className = 'mt-3 pt-2.5 border-t';
     box.style.cssText = 'border-color: var(--note-border);';
@@ -392,7 +461,10 @@
       });
       item.innerHTML = '<i data-lucide="file-text" class="w-3 h-3 shrink-0" style="color: var(--note-brand-400);"></i>'
         + '<span class="text-[11.5px] truncate flex-1" style="color: var(--note-ink-2);">' + esc(s.path) + '</span>'
-        + '<span class="text-[10px] nums px-1 py-0.5 rounded" style="background: rgba(124,58,237,0.12); color: var(--note-brand-400);">' + (s.sim != null ? (s.sim * 100).toFixed(0) + '%' : '') + '</span>';
+        + (showSim ? '<button data-ai-view-src title="查看完整索引块" class="w-4 h-4 flex items-center justify-center rounded hover:opacity-80 shrink-0" style="color:var(--note-ink-3);"><i data-lucide="stretch-horizontal" class="w-3 h-3"></i></button>' : '')
+        + (showSim ? '<span class="text-[10px] nums px-1 py-0.5 rounded" style="background: rgba(124,58,237,0.12); color: var(--note-brand-400);">' + (s.sim != null ? (s.sim * 100).toFixed(0) + '%' : '') + '</span>' : '');
+      const vbtn = item.querySelector('[data-ai-view-src]');
+      if (vbtn) vbtn.addEventListener('click', function (e) { e.stopPropagation(); aiShowSourceModal(s); });
       box.appendChild(item);
     });
     refreshIcons();
@@ -417,9 +489,14 @@
     aiStopFlag = false;
     aiT0 = Date.now();
     aiFirstMs = null;
+    aiTokCount = 0;      // 本次生成 token 计数复位（每次发送清零，残留不影响）
+    aiTokLastUi = 0;
+    aiRetrieveMs = 0;    // 本次检索耗时复位
     const modelSel = document.getElementById('ai-model');
     const modelOpt = modelSel && modelSel.selectedOptions && modelSel.selectedOptions[0];
     aiCurModel = (modelOpt && modelOpt.textContent ? modelOpt.textContent.trim() : '').replace(/^加载模型…$/, '');
+    // 发送时携带下拉选中的模型 id（可为 avail: 临时 id，引擎从可用模型缓存构造）；未选则引擎用 currentModel
+    const modelId = (modelSel && modelSel.value) ? modelSel.value : '';
     aiCurText = '';
     aiCurBubble = aiAddMessage('assistant', '…');
     aiSetStatus('生成中', 'var(--note-brand-400)');
@@ -430,7 +507,9 @@
     // 顶栏「携带历史数据」开关：关闭时每轮只发送当前问题（不带上文对话历史）
     const carryEl = document.getElementById('ai-carry-history');
     const carry = (carryEl && !carryEl.checked) ? [] : s.history.slice(0, -1);
-    ai.ask(q, carry, agentId).catch(function () { /* 错误经 ai:ask-error 事件处理 */ });
+    // 当前是否开发者模式：开启时引擎自动打印完整提示词（调试用）
+    const dev = aiDevMode();
+    ai.ask(q, carry, agentId, modelId, dev).catch(function () { /* 错误经 ai:ask-error 事件处理 */ });
   }
 
   /** 输入框高度自适应 */
@@ -452,20 +531,34 @@
     ai.onToken(function (t) {
       if (!aiCurBubble) return;
       if (aiFirstMs === null) aiFirstMs = Date.now() - aiT0;
+      aiTokCount += 1;
       aiCurText += t;
       const md = aiCurBubble.querySelector('.ai-md');
       if (md) md.innerHTML = renderMarkdown(aiCurText);
       chat.scrollTop = chat.scrollHeight;
+      // 实时速率：生成中节流（~500ms）更新顶部状态为「生成中 · X.X tok/s」
+      const now = Date.now();
+      if (now - aiTokLastUi >= 500) {
+        aiTokLastUi = now;
+        const sec = (now - aiT0) / 1000;
+        if (sec > 0) aiSetStatus('生成中 · ' + (aiTokCount / sec).toFixed(1) + ' tok/s', 'var(--note-brand-400)');
+      }
     });
-    // 回答完成：统一走 aiFinish 写入历史与统计
-    ai.onDone(function (p) { aiFinish(false, (p && p.sources) || []); });
+    // 回答完成：先记录检索耗时，再统一走 aiFinish 写入历史与统计（检索时长供开发者模式拆分首token）
+    ai.onDone(function (p) {
+      if (p && typeof p.retrieveMs === 'number') aiRetrieveMs = p.retrieveMs;
+      aiFinish(false, (p && p.sources) || []);
+    });
     // 回答出错：若为主动打断（aiStopFlag=true）则走 aiFinish（视为完成，保留已生成内容并记统计）；否则按错误渲染
     ai.onError(function (err) {
       if (aiStopFlag) { aiFinish(true); return; }
       aiGenerating = false;
+      const msg = (err && err.message) || '未知错误';
       aiSetStatus('出错', 'var(--state-danger)');
+      // 失败落盘（日志面板 + userData/logs/app.log），便于定位连续失败原因
+      if (window.SBLog) window.SBLog.error('AI 问答失败: ' + msg);
       if (aiCurBubble) {
-        aiCurBubble.innerHTML = '<div class="ai-md"><p style="color: var(--note-ink-2);">回答失败：' + esc((err && err.message) || '未知错误') + '</p></div>';
+        aiCurBubble.innerHTML = '<div class="ai-md"><p style="color: var(--note-ink-2);">回答失败：' + esc(msg) + '</p></div>';
       }
       aiCurText = ''; aiCurBubble = null;
       aiCurModel = ''; aiFirstMs = null; aiT0 = 0; aiStopFlag = false;
@@ -489,38 +582,65 @@
       }
     }).catch(function () {});
 
-    // 模型选择器（底部输入区）：从配置的生成模型列表填充（value=模型 id），切换保存 currentModelId
+    // 模型选择器（底部输入区）：已配置可用模型 + 全局「可用模型」缓存实时合并填充，切换保存 currentModelId
     const modelSel = document.getElementById('ai-model');
     if (modelSel && ai.listModels) {
       const fillModels = function (data) {
-        modelSel.innerHTML = '';
-        const all = (data && data.models) || [];
-        // 仅展示可用模型：远程 OpenAI 始终可用；本地 Ollama 仅展示正在运行的（由引擎按 /api/ps 判定）
-        const list = all.filter(function (m) { return m.running; });
-        if (!list.length) {
-          const opt = document.createElement('option');
-          opt.value = '';
-          opt.textContent = all.length ? '暂无可用模型 · 请先加载' : '暂无模型 · 去设置添加';
-          modelSel.appendChild(opt);
-          return;
+        const configured = (data && data.models) || [];
+        // 已配置且可用（远程 OpenAI 始终可用；本地 Ollama 仅运行中）
+        const running = configured.filter(function (m) { return m.running; });
+        const byName = {};
+        running.forEach(function (m) { byName[m.model] = true; });
+        const all = running.slice();
+        const renderOptions = function (list) {
+          if (!modelSel) return;
+          modelSel.innerHTML = '';
+          if (!list.length) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = all.length ? '暂无可用模型 · 请先加载' : '暂无模型 · 去设置添加';
+            modelSel.appendChild(opt);
+            return;
+          }
+          list.forEach(function (m) {
+            const o = document.createElement('option');
+            o.value = m.id;
+            o.textContent = m.model;
+            o.title = (m.provider === 'openai' ? '远程大模型' : '本地 Ollama') + ' · ' + m.model + (m.avail ? '（已加载到内存）' : '');
+            modelSel.appendChild(o);
+          });
+          // 当前所选模型不可用且不在列表时回落首个
+          const cur = (data && data.currentModelId) || '';
+          modelSel.value = list.some(function (x) { return x.id === cur; }) ? cur : list[0].id;
+        };
+        // 先立即渲染已配置且运行中的模型（本地 Ollama 运行中即显示，不依赖「运行状态」IPC），
+        // 再异步合并「已加载到内存」的模型：从引擎运行状态缓存（/api/ps 后台轮询）取所有运行中模型，
+        // 未配置但已加载的也进下拉（avail: 临时 id，发送时引擎从可用模型缓存构造）
+        renderOptions(all);
+        if (ai.getRunningMap) {
+          ai.getRunningMap().then(function (rm) {
+            Object.keys(rm || {}).forEach(function (k) {
+              const i = k.indexOf('\u0000');
+              const baseUrl = i >= 0 ? k.slice(0, i) : k;
+              const name = i >= 0 ? k.slice(i + 1) : '';
+              if (!name || byName[name]) return;
+              byName[name] = true;
+              all.push({ id: 'avail:' + baseUrl + ':ollama:' + name, model: name, provider: 'ollama', avail: true });
+            });
+            renderOptions(all);
+          }).catch(function () { /* 运行状态缓存不可达：保留已渲染的配置运行中模型 */ });
         }
-        list.forEach(function (m) {
-          const o = document.createElement('option');
-          o.value = m.id;
-          o.textContent = m.model;
-          o.title = (m.provider === 'openai' ? '远程大模型' : '本地 Ollama') + ' · ' + m.model;
-          modelSel.appendChild(o);
-        });
-        // 当前所选模型不可用且不在可用列表时回落首个可用
-        const cur = (data && data.currentModelId) || '';
-        modelSel.value = list.some(function (x) { return x.id === cur; }) ? cur : list[0].id;
       };
-      ai.listModels().then(fillModels).catch(function () {
-        const opt = document.createElement('option');
-        opt.value = '';
-        opt.textContent = '模型列表不可用';
-        modelSel.appendChild(opt);
-      });
+      const refreshOnce = function () { ai.listModels().then(fillModels).catch(function () { /* 网络失败静默 */ }); };
+      refreshOnce();
+      // 钩子实时刷新：主进程每次轮询/手动刷新完成后推送 ai:models-updated 事件，页面立即重刷下拉（类似 Vue 响应式，不等 5 秒兜底）
+      if (ai.onModelsUpdated) ai.onModelsUpdated(function () { if (document.getElementById('ai-model')) refreshOnce(); });
+      // 全局实时同步：每 5 秒刷新一次下拉（问答页挂载时；生成中不打断选择）
+      if (!window.__aiModelSyncTimer) {
+        window.__aiModelSyncTimer = setInterval(function () {
+          if (document.getElementById('ai-model') && !aiGenerating) refreshOnce();
+        }, 5000);
+      }
       modelSel.addEventListener('change', function () {
         const id = modelSel.value;
         if (!id) return;
@@ -531,15 +651,15 @@
       });
     }
 
-    // Agent 选择器（底部输入区）：从配置的 agents 列表填充（value=agent id），切换保存 currentAgentId
+    // Agent 选择器（顶部工具栏）：从配置的 agents 列表填充（value=agent id），切换保存 currentAgentId
+    // （默认「知识库助手」由引擎内置兜底，agents 列表为空时仍可用）
     const agentSel = document.getElementById('ai-agent');
     if (agentSel && ai.getConfig) {
       ai.getConfig().then(function (cfg) {
         const agents = ((cfg && cfg.agents) || []).slice();
-        agentSel.innerHTML = '<option value="">默认助手</option>'
-          + agents.map(function (a) {
-            return '<option value="' + esc(a.id) + '">' + esc(a.name || '未命名') + '</option>';
-          }).join('');
+        agentSel.innerHTML = agents.map(function (a) {
+          return '<option value="' + esc(a.id) + '">' + esc(a.name || '未命名') + '</option>';
+        }).join('');
         const cur = (cfg && cfg.currentAgentId) || '';
         if (agents.some(function (x) { return x.id === cur; })) agentSel.value = cur;
       }).catch(function () {});
@@ -548,7 +668,7 @@
         const name = agentSel.selectedOptions && agentSel.selectedOptions[0]
           ? agentSel.selectedOptions[0].textContent : '';
         ai.saveConfig({ currentAgentId: id }).then(function () {
-          aiSetStatus('已切换 · ' + (id ? name : '默认助手'), 'var(--state-success)');
+          aiSetStatus('已切换 · ' + (name || '知识库助手'), 'var(--state-success)');
         }).catch(function () {});
       });
     }
@@ -562,6 +682,22 @@
       carryEl.addEventListener('change', function () {
         ai.saveConfig({ carryHistory: carryEl.checked }).then(function () {
           aiSetStatus(carryEl.checked ? '已开启：携带历史数据' : '已关闭：每轮仅发送当前问题', 'var(--state-success)');
+        }).catch(function () {});
+      });
+    }
+
+    // 顶栏「相关度阈值」：回填当前配置，变更即保存（低于该值的索引块不作为参考资料）
+    const minSimEl = document.getElementById('ai-min-sim');
+    if (minSimEl && ai.getConfig) {
+      ai.getConfig().then(function (cfg) {
+        const v = (cfg && cfg.minSimilarity != null) ? Number(cfg.minSimilarity) : 0;
+        minSimEl.value = v;
+      }).catch(function () {});
+      minSimEl.addEventListener('change', function () {
+        const v = Math.max(0, Math.min(100, parseInt(minSimEl.value, 10) || 0));
+        minSimEl.value = v;
+        ai.saveConfig({ minSimilarity: v }).then(function () {
+          aiSetStatus(v > 0 ? '相关度阈值：' + v + '%（低于该值不作为参考资料）' : '相关度阈值：0（不过滤）', 'var(--state-info)');
         }).catch(function () {});
       });
     }
