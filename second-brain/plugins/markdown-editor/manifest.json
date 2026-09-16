@@ -37,6 +37,8 @@
   "commands": [
     { "icon": "file-text", "label": "Markdown: 打开当前笔记", "actionKey": "mde-open" },
     { "icon": "list", "label": "Markdown: 显示大纲", "actionKey": "mde-outline", "shortcut": "Ctrl+Shift+Q" },
+    { "icon": "expand", "label": "Markdown: 切换编辑器宽屏模式", "actionKey": "mde-widescreen" },
+    { "icon": "stretch-horizontal", "label": "Markdown: 切换表格列宽（固定等宽/按内容宽度）", "actionKey": "mde-table-layout" },
     { "icon": "link", "label": "链接: 浏览器打开", "actionKey": "mde-link-open" },
     { "icon": "unlink", "label": "链接: 取消链接", "actionKey": "mde-link-unlink" },
     { "icon": "download", "label": "图片: 下载", "actionKey": "mde-img-download" },

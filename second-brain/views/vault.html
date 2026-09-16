@@ -59,6 +59,8 @@
         </div>
         <button data-action="toggle-line-numbers" title="显示/隐藏行号" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="list-ordered" class="w-3.5 h-3.5"></i></button>
         <button data-action="toggle-wrap" title="自动换行（关闭则横向滚动）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="wrap-text" class="w-3.5 h-3.5"></i></button>
+        <!-- Markdown Editor 插件的「宽屏」按钮注入槽：插件启用时经 PluginAPI 把按钮渲染到这里 -->
+        <span id="ed-plugin-wide-slot" class="flex items-center shrink-0"></span>
         <button data-action="fullscreen" title="全屏 / 退出全屏（Esc）" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="background: transparent; color: var(--note-ink-3);"><i data-lucide="maximize" class="w-3.5 h-3.5"></i></button>
         <div class="w-px h-4 mx-1" style="background: var(--note-border);"></div>
         <button data-action="view-index" title="查看当前笔记索引" class="w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80" style="color: var(--note-ink-3);"><i data-lucide="database" class="w-3.5 h-3.5"></i></button>
