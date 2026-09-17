@@ -71,9 +71,28 @@
     <!-- 查找/替换已随自研编辑区退役，由 vditor 原生搜索（Ctrl+F/Ctrl+R）承接 -->
 
     <!-- 编辑器内容：标题/元信息 → 单一 vditor 编辑区（接管源码/所见即所得/预览全部渲染） -->
-    <div class="flex-1 min-h-0 flex flex-col">
+    <!-- 编辑器内容容器需 position:relative：作为悬浮查找/替换条（#ed-vditor-find）的定位锚点，
+         使 findbar 以 absolute 悬浮于编辑区右上角、不占 flex 布局流。作者: 火 冰 -->
+    <div class="flex-1 min-h-0 flex flex-col" style="position: relative;">
       <!-- 标题/时间/字数组件已移除：改名统一走文件树右键「重命名」/双击文件名，见 ED-44 -->
       <!-- vditor 挂载区：mode(ir/sv/wysiwyg) 与宿主 编辑/分屏/预览 按钮映射驱动 -->
+      <!-- 查找/替换条（Ctrl+F 查找，Ctrl+R 替换）：放在 vditor 容器外、absolute 悬浮于编辑区右上角，
+           避免 vditor destroy/rebuild 时被清掉；样式复用 app.css 的 .ed-findbar/.show-replace。
+           作者: 火 冰 -->
+      <div id="ed-vditor-find" class="ed-findbar" hidden>
+        <input class="find-input" id="vd-find-input" placeholder="查找" list="sb-find-history" />
+        <datalist id="sb-find-history"></datalist>
+        <span class="find-count" id="vd-find-count">0 / 0</span>
+        <button class="find-btn" id="vd-find-prev" type="button" title="上一个匹配">上一个</button>
+        <button class="find-btn" id="vd-find-next" type="button" title="下一个匹配">下一个</button>
+        <button class="find-btn" id="vd-find-close" type="button" title="关闭 (Esc)">×</button>
+        <div class="find-replace">
+          <input class="find-input" id="vd-replace-input" placeholder="替换为" list="sb-replace-history" />
+          <datalist id="sb-replace-history"></datalist>
+          <button class="find-btn" id="vd-replace-one" type="button" title="替换当前匹配">替换</button>
+          <button class="find-btn" id="vd-replace-all" type="button" title="替换所有匹配">全部替换</button>
+        </div>
+      </div>
       <div id="ed-vditor" class="ed-vditor"></div>
 
       <!-- 当前笔记索引（内联，点工具栏「查看索引」展开/收起） -->

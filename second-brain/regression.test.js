@@ -1617,12 +1617,80 @@ testVaultResCards();
 testVaultResUploadSnippet();
 testVditorBridge();
 testVditorBlurGuard();
+
+/* ---- 查找/替换（Ctrl+F / Ctrl+R）：window.vdFindbar 暴露 + sv 模式按 textarea 统计匹配 ----
+ * vditor 无内置查找条，新实现基于三种编辑模式统一查找。此处验证：
+ *   1) window.vdFindbar 暴露 open/close/refresh；
+ *   2) sv（源码）模式下 refresh 按 sv.element.value 统计匹配并更新计数；
+ *   3) open(true) 打开替换条（show-replace）、close 隐藏。
+ * 作者: 火 冰 */
+function testFindbar() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body>'
+    + '<div id="ed-vditor"></div>'
+    + '<div id="ed-vditor-find" class="ed-findbar" hidden>'
+    + '<input class="find-input" id="vd-find-input" />'
+    + '<span class="find-count" id="vd-find-count">0 / 0</span>'
+    + '<button id="vd-find-prev" type="button">上一</button>'
+    + '<button id="vd-find-next" type="button">下一</button>'
+    + '<button id="vd-find-close" type="button">×</button>'
+    + '<div class="find-replace"><input id="vd-replace-input" />'
+    + '<button id="vd-replace-one" type="button">替换</button><button id="vd-replace-all" type="button">全部替换</button>'
+    + '</div></div></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window; const D = W.document;
+  W.registerEditorProvider = function () {};
+  W.restoreS = function () { return true; };
+  // 桩 vditor：sv.element 为真实 textarea（seed 多匹配文本），getValue 返回其 value
+  const StubVditor = function (el, opts) {
+    const ta = D.createElement('textarea');
+    ta.value = 'alpha beta alpha gamma';
+    this._val = opts.value || '';
+    this.vditor = {
+      currentMode: opts.mode,
+      sv: { element: ta },
+      ir: { element: { style: {}, parentElement: { style: {} }, querySelectorAll: function () { return []; } } },
+      wysiwyg: { element: { style: {}, parentElement: { style: {} }, querySelectorAll: function () { return []; } } },
+      preview: { element: { style: {} } },
+      render: function () {},
+    };
+  };
+  StubVditor.prototype.getValue = function () { return this.vditor.sv.element.value; };
+  StubVditor.prototype.setValue = function (v) { this._val = v; };
+  StubVditor.prototype.destroy = function () {};
+  W.Vditor = StubVditor;
+  const inject = function () {
+    const s = D.createElement('script');
+    s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+    D.head.appendChild(s);
+  };
+  inject();
+
+  assert(W.vdFindbar && typeof W.vdFindbar.open === 'function' && typeof W.vdFindbar.close === 'function'
+    && typeof W.vdFindbar.refresh === 'function',
+    '查找: window.vdFindbar 暴露 open/close/refresh');
+  const bar = D.getElementById('ed-vditor-find');
+  // 切到 sv：查找以 textarea 为基准（seed 'alpha beta alpha gamma'，含 2 处 alpha）
+  W.vdSetMode('split');
+  const fi = D.getElementById('vd-find-input');
+  const count = D.getElementById('vd-find-count');
+  fi.value = 'alpha';
+  W.vdFindbar.refresh();
+  assert(count.textContent === '1 / 2', '查找: sv 文本统计匹配结果（实际 ' + count.textContent + '）');
+  // 打开替换条（Ctrl+R）：显示且进入替换模式
+  W.vdFindbar.open(true);
+  assert(bar.hidden === false && bar.classList.contains('show-replace'),
+    '查找: open(true) 打开且进入替换模式');
+  // 关闭
+  W.vdFindbar.close();
+  assert(bar.hidden === true, '查找: close 隐藏 findbar');
+}
 Promise.all([
   testCodeHighlightCopyBtn(),
   testRenameNoteFile(),
   testCodeHighlightSkipEditSurface(),
   testEdAutosaveBinding(),
-testEdOpenRace(),
+  testEdOpenRace(),
+  testFindbar(),
 ]).then(function () {
   console.log(`\n回归结果: ${pass} 通过, ${fail} 失败`);
   if (fail) process.exitCode = 1;

@@ -37,7 +37,19 @@
     'undo', 'redo', '|', 'headings', 'bold', 'italic', 'strike', '|',
     'list', 'ordered-list', 'check', 'outdent', 'indent', '|',
     'quote', 'line', 'code', 'inline-code', '|', 'table', 'link', 'upload', '|',
-    'outline', 'export',
+    /* 自定义查找/替换按钮（vditor 无内置，走 Custom 渲染，icon 为内联 SVG）。
+     * click 引用的 vdOpenFindbar 是本 IIFE 内函数声明，随调用时已就绪。作者: 火 冰 */
+    {
+      name: 'sb-find', tip: '查找 (Ctrl+F)',
+      icon: '<svg viewBox="0 0 24 24" width="17" height="17" style="fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m21 21-5-5"/></svg>',
+      click: function () { vdOpenFindbar(false); },
+    },
+    {
+      name: 'sb-replace', tip: '替换 (Ctrl+R)',
+      icon: '<svg viewBox="0 0 24 24" width="17" height="17" style="fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round"><circle cx="9" cy="11.5" r="6"/><path d="m20.5 20.5-4.6-4.6"/><text x="0" y="24" font-size="13" font-weight="700" style="fill:currentColor;stroke:none">A</text></svg>',
+      click: function () { vdOpenFindbar(true); },
+    },
+    '|', 'outline', 'export',
   ];
 
   /* ---------- 资源上传（图片/附件）助手 ---------- */
@@ -1267,6 +1279,437 @@
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && vdHf) vdHostFullscreen(false);
   });
+
+  /* ============================================================
+   * 查找/替换（Ctrl+F 查找，Ctrl+R 替换）
+   * vditor 4.0 无内置查找条，宿主旧实现也已随 #ed-edit textarea 退役失效。
+   * 本模块基于 vditor 三种编辑模式的可编辑元素统一实现：
+   *   - sv（分屏源码）：vdInst.vditor.sv.element 为 <textarea>，按 value 匹配 + setSelectionRange 跳转；
+   *   - ir / wysiwyg（富文本）：对应 .ir.element / .wysiwyg.element 为 contenteditable，
+   *     用 TreeWalker 遍历文本节点拼接全文，把全局偏移映射回 Range 选区跳转。
+   * UI 复用 app.css 的 .ed-findbar/.show-replace，DOM 位于 #ed-vditor 之外（随编辑区顶部显示），
+   * 因此不受 vditor destroy/rebuild 清空影响。宿主通过 window.vdFindbar 薄转发调用。
+   * 作者: 火 冰
+   * ============================================================ */
+
+  /** @type {string} 当前查找关键词 */
+  let vdFindQ = '';
+  /** @type {Array<{start:number,end:number}>} 当前匹配的全局偏移列表 */
+  let vdFindMatches = [];
+  /** @type {number} 当前高亮匹配索引（0 起） */
+  let vdFindIdx = -1;
+  /** @type {boolean} 查找/替换条是否打开（宿主 app-layout.js Escape 依赖同名逻辑） */
+  let vdFindOpen = false;
+
+  /* 查找/替换历史：各自持久化（restoreS/saveS），供输入框 <datalist> 下拉回填 */
+  const SB_FIND_HIST_KEY = 'sbFindHist';
+  const SB_REPLACE_HIST_KEY = 'sbReplaceHist';
+  const SB_HIST_MAX = 10;
+
+  /** 读取某类历史记录（字符串数组）。作者: 火 冰
+   * @param {string} key 记忆键（SB_FIND_HIST_KEY / SB_REPLACE_HIST_KEY）
+   * @returns {string[]} 历史列表，无则空数组 */
+  function vdHistGet(key) {
+    try {
+      const arr = (typeof restoreS === 'function') ? restoreS(key, null) : null;
+      return Array.isArray(arr) ? arr : [];
+    } catch (_) { return []; }
+  }
+
+  /** 把一次输入记入历史：去重置顶，限 SB_HIST_MAX 条，写盘并刷新下拉。
+   * @param {string} key 记忆键
+   * @param {string} val 输入值（空串不记）
+   * @author 火 冰 */
+  function vdHistRecord(key, val) {
+    if (!val) return;
+    try {
+      let arr = vdHistGet(key).filter(function (x) { return x !== val; });
+      arr.unshift(val);
+      if (arr.length > SB_HIST_MAX) arr.length = SB_HIST_MAX;
+      if (typeof saveS === 'function') saveS(key, arr);
+      vdHistRender(key, arr);
+    } catch (_) { /* 忽略 */ }
+  }
+
+  /** 把历史渲染进对应 <datalist>，使输入框聚焦即可下拉选择。
+   * @param {string} key 记忆键
+   * @param {string[]} [arr] 历史列表，省略则自读
+   * @author 火 冰 */
+  function vdHistRender(key, arr) {
+    const listId = (key === SB_FIND_HIST_KEY) ? 'sb-find-history' : 'sb-replace-history';
+    const dl = document.getElementById(listId);
+    if (!dl) return;
+    arr = arr || vdHistGet(key);
+    dl.textContent = '';
+    arr.forEach(function (v) { const o = document.createElement('option'); o.value = v; dl.appendChild(o); });
+  }
+
+  /** 正则特殊字符转义（editor-core.js 的 escapeReg 为本 IIFE 私有，此处自建）
+   * @param {string} s 原始字符串
+   * @returns {string} 正则安全字符串
+   * @author 火 冰 */
+  function vdFindEscape(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /** 取当前编辑元素的文本快照：sv 用 textarea.value；ir/wysiwyg 用 TreeWalker 拼接文本节点。
+   *  返回 { type:'sv'|'rich', text, el, seg }，seg 为 [{node,start,len}] 供全局偏移→DOM 映射。
+   * @returns {{type:string,text:string,el:Element,seg:Array}|null} 快照，无实例返回 null
+   * @author 火 冰 */
+  function vdTextSnapshot() {
+    if (!vdInst || !vdInst.vditor) return null;
+    if (vdMode === 'sv') {
+      const ta = vdInst.vditor.sv && vdInst.vditor.sv.element;
+      if (!ta) return null;
+      return { type: 'sv', text: ta.value || '', el: ta, seg: null };
+    }
+    const el = (vdMode === 'ir')
+      ? (vdInst.vditor.ir && vdInst.vditor.ir.element)
+      : (vdInst.vditor.wysiwyg && vdInst.vditor.wysiwyg.element);
+    if (!el) return null;
+    const seg = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    let acc = 0, n;
+    while ((n = walker.nextNode())) {
+      const t = n.nodeValue || '';
+      seg.push({ node: n, start: acc, len: t.length });
+      acc += t.length;
+    }
+    return { type: 'rich', text: el.textContent || '', el, seg };
+  }
+
+  /** 估算当前光标的「全文全局偏移」，用于打开查找时定位到光标之后的第一个匹配。
+   * @param {Object} snap vdTextSnapshot 结果
+   * @returns {number} 全局偏移，无法确定返回 -1
+   * @author 火 冰 */
+  function vdGlobalCaret(snap) {
+    if (!snap) return -1;
+    if (snap.type === 'sv') return (snap.el.selectionStart != null) ? snap.el.selectionStart : -1;
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || sel.rangeCount === 0 || !sel.anchorNode) return -1;
+    for (let i = 0; i < snap.seg.length; i++) {
+      if (snap.seg[i].node === sel.anchorNode) return snap.seg[i].start + (sel.anchorOffset || 0);
+    }
+    return -1;
+  }
+
+  /** 把全局偏移 [start,end) 映射为编辑元素选区选中（sv→setSelectionRange，rich→Range）。
+   * @param {Object} snap   vdTextSnapshot 结果
+   * @param {number} start  全局起始偏移
+   * @param {number} end    全局结束偏移
+   * @author 火 冰 */
+  function vdSelectRange(snap, start, end) {
+    if (!snap) return;
+    if (snap.type === 'sv') {
+      const ta = snap.el;
+      try { ta.setSelectionRange(start, end); } catch (_) { /* 忽略 */ }
+      return;
+    }
+    if (!snap.seg.length) return;
+    let i = 0;
+    while (i < snap.seg.length && snap.seg[i].start + snap.seg[i].len <= start) i++;
+    if (i >= snap.seg.length) i = snap.seg.length - 1;
+    const sg = snap.seg[i];
+    const offS = Math.max(0, start - sg.start);
+    const offE = Math.min(sg.len, end - sg.start);
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (!sel) return;
+    const range = document.createRange ? document.createRange() : null;
+    if (!range) return;
+    try {
+      range.setStart(sg.node, offS);
+      range.setEnd(sg.node, offE);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (_) { /* 忽略边界异常 */ }
+  }
+
+  /** 把全局偏移映射为一个 Range（富文本，支持起点终点落在不同文本节点）。
+   * @param {Object} snap   vdTextSnapshot 结果
+   * @param {number} start  全局起始偏移
+   * @param {number} end    全局结束偏移
+   * @returns {Range|null} Range，非富文本或越界返回 null
+   * @author 火 冰 */
+  function vdBytesToRange(snap, start, end) {
+    if (!snap || snap.type !== 'rich' || !snap.seg.length) return null;
+    const seg = snap.seg;
+    let a = 0; while (a < seg.length - 1 && seg[a].start + seg[a].len <= start) a++;
+    let b = 0; while (b < seg.length - 1 && seg[b].start + seg[b].len <= end) b++;
+    try {
+      const rg = document.createRange();
+      rg.setStart(seg[a].node, Math.max(0, Math.min(seg[a].len, start - seg[a].start)));
+      rg.setEnd(seg[b].node, Math.max(0, Math.min(seg[b].len, end - seg[b].start)));
+      return rg;
+    } catch (_) { return null; }
+  }
+
+  /** 清除匹配临时变色（CSS Custom Highlight）。作者: 火 冰 */
+  function vdClearHighlight() {
+    try {
+      if (typeof CSS !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('sb-find');
+        CSS.highlights.delete('sb-find-current');
+      }
+    } catch (_) { /* 忽略 */ }
+  }
+
+  /** 应用匹配临时变色（富文本）：全集用 sb-find，当前项用 sb-find-current 叠加亮色。
+   *  不破坏编辑区 DOM，因此不会打断输入框焦点。作者: 火 冰
+   * @param {Object} snap 快照
+   * @param {number} cur  当前匹配索引 */
+  function vdApplyHighlight(snap, cur) {
+    if (!snap || snap.type !== 'rich' || typeof Highlight === 'undefined') return;
+    if (typeof CSS === 'undefined' || !CSS.highlights) return;
+    const all = [];
+    let curRg = null;
+    for (let i = 0; i < vdFindMatches.length; i++) {
+      const rg = vdBytesToRange(snap, vdFindMatches[i].start, vdFindMatches[i].end);
+      if (!rg) continue;
+      if (i === cur) curRg = rg;
+      all.push(rg);
+    }
+    try {
+      if (all.length) CSS.highlights.set('sb-find', new Highlight(...all));
+      if (curRg) CSS.highlights.set('sb-find-current', new Highlight(curRg));
+    } catch (_) { /* 忽略 */ }
+  }
+
+  /** 把当前匹配处滚动到可视区顶部（sv 用行偏移 + 高度-可视高裁剪；富文本 scrollIntoView(start)）。
+   * @param {Object} snap        快照
+   * @param {number} startOffset 当前匹配的全局起始偏移
+   * @author 火 冰 */
+  function vdScrollCurrentTop(snap, startOffset) {
+    if (!snap) return;
+    if (snap.type === 'sv') {
+      const ta = snap.el;
+      const lh = Number((window.getComputedStyle && window.getComputedStyle(ta).lineHeight) || '') || 20;
+      const lineCount = snap.text.slice(0, startOffset).split('\n').length;
+      const sc = document.getElementById('ed-split') || ta;
+      const top = Math.max(0, (lineCount - 1) * lh);
+      const maxTop = Math.max(0, (ta.scrollHeight || 0) - (sc.clientHeight || 0));
+      sc.scrollTop = Math.min(top, maxTop);
+      return;
+    }
+    const rg = vdBytesToRange(snap, startOffset, startOffset + Math.max(1, vdFindQ.length));
+    if (!rg) return;
+    const el = (rg.startContainer.nodeType === 3) ? rg.startContainer.parentElement : rg.startContainer;
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start', inline: 'nearest' });
+  }
+
+  /** 更新/执行查找：按当前输入框关键词在编辑元素全文匹配。
+   *  结果以临时变色高亮、当前项定位到可视区顶部；不改变输入框焦点。
+   *  计数与跳转基准统一为「当前编辑元素可见文本」。作者: 火 冰 */
+  function vdRunFind() {
+    const inp = document.getElementById('vd-find-input');
+    const count = document.getElementById('vd-find-count');
+    const q = inp ? (inp.value || '') : '';
+    vdFindQ = q;
+    vdFindMatches = [];
+    vdFindIdx = -1;
+    if (q) vdHistRecord(SB_FIND_HIST_KEY, q);
+    const snap = vdTextSnapshot();
+    vdClearHighlight();
+    if (!snap || !q) { if (count) count.textContent = '0 / 0'; return; }
+    const re = new RegExp(vdFindEscape(q), 'gi');
+    let m;
+    while ((m = re.exec(snap.text)) !== null) {
+      vdFindMatches.push({ start: m.index, end: m.index + m[0].length });
+      if (m[0].length === 0) re.lastIndex++;   // 防空匹配死循环
+    }
+    if (!vdFindMatches.length) { if (count) count.textContent = '0 / 0'; return; }
+    // 当前项：优先定位光标之后，无可定位置则取第一个
+    const caret = vdGlobalCaret(snap);
+    let cur = 0;
+    if (caret >= 0) {
+      for (let i = 0; i < vdFindMatches.length; i++) {
+        if (vdFindMatches[i].start >= caret) { cur = i; break; }
+      }
+    }
+    vdFindIdx = cur;
+    vdApplyHighlight(snap, cur);
+    // sv 模式无法 CSS 高亮，退化为选中当前匹配（不抢焦点）
+    if (snap.type === 'sv') vdSelectRange(snap, vdFindMatches[cur].start, vdFindMatches[cur].end);
+    vdScrollCurrentTop(snap, vdFindMatches[cur].start);
+    if (count) count.textContent = (cur + 1) + ' / ' + vdFindMatches.length;
+  }
+
+  /** 导航到上一个/下一个匹配（dir=-1 上，+1 下）。保持输入框焦点、更新高亮与计数。
+   * @param {number} dir 方向 */
+  function vdFindNav(dir) {
+    if (!vdFindMatches.length) return;
+    vdFindIdx = (vdFindIdx + dir + vdFindMatches.length) % vdFindMatches.length;
+    const snap = vdTextSnapshot();
+    if (snap) {
+      if (snap.type === 'sv') vdSelectRange(snap, vdFindMatches[vdFindIdx].start, vdFindMatches[vdFindIdx].end);
+      vdApplyHighlight(snap, vdFindIdx);
+      vdScrollCurrentTop(snap, vdFindMatches[vdFindIdx].start);
+    }
+    const count = document.getElementById('vd-find-count');
+    if (count) count.textContent = (vdFindIdx + 1) + ' / ' + vdFindMatches.length;
+    const inp = document.getElementById('vd-find-input');
+    if (inp) { try { inp.focus(); } catch (_) { /* 忽略 */ } }
+  }
+
+  /** 替换当前高亮匹配为「替换为」输入框内容。
+   *  sv 用 textarea setSelectionRange + execCommand；rich 用 Range 选区 + execCommand（触发 input 回传宿主）。
+   *  @author 火 冰 */
+  function vdDoReplace() {
+    const rInp = document.getElementById('vd-replace-input');
+    const r = rInp ? (rInp.value || '') : '';
+    if (!vdFindQ || vdFindIdx < 0 || !vdFindMatches.length) return;
+    if (r) vdHistRecord(SB_REPLACE_HIST_KEY, r);
+    const snap = vdTextSnapshot();
+    if (!snap) return;
+    const mm = vdFindMatches[vdFindIdx];
+    try {
+      if (snap.type === 'sv') {
+        const ta = snap.el;
+        ta.focus();
+        ta.setSelectionRange(mm.start, mm.end);
+        if (document.execCommand) document.execCommand('insertText', false, r);
+      } else {
+        vdSelectRange(snap, mm.start, mm.end);
+        const sel = window.getSelection ? window.getSelection() : null;
+        if (sel && sel.rangeCount && document.execCommand) document.execCommand('insertText', false, r);
+      }
+    } catch (_) { /* 忽略替换异常 */ }
+    try { sync2Host(vdGetValue()); } catch (_) { /* 忽略同步异常 */ }
+    vdRunFind();
+  }
+
+  /** 替换全部匹配（sv 从后往前 setSelectionRange+execCommand；rich 从后往前迭代替换）。
+   *  @author 火 冰 */
+  function vdDoReplaceAll() {
+    const rInp = document.getElementById('vd-replace-input');
+    const r = rInp ? (rInp.value || '') : '';
+    if (!vdFindQ) return;
+    if (r) vdHistRecord(SB_REPLACE_HIST_KEY, r);
+    const snap = vdTextSnapshot();
+    if (!snap) return;
+    try {
+      if (snap.type === 'sv') {
+        const ta = snap.el;
+        const re = new RegExp(vdFindEscape(vdFindQ), 'gi');
+        const ms = [];
+        let m;
+        while ((m = re.exec(ta.value)) !== null) { ms.push({ s: m.index, e: m.index + m[0].length }); }
+        for (let k = ms.length - 1; k >= 0; k--) {
+          ta.setSelectionRange(ms[k].s, ms[k].e);
+          if (document.execCommand) document.execCommand('insertText', false, r);
+        }
+      } else {
+        // 富文本：从最后一个匹配向前迭代，每步重新快照以对抗 execCommand 引发的节点变化
+        let guard = 0;
+        while (guard++ < 5000) {
+          const s = vdTextSnapshot();
+          if (!s) break;
+          const re = new RegExp(vdFindEscape(vdFindQ), 'gi');
+          let last = null, m;
+          while ((m = re.exec(s.text)) !== null) last = { s: m.index, e: m.index + m[0].length };
+          if (!last) break;
+          vdSelectRange(s, last.s, last.e);
+          const sel = window.getSelection ? window.getSelection() : null;
+          if (!sel || !sel.rangeCount || !document.execCommand) break;
+          document.execCommand('insertText', false, r);
+        }
+      }
+    } catch (_) { /* 忽略批量替换异常 */ }
+    try { sync2Host(vdGetValue()); } catch (_) { /* 忽略同步异常 */ }
+    vdRunFind();
+  }
+
+  /** 打开查找/替换条（Ctrl+F 查找、Ctrl+R 替换）。
+   * @param {boolean} [replace] 是否打开替换模式
+   * @returns {boolean} 是否打开成功 */
+  function vdOpenFindbar(replace) {
+    const bar = document.getElementById('ed-vditor-find');
+    if (!bar) return false;
+    bar.hidden = false;
+    bar.classList.toggle('show-replace', !!replace);
+    // 打开时渲染两个输入框的历史下拉
+    vdHistRender(SB_FIND_HIST_KEY);
+    vdHistRender(SB_REPLACE_HIST_KEY);
+    const inp = document.getElementById('vd-find-input');
+    if (inp) {
+      if (!inp.value && !vdFindQ) {
+        // 预填当前鼠标选区文本（若有）
+        const sel = window.getSelection ? window.getSelection() : null;
+        if (sel && sel.toString) {
+          const t = sel.toString();
+          if (t) { inp.value = t; }
+        }
+      }
+      inp.focus();
+      inp.select();
+    }
+    vdFindOpen = true;
+    if (typeof setTimeout === 'function') setTimeout(vdRunFind, 0);
+    return true;
+  }
+
+  /** 关闭查找/替换条，并清除匹配临时变色 */
+  function vdCloseFindbar() {
+    const bar = document.getElementById('ed-vditor-find');
+    if (bar) bar.hidden = true;
+    vdFindOpen = false;
+    vdClearHighlight();
+  }
+
+  /** 判断当前 keydown 目标是否应被编辑器查找捕获：
+   *  编辑器容器可见 + 焦点在编辑区容器内、或查找条（含其输入框）、或 body/无焦点。
+   *  这样 Ctrl+F/Ctrl+R 在查询/替换输入框获得焦点时同样生效，同时避免误拦截宿主其他输入框。
+   * @param {Event} e 键盘事件
+   * @returns {boolean} 是否应拦截 */
+  function vdShouldCatchKey(e) {
+    const vd = vdEl();
+    if (!vd || vd.offsetParent === null) return false;   // 编辑器未显示，交给系统
+    const t = e.target;
+    if (!t || t === document || t === document.body) return true;
+    const el = (t.nodeType === 1) ? t : (t.parentElement || null);
+    if (!el) return true;
+    const bar = document.getElementById('ed-vditor-find');
+    if (bar && !bar.hidden && bar.contains(el)) return true;  // 焦点在查找/替换输入框
+    return vd.contains(el);
+  }
+
+  // Ctrl+F 查找 / Ctrl+R 替换快捷键（cmd 兼容 mac，阻断系统查找条）
+  document.addEventListener('keydown', function (e) {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (e.isComposing) return;                       // 中文输入法组合中不触发
+    const k = String(e.key || '').toLowerCase();
+    if (k === 'f' && !e.shiftKey && !e.altKey) {
+      if (!vdShouldCatchKey(e)) return;              // 焦点不在编辑器内，放行系统查找
+      e.preventDefault();
+      vdOpenFindbar(false);
+    } else if (k === 'r' && !e.shiftKey && !e.altKey) {
+      if (!vdShouldCatchKey(e)) return;
+      e.preventDefault();
+      vdOpenFindbar(true);
+    }
+  });
+
+  // findbar 交互绑定（DOM 事件：输入实时查找、上一/下一、替换/全部替换、关闭）
+  document.addEventListener('input', function (e) {
+    if (e.target && e.target.id === 'vd-find-input') vdRunFind();
+  });
+  document.addEventListener('click', function (e) {
+    const id = e.target && e.target.id;
+    if (id === 'vd-find-next') vdFindNav(1);
+    else if (id === 'vd-find-prev') vdFindNav(-1);
+    else if (id === 'vd-replace-one') vdDoReplace();
+    else if (id === 'vd-replace-all') vdDoReplaceAll();
+    else if (id === 'vd-find-close') vdCloseFindbar();
+  });
+
+  // 宿主薄转发入口
+  window.vdFindbar = {
+    open: vdOpenFindbar,
+    close: vdCloseFindbar,
+    /** 切换文档后重算匹配（供宿主 openNote 调用，不抢焦点） */
+    refresh: vdRunFind,
+    /** 暴露给宿主/回归：当前是否打开 */
+    get open_() { return vdFindOpen; },
+  };
 
   /* ---------- 注册 .md/.markdown 编辑器 Provider ---------- */
 
