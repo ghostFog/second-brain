@@ -913,6 +913,123 @@ function testIrTableBarHelpers() {
   assert(hdrDel.querySelectorAll('thead tr').length === 1, 'IR表: 表头行不可删除');
 }
 
+/* ---- MD-07 大纲浮层：点标题跳转 + 父级折叠/展开（自研面板 sb-outline-*） ----
+ * 跳转基于标题在同类 DOM 中的顺序下标（data-idx），折叠靠父级箭头收放子级列表，
+ * 两者都由 editor-vditor.js 的 __sbOutline 树构建/文本清洗承担。
+ * 断言：文本清洗去掉 IR「#」标记与零宽字符；树按标题层级嵌套，父标题带折叠箭头、
+ *       子级套 .sb-outline-list、项 data-idx 指向标题下标。
+ * 作者: 火 冰 */
+function testOutline() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  W.document.head.appendChild(s);
+  assert(W.__sbOutline && typeof W.__sbOutline.tree === 'function', '大纲: editor-vditor.js 暴露 __sbOutline 树构建助手');
+
+  // 文本清洗：去掉 IR「#」标记与零宽字符
+  const h = W.document.createElement('h2');
+  h.textContent = '## 即时渲染 标题\u200b';
+  assert(W.__sbOutline.text(h) === '即时渲染 标题', '大纲: 标题文本清洗去掉 # 标记与零宽字符');
+
+  // 树构建：h1(#A) → h2(#A1)、h1(#B)；仅 #A 有子级 → 带折叠箭头
+  const mk = function (tag, t) { const el = W.document.createElement(tag); el.textContent = t; return el; };
+  const heads = [mk('h1', '# A'), mk('h2', '## A1'), mk('h1', '# B')];
+  const tree = W.__sbOutline.tree(heads);
+  const rows = tree.querySelectorAll('.sb-outline-row');
+  const items = tree.querySelectorAll('.sb-outline-item');
+  assert(tree.querySelectorAll('.sb-outline-list').length === 1, '大纲: 树含(嵌套)子级列表');
+  assert(tree.querySelectorAll('.sb-outline-caret').length === 1, '大纲: 仅 #A 带折叠箭头，#B(叶子)无');
+  assert(rows[0].nextElementSibling && rows[0].nextElementSibling.classList.contains('sb-outline-list'), '大纲: h1#A 下方套子级列表');
+  assert(items.length === 3, '大纲: 3 个标题项');
+  assert(items[1].dataset.idx === '1', '大纲: 子标题 data-idx=1 指向 heads[1]');
+  assert(rows.length === 3, '大纲: 3 行走');
+  // 定位：__sbOutline.position 存在且可调用（窗口 resize 重定位由它承担，关闭/打开再重算）
+  assert(typeof W.__sbOutline.position === 'function', '大纲: 暴露 position 供 resize 重定位');
+  // 冒烟：无编辑区容器时静默返回，不抛错
+  const sp = W.__sbOutline.position;
+  let ok = true;
+  try { sp(); } catch (_) { ok = false; }
+  assert(ok, '大纲: 无编辑区时 resize 重定位静默返回不抛错');
+}
+
+/* ---- MD-07 工具栏悬浮：每个图标悬浮显示名称(+快捷键) ----
+ * vditor ::after 与原生 title 在 #ed-vditor(overflow:hidden) 容器内均不可见，
+ * 故采用自绘浮层：sbEnsureToolbarHoverTips 为每个按钮写 data-sb-tip（名称+实际快捷键，
+ * <键> 转 [键]），交由自绘浮层（fixed，绝对可见）显示。断言数据正确。
+ * 作者: 火 冰 */
+function testToolbarHoverTips() {
+  const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  W.document.head.appendChild(s);
+  assert(typeof W.__sbEnsureToolbarTips === 'function', '悬浮: editor-vditor.js 暴露 __sbEnsureToolbarTips');
+
+  // 构造两个工具栏项：内置(带名称+快捷键) 与 空 aria-label
+  const mkBtn = function (cls, aria, dType) {
+    const b = W.document.createElement('button');
+    b.className = cls;
+    if (aria) b.setAttribute('aria-label', aria);
+    if (dType) b.setAttribute('data-type', dType);
+    return b;
+  };
+  const n1 = W.document.createElement('div');
+  n1.appendChild(mkBtn('vditor-tooltipped', '粗体 <Ctrl+B>', ''));
+  const n2 = W.document.createElement('div');
+  n2.appendChild(mkBtn('vditor-tooltipped', '', 'bold-tip'));
+  const fakeVd = { toolbar: { elements: { bold: n1, 'sb-find-sel': n2 } } };
+  W.__sbEnsureToolbarTips(fakeVd);
+  const b1 = n1.firstChild;
+  const b2 = n2.firstChild;
+  assert(b1.getAttribute('data-sb-tip') === '粗体 [Ctrl+B]', '悬浮: 内置项 data-sb-tip=名称+实际快捷键，快捷键转[]');
+  assert(b1.getAttribute('aria-label') === null, '悬浮: 已移除 vditor aria-label，杜绝与自绘浮层重复');
+  assert(b1.getAttribute('title') === null, '悬浮: 已移除原生 title，杜绝与自绘浮层重复');
+  assert(b2.getAttribute('data-sb-tip') === 'bold-tip', '悬浮: 缺 aria-label 项回退 data-type 为悬浮数据');
+}
+
+/* ---- MD-07 上传悬浮：上传按钮 vditor 渲染为 div（非 button），悬浮委托须能命中 ----
+ * vditor toolbar 构建时 upload 的 tagName 是 div（非 button），此前委托只匹配 button，
+ * 导致「上传」悬浮页面不显示。修复后委托改命中 .vditor-tooltipped，这里验证非 button 的
+ * div.vditor-tooltipped 也能触发自绘浮层。作者: 火 冰 */
+function testUploadTooltip() {
+  const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  W.document.head.appendChild(s);
+  // 构造 #ed-vditor > .vditor-toolbar > div.vditor-tooltipped（模拟上传按钮：非 button）
+  const ed = W.document.createElement('div');
+  ed.id = 'ed-vditor';
+  const bar = W.document.createElement('div');
+  bar.className = 'vditor-toolbar';
+  const up = W.document.createElement('div');
+  up.className = 'vditor-tooltipped';
+  up.setAttribute('data-sb-tip', '上传');
+  bar.appendChild(up);
+  // 模拟 vditor 上传的透明 file input（覆盖在按钮上，悬停会触发 UA「未选择任何文件」提示）
+  const fi = W.document.createElement('input');
+  fi.type = 'file';
+  bar.appendChild(fi);
+  ed.appendChild(bar);
+  W.document.body.appendChild(ed);
+  // 在上传 div 上触发 mousemove（冒泡到 document，自绘委托应命中并弹浮层）
+  up.dispatchEvent(new W.MouseEvent('mousemove', { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }));
+  const tip = W.document.querySelector('.sb-tip');
+  assert(!!tip, '上传悬浮: div.vditor-tooltipped(非button) 触发后生成 .sb-tip 浮层');
+  assert(tip && tip.style.display === 'block', '上传悬浮: 上传浮层已显示');
+  assert(tip && tip.textContent === '上传', '上传悬浮: 浮层文本 = data-sb-tip 上传');
+   // 从上传 div 移出后浮层隐藏（mouseout.target = 离开的 div，closest 命中→隐藏）
+  up.dispatchEvent(new W.MouseEvent('mouseout', { bubbles: true, cancelable: true }));
+  assert(tip.style.display === 'none', '上传悬浮: 移出后浮层隐藏');
+  // 悬停 file input 时清空 title，屏蔽 Chromium「未选择任何文件」UA 提示
+  fi.dispatchEvent(new W.MouseEvent('mousemove', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 }));
+  assert(fi.hasAttribute('title') && fi.getAttribute('title') === '', '上传悬浮: file input hover 清空 title 屏蔽 UA「未选择任何文件」');
+}
+
 /* ---- Bug: IR 模式「表格/代码块前无法插入新行」→ __vdBlock.irInsertAbove ----
  * 表格/代码块作为文档第一个元素时，光标无法落到块前，此前没有插入入口。
  * 修复：右键表格/代码块弹菜单「在上方插入空行」，在带 data-block="0" 的块根前
@@ -1147,6 +1264,38 @@ function testSemanticChunk() {
   assert(eng.currentAgent().id === 'a1', 'ST-36: 未命中的 currentAgentId 回退列表首个');
   eng.cfg.agents = [];
   assert(eng.currentAgent().id === 'kb-assistant', 'ST-36: agents 为空回退内置默认「知识库助手」');
+
+  /* AI-13 索引库删除判定增强：索引条目是否「可删除」结合应用知识库列表（knownRoots）——
+   * 目录已不存在 或 已从应用列表移除（即使磁盘目录还在）→ exists=false 显示「删除」；
+   * deleteIndex 按 vaultPath 匹配删除该路径**全部**索引文件（兼容历史遗留哈希不一致文件）。
+   * 作者: 火 冰 */
+  const os = require('os');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-ai-idx-'));
+  const vaultDir = path.join(tmpDir, 'vault');
+  fs.mkdirSync(vaultDir, { recursive: true });
+  eng.indexDir = tmpDir;
+  const mkIdx = function (name) {
+    fs.writeFileSync(path.join(tmpDir, name), JSON.stringify({
+      vaultName: 'my', vaultPath: vaultDir, builtAt: Date.now(),
+      chunks: [{ id: 'c1', path: 'a.md', text: 't', v: 'AA==' }],
+    }), 'utf8');
+  };
+  mkIdx('aaa.index.json');
+  mkIdx('bbb.index.json'); // 同路径不同文件名：模拟历史残留的哈希不一致索引
+  const l1 = eng.listIndexes([vaultDir, path.join(tmpDir, 'other')]);
+  assert(l1.length === 2 && l1.every(function (x) { return x.exists === true; }),
+    'AI-13: 目录存在且在应用知识库列表 → exists=true（显示「重建」）');
+  const l2 = eng.listIndexes([path.join(tmpDir, 'other')]);
+  assert(l2.length === 2 && l2.every(function (x) { return x.exists === false; }),
+    'AI-13: 已从应用知识库列表移除（磁盘目录仍在）→ exists=false（显示「删除」）');
+  const l3 = eng.listIndexes();
+  assert(l3.length === 2 && l3.every(function (x) { return x.exists === true; }),
+    'AI-13: 未传 knownRoots 时退化为仅磁盘目录判定（向后兼容）');
+  const removed = eng.deleteIndex(vaultDir);
+  const remain = fs.readdirSync(tmpDir).filter(function (f) { return /\.index\.json$/.test(f); });
+  assert(removed === true && remain.length === 0,
+    'AI-13: deleteIndex 按 vaultPath 删除该路径全部索引文件（含哈希不一致残留）');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 
   /* ST-38 携带历史数据：默认携带（cfg.carryHistory=true）；关闭时问答每轮只发送当前问题。
    * 顶栏「携带历史」开关（ai.html #ai-carry-history，默认 checked）+ 设置-AI 开关（data-ai-cfg=carryHistory）
@@ -1607,6 +1756,9 @@ testDefaultBorderStyle();
 testVditorToolbarValid();
 testFullscreenDevtoolsKeybinds();
 testIrTableBarHelpers();
+testOutline();
+testToolbarHoverTips();
+testUploadTooltip();
 testIrBlockAbove();
 testEditorRightClickUpload();
 testOrderedListCss();

@@ -1175,25 +1175,33 @@ class AiEngine {
 
   /**
    * 列出索引库中所有知识库的索引概要（含其目录当前是否仍存在）。
+   * @param {string[]} [knownRoots] 应用当前认可的知识库路径集合（当前库/历史库/默认库）；
+   *   传入时「知识库不存在」口径扩展为：目录不存在 或 已从应用知识库列表移除（即使磁盘目录还在）。
    * @returns {Array<{vaultPath:string, vaultName:string, builtAt:number|null, blocks:number, exists:boolean}>}
    * @author 火 冰
    */
-  listIndexes() {
+  listIndexes(knownRoots) {
     const out = [];
     if (!this.indexDir) return out;
     let entries = [];
     try { entries = fs.readdirSync(this.indexDir); } catch (e) { return out; }
+    // 已知知识库路径集合（大小写不敏感比较）；未传时退化为仅磁盘目录判定
+    const known = Array.isArray(knownRoots)
+      ? new Set(knownRoots.map(function (k) { return path.resolve(String(k || '')).toLowerCase(); }))
+      : null;
     for (const f of entries) {
       if (!/\.index\.json$/.test(f)) continue;
       try {
         const j = JSON.parse(fs.readFileSync(path.join(this.indexDir, f), 'utf8'));
         const vp = j.vaultPath || '';
+        const dirExists = !!(vp && fs.existsSync(vp));
+        const inKnown = known ? known.has(path.resolve(String(vp || '')).toLowerCase()) : true;
         out.push({
           vaultPath: vp,
           vaultName: j.vaultName || (vp ? path.basename(path.resolve(vp)) : f),
           builtAt: j.builtAt || null,
           blocks: Array.isArray(j.chunks) ? j.chunks.length : 0,
-          exists: !!(vp && fs.existsSync(vp)),
+          exists: dirExists && inKnown,
         });
       } catch (e) { /* 损坏索引条目忽略 */ }
     }
@@ -1254,15 +1262,28 @@ class AiEngine {
 
   /**
    * 删除指定知识库的索引文件（知识库目录已移除时清理残留）。
+   * 按 vaultPath 匹配删除该路径下的**全部**索引文件（兼容历史遗留的哈希不一致文件）。
    * @param {string} vaultPath 知识库根目录
    * @returns {boolean} 是否删除了索引文件
    * @author 火 冰
    */
   deleteIndex(vaultPath) {
-    const file = this._indexPathFor(vaultPath);
-    if (!file) return false;
-    try { if (fs.existsSync(file)) { fs.unlinkSync(file); return true; } } catch (e) { /* 忽略 */ }
-    return false;
+    if (!this.indexDir || !vaultPath) return false;
+    const target = path.resolve(String(vaultPath)).toLowerCase();
+    let removed = false;
+    let entries = [];
+    try { entries = fs.readdirSync(this.indexDir); } catch (e) { return false; }
+    for (const f of entries) {
+      if (!/\.index\.json$/.test(f)) continue;
+      try {
+        const j = JSON.parse(fs.readFileSync(path.join(this.indexDir, f), 'utf8'));
+        if (!j || !j.vaultPath) continue;
+        if (path.resolve(String(j.vaultPath)).toLowerCase() !== target) continue;
+        const file = path.join(this.indexDir, f);
+        if (fs.existsSync(file)) { fs.unlinkSync(file); removed = true; }
+      } catch (e) { /* 损坏索引条目跳过，不阻塞删除 */ }
+    }
+    return removed;
   }
 
   /* ---------- 检索 ---------- */

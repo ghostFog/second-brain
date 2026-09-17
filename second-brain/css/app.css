@@ -605,6 +605,63 @@ body.ed-fs-active #ed-vditor .vditor { height: 100% !important; }
 /* 所见即所得表格统一格线兜底：不依赖插入/渲染各自的行内样式，避免某些路径因缺内联边框而整表空白（Bug-022） */
 #ed-wysiwyg table { border-collapse: collapse; border: 1px solid var(--note-border); }
 #ed-wysiwyg table td, #ed-wysiwyg table th { border: 1px solid var(--note-border); }
+/* ---------- 大纲浮层（MD-07 自研面板，与 js/editor/editor-vditor.js 的 sb-outline-* 配套） ----------
+ * 作者: 火 冰 */
+#sb-outline-panel {
+  background: var(--note-surface);
+  border: 1px solid var(--note-border);
+  color: var(--note-ink);
+  font-size: 12px;
+}
+#sb-outline-panel .sb-outline-title {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--note-border);
+  background: var(--note-surface-2);
+  color: var(--note-ink);
+  flex-shrink: 0;
+}
+#sb-outline-panel .sb-outline-body { overflow-y: auto; padding: 6px 8px; min-height: 0; }
+#sb-outline-panel .sb-outline-empty { padding: 16px 12px; text-align: center; color: var(--note-ink-3); font-size: 12px; }
+#sb-outline-panel ul.sb-outline-list { list-style: none; margin: 0; padding: 0; }
+#sb-outline-panel ul.sb-outline-list ul.sb-outline-list {
+  margin-left: 14px;
+  border-left: 1px solid var(--note-border);
+  padding-left: 6px;
+}
+#sb-outline-panel .sb-outline-li { margin: 0; }
+#sb-outline-panel .sb-outline-row { display: flex; align-items: center; gap: 2px; padding: 2px 0; }
+#sb-outline-panel .sb-outline-caret {
+  flex-shrink: 0; width: 14px; height: 14px;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; color: var(--note-ink-3); opacity: 0.85;
+}
+#sb-outline-panel .sb-outline-caret::before { content: "\25BC"; }   /* 展开(子级可见)：向下，表示可收起 */
+#sb-outline-panel .sb-outline-row.sb-outline-collapsed .sb-outline-caret::before { content: "\25B6"; }
+#sb-outline-panel .sb-outline-item {
+  flex: 1; min-width: 0; text-align: left;
+  background: transparent; border: none; padding: 2px 4px; border-radius: 4px;
+  font-size: 12px; line-height: 1.5; color: var(--note-ink); cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#sb-outline-panel .sb-outline-item:hover { background: var(--note-surface-2); color: var(--note-brand-400); }
+/* ---------- 工具栏自绘悬浮浮层（fixed 定位，不受 overflow 裁剪，保证可见） ----------
+ * 作者: 火 冰 */
+.sb-tip {
+  position: fixed;
+  z-index: 2147483000;
+  max-width: 320px;
+  padding: 4px 9px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #fff;
+  background: rgba(40, 44, 52, 0.94);
+  border-radius: 4px;
+  pointer-events: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  white-space: nowrap;
+}
 .sb-block-selected {
   outline: 2px solid var(--note-brand-400);
   outline-offset: 2px;
@@ -612,6 +669,15 @@ body.ed-fs-active #ed-vditor .vditor { height: 100% !important; }
   cursor: grab;
 }
 .sb-block-selected * { cursor: grab; }
+
+/* 工具栏悬浮：彻底屏蔽 vditor 原生 ::before/::after 悬浮（其 content=attr(aria-label)，
+ * aria-label 可能被 vditor 在 hover/重建时机重新设置，仅 removeAttribute 不够，会与自绘
+ * .sb-tip 浮层重复显示「两个」）。这里用 !important 一律隐藏原生悬浮，只留自绘版。
+ * 作者: 火 冰 */
+#ed-vditor .vditor-toolbar .vditor-tooltipped::before,
+#ed-vditor .vditor-toolbar .vditor-tooltipped::after {
+  display: none !important;
+}
 
 /* ---------- 所见即所得：代码块语言选择器（右下角 chip + 下拉筛选） ---------- */
 .mde-code-lang {

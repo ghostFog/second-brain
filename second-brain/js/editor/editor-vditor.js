@@ -49,7 +49,16 @@
       icon: '<svg viewBox="0 0 24 24" width="17" height="17" style="fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round"><circle cx="9" cy="11.5" r="6"/><path d="m20.5 20.5-4.6-4.6"/><text x="0" y="24" font-size="13" font-weight="700" style="fill:currentColor;stroke:none">A</text></svg>',
       click: function () { vdOpenFindbar(true); },
     },
-    '|', 'outline', 'export',
+    '|',
+    /* 大纲：不再用 vditor 内置 outline（其跳转 scrollTop 依赖的滚动容器在本应用多面板/transform
+     * 场景下对不上，点不动、也难收放），改为自研浮层面板（sb-outline-*），点击标题
+     * 用 scrollIntoView 跳到对应滚动容器、父级标题可折叠/展开。作者: 火 冰 */
+    {
+      name: 'sb-outline', tip: '大纲 (Ctrl+Shift+Q)',
+      icon: '<svg viewBox="0 0 24 24" width="17" height="17" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>',
+      click: function () { vdToggleOutline(); },
+    },
+    'export',
   ];
 
   /* ---------- 资源上传（图片/附件）助手 ---------- */
@@ -1005,6 +1014,102 @@
   // 捕获阶段拦截 IR 光标下的 Backspace/Delete，修正「空行删不掉」与「块前删除空行」问题
   document.addEventListener('keydown', handleIrDeleteKeydown, true);
 
+  /** 统一编辑器工具栏图标的悬浮提示：朝下显示名称(+快捷键)。
+   *  vditor 内置项 tipPosition 均为朝上（n/nw/ne），而编辑器容器 #ed-vditor 是
+   *  overflow:hidden 且工具栏位于最顶端——朝上的悬浮延伸出容器被裁剪、故默认项看不到悬浮；
+   *  自定义项无方向后缀、落在图标下方，在容器内可见。这里把全部图标悬浮统一朝下（__s），
+   *  复用 vditor 自带 aria-label 渲染（内容 = tip + 快捷键，快捷键按自身实际设置显示；
+   *  无快捷键项仅显示名称）。作者: 火 冰
+   * @param {object} vd vditor 实例（含 toolbar.elements） */
+  function sbEnsureToolbarHoverTips(vd) {
+    if (!vd || !vd.toolbar || !vd.toolbar.elements) return;
+    const names = Object.keys(vd.toolbar.elements);
+    for (let i = 0; i < names.length; i++) {
+      const node = vd.toolbar.elements[names[i]];
+      if (!node) continue;
+      // 按钮或其子图标都可能承载 .vditor-tooltipped；统一改为朝下以防上溢出被裁剪
+      const tipEls = node.querySelectorAll('.vditor-tooltipped');
+      for (let j = 0; j < tipEls.length; j++) {
+        const b = tipEls[j];
+        let al = (b.getAttribute('aria-label') || '').trim();
+        if (!al || al === 'undefined' || al === 'null') al = (b.getAttribute('data-type') || '');
+        // 自绘悬浮提示数据：名称 + 实际快捷键（快捷区 <键> 转 [键]）；无快捷键项仅名称。
+        // 内容复用 vditor aria-label，快捷键按其实际设置显示，不编造。
+        const norm = al.replace(/\s*<([^>]+)>\s*$/, ' [$1]').trim();
+        b.setAttribute('data-sb-tip', norm);
+        // 移除 vditor 自带 ::after 悬浮源(aria-label)与原生 title，杜绝与自绘浮层重复显示
+        b.removeAttribute('aria-label');
+        b.removeAttribute('title');
+      }
+    }
+  }
+  /* 暴露测试句柄：供 regression 断言悬浮数据（data-sb-tip）正确 */
+  window.__sbEnsureToolbarTips = sbEnsureToolbarHoverTips;
+
+  /* ============================================================
+   * 工具栏自绘悬浮浮层（兜底：vditor ::after / 原生 title 在本环境容器内不可见）
+   * 在文档捕获阶段根据光标位置定位到编辑器工具栏按钮，弹一个 fixed 浮层显示
+   * 名称(+快捷键)。fixed 定位、不受任何 overflow:hidden 裁剪，保证必见。
+   * 作者: 火 冰
+   * ============================================================ */
+  let sbTipEl = null;
+
+  /** 取工具栏按钮悬浮文本（优先自绘数据，回退 aria/title/data-type） */
+  function sbToolbarTipText(b) {
+    return String(b.getAttribute('data-sb-tip')
+      || b.getAttribute('aria-label')
+      || b.getAttribute('data-type') || '').trim();
+  }
+
+  /** 在光标位置附近显示悬浮浮层 */
+  function sbTipShow(txt, x, y) {
+    if (!txt) return;
+    if (!sbTipEl) {
+      sbTipEl = document.createElement('div');
+      sbTipEl.className = 'sb-tip';
+      sbTipEl.style.display = 'none';
+      document.body.appendChild(sbTipEl);
+    }
+    sbTipEl.textContent = txt;
+    const gw = sbTipEl.offsetWidth || 0, gh = sbTipEl.offsetHeight || 0;
+    let nx = x + 12, ny = y + 14;
+    if (nx + gw > window.innerWidth - 4) nx = x - gw - 12;
+    if (ny + gh > window.innerHeight - 4) ny = y - gh - 10;
+    sbTipEl.style.left = nx + 'px';
+    sbTipEl.style.top = ny + 'px';
+    sbTipEl.style.display = 'block';
+  }
+
+  /** 隐藏悬浮浮层 */
+  function sbTipHide() {
+    if (sbTipEl) sbTipEl.style.display = 'none';
+  }
+
+  /** 绑定全局悬浮委托：命中编辑器工具栏按钮时自绘提示（事件委托，按钮重建仍生效） */
+  function sbInitToolbarTip() {
+    document.addEventListener('mousemove', function (e) {
+      const t = e.target;
+      // 屏蔽 file input 的原生悬停提示（Chromium 约 3 秒后显示「未选择任何文件」：vditor 上传用
+      // 透明 <input type=file> 覆盖在按钮上承接原生选择，悬停即触发该 UA tooltip）。首次 hover
+      // 即把 title 清空（空 title 不显示 tooltip），不影响上传（上传点击走按钮 click 校验，与 title 无关）。
+      if (t && t.tagName === 'INPUT' && String(t.type) === 'file' && !t.hasAttribute('title')) {
+        t.setAttribute('title', '');
+      }
+      // 命中工具栏任意带悬浮类的元素：普通内置/自定义项是 button 内 .vditor-tooltipped 图标，
+      // 而「上传」按钮 vditor 单独渲染为 div.vditor-tooltipped（非 button，见 vditor toolbar
+      // 构建 tagName=upload?'div':'button'）。故统一按 .vditor-tooltipped 命中，避免上传悬浮不显示。
+      const tipEl = t && t.closest
+        && t.closest('#ed-vditor .vditor-toolbar .vditor-tooltipped');
+      if (!tipEl) { sbTipHide(); return; }
+      sbTipShow(sbToolbarTipText(tipEl), e.clientX, e.clientY);
+    });
+    document.addEventListener('mouseout', function (e) {
+      if (e.target && e.target.closest && e.target.closest('#ed-vditor .vditor-toolbar .vditor-tooltipped')) sbTipHide();
+    });
+    // 编辑器视图重建后重新绑定不受影响（事件委托挂在 document，无需重绑）
+  }
+  sbInitToolbarTip();
+
   /** 构建 vditor 实例（核心装配）。在 vdInst 存在时先销毁保留内容。
    * 说明：edit/split/preview 用 setPreviewMode 切换，无需重建；仅 ir↔sv 切换才重建。 */
   function buildVditor() {
@@ -1046,7 +1151,7 @@
         filename: function (name) { return name; },
         handler: handleVdUpload,
       },
-      input: function (v) { sync2Host(v); },
+      input: function (v) { sync2Host(v); sbOutlineScheduleRefresh(); },
       blur: function () {
         // 首帧异步渲染完成前（vdReady=false）不触发保存：此时 vditor 内部未就绪，getValue 抛错
         // 会回退暂存缓冲，若缓冲为空会把空内容经 onEdInput 落入防抖保存，覆盖磁盘——笔记被自动清空
@@ -1075,6 +1180,10 @@
         // 异步首帧渲染后，vditor 可能按默认 preview 布局重置各视图显隐；
         // 再确定性覆盖一次，确保进入「仅源码/仅预览」等布局时其它视图不残留。
         applyVdVisibility();
+        // 统一工具栏图标悬浮方向朝下（内置项朝上悬浮在 overflow:hidden 容器内被裁剪，不可见）
+        sbEnsureToolbarHoverTips(target);
+        // 新实例异步渲染完成后，若大纲打开则重建（切文档/分屏重建场景下标题实时跟随）
+        sbOutlineScheduleRefresh();
       },
     };
     try {
@@ -1128,6 +1237,7 @@
       return;
     }
     try { vdInst.setValue(vdBuffer); } catch (_) { /* 忽略 */ }
+    sbOutlineScheduleRefresh();   // 切换笔记后若大纲打开则重建，标题实时跟随当前文件
   };
 
   /** 仅在暂存缓冲层面设置内容（无实例时用于清空/占位，例如删除当前笔记后）
@@ -1135,6 +1245,7 @@
   window.vdSetValue = function (md) {
     vdBuffer = String(md == null ? '' : md);
     if (vdInst) { try { vdInst.setValue(vdBuffer); } catch (_) { /* 忽略 */ } }
+    sbOutlineScheduleRefresh();   // 切换/载入文档后若大纲打开则重建，标题实时跟随当前文件
   };
 
   /** 获取编辑区当前内容 */
@@ -1222,16 +1333,224 @@
     buildVditor();
   };
 
-  /* 大纲面板已从宿主侧边面板移除（改为 vditor 内置大纲浮层），此处提供程序化切换：
-   * 复用 vditor 工具栏「大纲」按钮的点击逻辑（含 sv 源码模式的禁用判断）。
-   * @returns {boolean} 是否成功触发（vditor 实例与大纲按钮就绪时返回 true）
-   * @author 火 冰 */
-  window.vdToggleOutline = function () {
+  /* ============================================================
+   * 大纲浮层（MD-07 完善：自研面板，点标题跳转 + 父级折叠/展开）
+   * vditor 内置 outline 在本应用多面板/transform 场景下，跳转依赖的
+   * scrollTop/offsetTop 容器对不上（点不动）、折叠状态又易被重渲染重置，
+   * 故改为自研浮层：从当前可见编辑内容取标题构建树，点击标题用 scrollIntoView
+   * 跳转（自动滚动到任意滚动容器）、父级标题旁加折叠箭头可收放子级。
+   * 由 `mde-outline`（Ctrl+Shift+Q）/ 工具栏「大纲」按钮触发。
+   * 作者: 火 冰
+   * ============================================================ */
+  const SB_OUTLINE_W = 240;      // 大纲浮层宽度（定位时按此贴右缘）
+
+  /** 大纲浮层是否处于打开状态 */
+  function sbOutlineOpen() {
+    const p = document.getElementById('sb-outline-panel');
+    return !!(p && p.style.display !== 'none');
+  }
+
+  /** 取当前可跳转的编辑内容源（返回含标题节点的 DOM 元素，纯源码 textarea 返回 null）
+   *  - IR / WYSIWYG：各自编辑节点
+   *  - SV 分屏/预览：预览渲染面板（source 面板无标题 DOM）；纯 SV 源码 → null（等价禁用）
+   * @returns {HTMLElement|null} */
+  function sbOutlineSource() {
+    const v = vdInst && vdInst.vditor;
+    if (!v) return null;
+    if (vdMode === 'sv') {
+      if (v.preview && v.preview.element && v.preview.element.style.display !== 'none') {
+        return v.preview.previewElement || v.preview.element;
+      }
+      return null;
+    }
+    if (vdMode === 'ir') return v.ir.element;
+    if (vdMode === 'wysiwyg') return v.wysiwyg.element;
+    return null;
+  }
+
+  /** 取标题显示文本：去掉 IR 模式保留的 `#` 语法标记与零宽字符 */
+  function sbOutlineText(h) {
+    return String(h.textContent || '').replace(/^#{1,6}\s*/, '').replace(/[\u200b\u200c]/g, '').trim();
+  }
+
+  /** 依据标题 DOM 顺序构建树形 `<ul>`：打平 `heads` 中标题的层级（以最小级为根），
+   *  父级标题若有子级则附折叠箭头；每个标题项 `data-idx` 指向其在 `heads` 中的下标，
+   *  供点击时精确 scrollIntoView 定位。@returns {HTMLUListElement} */
+  function sbOutlineTree(heads) {
+    if (!heads.length) return document.createElement('ul');
+    let min = 7;
+    for (let i = 0; i < heads.length; i++) {
+      const lv = parseInt(heads[i].tagName.slice(1), 10) || 6;
+      if (lv < min) min = lv;
+    }
+    const rootNode = { level: 0, children: [] };
+    const stack = [rootNode];
+    for (let i = 0; i < heads.length; i++) {
+      const lv = (parseInt(heads[i].tagName.slice(1), 10) || 6) - min + 1;
+      const node = { level: lv, index: i, head: heads[i], children: [] };
+      while (stack.length > 1 && stack[stack.length - 1].level >= lv) stack.pop();
+      stack[stack.length - 1].children.push(node);
+      stack.push(node);
+    }
+    const rootUl = document.createElement('ul');
+    rootUl.className = 'sb-outline-list';
+    sbOutlineFill(rootUl, rootNode.children);
+    return rootUl;
+  }
+
+  /** 递归把节点数组渲染进给定 `<ul>`（子级套 `.sb-outline-list`） */
+  function sbOutlineFill(ul, nodes) {
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const li = document.createElement('li');
+      li.className = 'sb-outline-li';
+      const row = document.createElement('div');
+      row.className = 'sb-outline-row';
+      if (n.children.length) {
+        const caret = document.createElement('span');
+        caret.className = 'sb-outline-caret';
+        caret.title = '折叠/展开';
+        row.appendChild(caret);
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sb-outline-item';
+      btn.dataset.idx = String(n.index);
+      btn.title = '跳到正文 ' + sbOutlineText(n.head);
+      btn.appendChild(document.createTextNode(sbOutlineText(n.head) || ('H' + (parseInt(n.head.tagName.slice(1), 10) || 1))));
+      row.appendChild(btn);
+      li.appendChild(row);
+      if (n.children.length) {
+        const sub = document.createElement('ul');
+        sub.className = 'sb-outline-list';
+        sbOutlineFill(sub, n.children);
+        li.appendChild(sub);
+      }
+      ul.appendChild(li);
+    }
+  }
+
+  /** 渲染大纲内容到面板（依据当前编辑源重建树）；无标题源/无标题时显示空态 */
+  function sbOutlineRender() {
+    const body = document.getElementById('sb-outline-body');
+    const empty = document.getElementById('sb-outline-empty');
+    if (!body || !empty) return;
+    const src = sbOutlineSource();
+    if (!src) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+    const heads = Array.prototype.slice.call(src.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+    if (!heads.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+    empty.style.display = 'none';
+    body.innerHTML = '';
+    body.appendChild(sbOutlineTree(heads));
+    body._sbOutlineHeads = heads;   // 供点击事件按 data-idx 精确定位
+  }
+
+  /** 面板打开状态下，内容变化后防抖重建（挂到 vditor input 回调） */
+  let sbOutlineRefreshTimer = 0;
+  function sbOutlineScheduleRefresh() {
+    if (!sbOutlineOpen()) return;
+    clearTimeout(sbOutlineRefreshTimer);
+    sbOutlineRefreshTimer = setTimeout(sbOutlineRender, 120);
+  }
+
+  /** 按编辑器可视区域把浮层定位在编辑区右侧上下居中。
+   *  top 基准确认到工具栏之下（#ed-vditor 的 top 含顶部工具栏高度，直接加偏移会盖住工具栏），
+   *  取容器内 .vditor-toolbar 高度作为基准下移。作者: 火 冰 */
+  function sbOutlinePosition() {
+    const host = vdEl();
+    const p = document.getElementById('sb-outline-panel');
+    if (!host || !p) return;
+    const r = host.getBoundingClientRect();
+    const tb = host.querySelector('.vditor-toolbar');
+    const tbH = (tb && tb.getBoundingClientRect) ? tb.getBoundingClientRect().height : 0;
+    p.style.top = (r.top + tbH + 8) + 'px';
+    p.style.left = Math.max(8, r.right - SB_OUTLINE_W - 8) + 'px';
+    p.style.maxHeight = Math.max(160, r.height - tbH - 16) + 'px';
+  }
+
+  /** 创建大纲浮层 DOM（幂等，挂到 body）：标题栏 + 内容区（树）+ 空态提示 */
+  function sbOutlineEnsure() {
+    let p = document.getElementById('sb-outline-panel');
+    if (p) return p;
+    p = document.createElement('div');
+    p.id = 'sb-outline-panel';
+    p.style.cssText = 'display:none; position:fixed; z-index:1300; width:' + SB_OUTLINE_W + 'px; '
+      + 'flex-direction:column; box-shadow:0 6px 24px rgba(0,0,0,0.18); '
+      + 'border-radius:10px; overflow:hidden;';
+    p.innerHTML = '<div class="sb-outline-title">大纲</div>'
+      + '<div id="sb-outline-body" class="sb-outline-body"></div>'
+      + '<div id="sb-outline-empty" class="sb-outline-empty" style="display:none">无标题或源码模式不可用</div>';
+    // 事件委托：折叠箭头收放子级；标题项点击 → scrollIntoView 跳到正文
+    p.addEventListener('click', function (e) {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      const caret = t.closest('.sb-outline-caret');
+      if (caret) {
+        e.preventDefault(); e.stopPropagation();
+        const row = caret.parentElement;
+        const sub = row.nextElementSibling;
+        row.classList.toggle('sb-outline-collapsed');
+        if (sub && sub.classList.contains('sb-outline-list')) {
+          sub.style.display = sub.style.display === 'none' ? '' : 'none';
+        }
+        return;
+      }
+      const btn = t.closest('.sb-outline-item');
+      if (btn) {
+        const heads = p.querySelector('#sb-outline-body')._sbOutlineHeads;
+        const idx = parseInt(btn.dataset.idx, 10);
+        const h = heads && heads[idx];
+        if (h) {
+          try { h.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+          catch (_) { try { h.scrollIntoView(); } catch (__) { /* 忽略 */ } }
+        }
+      }
+    });
+    document.body.appendChild(p);
+    // 窗口大小变化后重定位（面板保持贴住当前编辑区右侧、上下居中，不固定在一次打开时的位置）。
+    // 仅首次创建面板时注册一次；打开状态下才真正重算。作者: 火 冰
+    if (!window.__sbOutlineResizeBound) {
+      window.__sbOutlineResizeBound = true;
+      window.addEventListener('resize', function () {
+        if (sbOutlineOpen()) sbOutlinePosition();
+      });
+    }
+    return p;
+  }
+
+  /** 大纲按钮高亮态（打开时高亮品牌色） */
+  function sbOutlineSyncBtn(on) {
     const btn = vdInst && vdInst.vditor && vdInst.vditor.toolbar
-      && vdInst.vditor.toolbar.elements && vdInst.vditor.toolbar.elements.outline;
-    if (!btn || !btn.firstElementChild) return false;
-    btn.firstElementChild.click();
+      && vdInst.vditor.toolbar.elements && vdInst.vditor.toolbar.elements['sb-outline'];
+    const el = btn && btn.firstElementChild;
+    if (!el) return;
+    el.classList.toggle('vditor-menu--current', !!on);
+  }
+
+  /** 切换大纲浮层：打开时重建树并定位；纯 SV 源码模式视为禁用（等价 vditor 原生行为）
+   * @returns {boolean} 是否成功切换 */
+  window.vdToggleOutline = function () {
+    const p = sbOutlineEnsure();
+    if (sbOutlineOpen()) {
+      p.style.display = 'none';
+      sbOutlineSyncBtn(false);
+      return true;
+    }
+    // 纯 SV 源码无渲染标题：不展开，保持按钮未高亮（等价 vditor 原生禁用）
+    if (!sbOutlineSource()) { sbOutlineSyncBtn(false); return true; }
+    sbOutlinePosition();
+    sbOutlineRender();
+    p.style.display = 'flex';
+    sbOutlineSyncBtn(true);
     return true;
+  };
+
+  /* 暴露测试句柄（供 regression 断言，与本插件 __vdTable/__vdBlock 等助手口径一致） */
+  window.__sbOutline = {
+    text: sbOutlineText,
+    tree: function (heads) { return sbOutlineTree(heads); },
+    open: sbOutlineOpen,
+    position: sbOutlinePosition,
   };
 
   /** 销毁实例（切库/卸载编辑器时释放资源） */

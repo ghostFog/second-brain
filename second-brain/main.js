@@ -1956,9 +1956,12 @@ vaultHandle('ai:rebuildNoteIndex', async function (e, rel) {
   return { ok: true };
 });
 
-/* 列出索引库中所有知识库的索引概要 */
+/* 列出索引库中所有知识库的索引概要；
+ * knownRoots = 应用当前认可的知识库路径（当前库/默认库/历史库），供引擎判定「知识库是否存在」：
+ * 目录已不存在 或 已从应用知识库列表移除（即使磁盘目录还在）→ 视为残留，可删除 */
 vaultHandle('ai:listIndexes', async () => {
-  return aiEngine.listIndexes();
+  const known = [vaultRoot(), defaultVaultRoot()].concat((vaultHistory || []).map(function (h) { return h && h.path; }));
+  return aiEngine.listIndexes(known);
 });
 
 /* 重建指定知识库索引（进度通过 ai:progress 事件推送） */
