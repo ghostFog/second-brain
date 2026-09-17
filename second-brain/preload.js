@@ -121,6 +121,14 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     manageOllamaModel: (p) => ipcRenderer.invoke('ai:manageOllamaModel', p),
     /** 获取 Ollama 正在运行的模型列表（返回 {models:[{name,size,sizeVram,expiresAt}]}） */
     listRunningModels: (baseUrl) => ipcRenderer.invoke('ai:listRunningModels', baseUrl),
+    getRunningMap: () => ipcRenderer.invoke('ai:runningMap'),
+    /** 获取可用模型全局缓存（baseUrl -> {provider, models:[{name,size,modifiedAt}], updatedAt, error}） */
+    getAvailableModels: () => ipcRenderer.invoke('ai:availableModels'),
+    /** 监听可用模型/运行状态数据更新（后台轮询每次刷新完成后触发，页面据此实时刷新） */
+    onModelsUpdated: (cb) => {
+      ipcRenderer.removeAllListeners('ai:models-updated');
+      ipcRenderer.on('ai:models-updated', () => { if (typeof cb === 'function') cb(); });
+    },
     /** 加载本地嵌入模型 */
     loadEmbedding: () => ipcRenderer.invoke('ai:loadEmbedding'),
     /** 重建知识库索引（进度经 onProgress 推送） */
@@ -133,8 +141,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     rebuildIndexFor: (vaultPath) => ipcRenderer.invoke('ai:rebuildIndexFor', vaultPath),
     /** 删除指定知识库索引文件 */
     deleteIndex: (vaultPath) => ipcRenderer.invoke('ai:deleteIndex', vaultPath),
-    /** 发起问答：question + 历史消息 + 当前 Agent id（可空，未配置时走默认助手），token 经 onToken 流式回调 */
-    ask: (question, history, agentId) => ipcRenderer.invoke('ai:ask', question, history, agentId),
+    /** 发起问答：question + 历史消息 + 当前 Agent id（可空，未配置时走默认助手）+ modelId（可空）+ devMode（开发者模式，控制打印提示词）；token 经 onToken 流式回调 */
+    ask: (question, history, agentId, modelId, devMode) => ipcRenderer.invoke('ai:ask', question, history, agentId, modelId, devMode),
     /** 停止当前流式生成 */
     stop: () => ipcRenderer.send('ai:stop'),
     /** 注册流式 token 回调（自动替换旧监听） */

@@ -262,114 +262,28 @@
 
   /* ============================
    * 查找 / 替换（Ctrl+F 查找，Ctrl+R 替换）
+   * 实际实现在 editor-vditor.js（window.vdFindbar），针对 vditor 三种编辑模式统一实现。
+   * 此处仅保留宿主薄转发：函数名 openFindbar/closeFindbar/runFind 与布尔 findOpen
+   * 供 app-layout.js（Esc 关闭）与 openNote（切换文档后重算匹配）等既有调用继续生效。
    * 作者: 火 冰
    * ============================ */
 
-  /* 打开查找/替换条：replace=true 时显示替换行（Ctrl+R），否则仅查找（Ctrl+F）。
-   * 预填当前选中的文本；打开后聚焦输入框并即时查找。
-   * 作者: 火 冰 */
+  /* 打开查找/替换条：replace=true 时显示替换行（Ctrl+R），否则仅查找（Ctrl+F） */
   function openFindbar(replace) {
-    const bar = $('ed-findbar'); const fi = $('ed-find-input');
-    if (!bar || !fi) return;
-    findOpen = true;
-    bar.hidden = false;
-    bar.classList.toggle('show-replace', !!replace);
-    // 预填当前选中的文本作为查找词（无选中或跨行时不预填）
-    const ta = $('ed-edit');
-    if (ta && !edFindQ) {
-      const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
-      if (sel && sel.indexOf('\n') === -1) fi.value = sel;
+    if (window.vdFindbar && typeof window.vdFindbar.open === 'function') {
+      if (window.vdFindbar.open(replace)) findOpen = true;
     }
-    fi.focus(); fi.select();
-    runFind();
   }
 
-  /* 关闭查找/替换条，清空匹配状态并把焦点还给编辑区 */
+  /* 关闭查找/替换条 */
   function closeFindbar() {
     findOpen = false;
-    const bar = $('ed-findbar'); if (bar) bar.hidden = true;
-    edFindMatches = []; edFindIdx = -1;
-    const c = $('ed-find-count'); if (c) c.textContent = '0 / 0';
-    const ta = $('ed-edit'); if (ta) ta.focus();
+    if (window.vdFindbar && typeof window.vdFindbar.close === 'function') window.vdFindbar.close();
   }
 
-  /* 在当前文档中收集所有匹配位置（不区分大小写），并高亮首个合适匹配 */
+  /* 切换文档后重新统计匹配（委托 vditor 侧刷新，不抢焦点） */
   function runFind() {
-    const ta = $('ed-edit'); const c = $('ed-find-count');
-    const q = ($('ed-find-input') || {}).value || '';
-    edFindQ = q;
-    edFindMatches = [];
-    edFindIdx = -1;
-    if (!ta || !q) { if (c) c.textContent = '0 / 0'; return; }
-    const text = ta.value || '';
-    const lower = text.toLowerCase(); const lq = q.toLowerCase();
-    let from = 0, idx;
-    while ((idx = lower.indexOf(lq, from)) !== -1) {
-      edFindMatches.push({ start: idx, end: idx + q.length });
-      from = idx + q.length;
-    }
-    // 优先定位到当前光标（或选区起点）之后的第一个匹配，无则回绕到最后一个
-    if (ta.selectionStart != null) {
-      const pos = ta.selectionStart;
-      for (let i = 0; i < edFindMatches.length; i++) {
-        if (edFindMatches[i].start >= pos) { edFindIdx = i; break; }
-      }
-      if (edFindIdx === -1 && edFindMatches.length) edFindIdx = edFindMatches.length - 1;
-    }
-    updateFindHighlight();
-  }
-
-  /* 跳转到上一个/下一个匹配（dir=1 下一个，-1 上一个，循环） */
-  function findNav(dir) {
-    if (!edFindMatches.length) { runFind(); return; }
-    edFindIdx = (edFindIdx + dir + edFindMatches.length) % edFindMatches.length;
-    updateFindHighlight();
-  }
-
-  /* 高亮当前匹配：选中 textarea 对应区间并滚动到可见，更新「当前/总数」计数 */
-  function updateFindHighlight() {
-    const ta = $('ed-edit'); const c = $('ed-find-count');
-    if (c) c.textContent = edFindMatches.length ? (edFindIdx + 1) + ' / ' + edFindMatches.length : '0 / 0';
-    if (!ta || !edFindMatches.length || edFindIdx < 0) return;
-    const m = edFindMatches[edFindIdx];
-    // 不抢焦点（焦点留在查找/替换输入框，保证可连续输入与回车跳转）
-    ta.setSelectionRange(m.start, m.end);
-    // textarea 高度已展开（无内部滚动），需手动滚动外层 ed-split 使选区可见
-    const scrollEl = $('ed-split');
-    if (scrollEl) {
-      const lineCount = ta.value.slice(0, m.start).split('\n').length;
-      const lh = parseFloat(getComputedStyle(ta).lineHeight) || 20;
-      const top = Math.max(0, (lineCount - 1) * lh - scrollEl.clientHeight * 0.4);
-      scrollEl.scrollTop = top;
-    }
-  }
-
-  /* 替换当前匹配：用替换词替换选区，再重新查找定位到下一处 */
-  function doReplace() {
-    const ta = $('ed-edit'); const ri = $('ed-replace-input');
-    const rv = (ri && ri.value) || '';
-    if (!ta || !edFindMatches.length || edFindIdx < 0) return;
-    const m = edFindMatches[edFindIdx];
-    ta.focus();
-    ta.setSelectionRange(m.start, m.end);
-    document.execCommand('insertText', false, rv); // 触发 input → onEdInput 同步
-    runFind();
-    if (ri) ri.focus();
-  }
-
-  /* 全部替换：整篇文档替换所有匹配（保持大小写原样），并刷新查找结果 */
-  function doReplaceAll() {
-    const ta = $('ed-edit'); const ri = $('ed-replace-input');
-    const rv = (ri && ri.value) || '';
-    if (!ta || !edFindQ) return;
-    ta.focus();
-    const re = new RegExp(escapeReg(edFindQ), 'gi');
-    ta.value = (ta.value || '').replace(re, function () { return rv; });
-    onEdInput(ta.value);
-    autoResizeTa(ta);
-    renderGutter();
-    runFind();
-    if (ri) ri.focus();
+    if (window.vdFindbar && typeof window.vdFindbar.refresh === 'function') window.vdFindbar.refresh();
   }
 
   /* 渲染编辑区（vditor 化）与元信息/大纲/反链/标签 */

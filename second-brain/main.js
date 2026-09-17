@@ -1861,6 +1861,9 @@ vaultHandle('vault:setDefault', async (event, dir) => {
  * ============================================ */
 const aiEngine = new AiEngine();
 
+// 退出时停止可用模型后台轮询（防残留定时器）
+app.on('will-quit', () => aiEngine.stopModelPolling());
+
 /* 初始化 AI 引擎：绑定 vault 根目录与配置/索引持久化路径（索引按知识库分文件存于 ai-index/） */
 function initAiEngine() {
   aiEngine.init({
@@ -1868,6 +1871,15 @@ function initAiEngine() {
     configFile: path.join(app.getPath('userData'), 'ai-config.json'),
     indexDir: path.join(app.getPath('userData'), 'ai-index'),
     modelDir: path.join(app.getPath('userData'), 'models'),
+  });
+  // 配置加载完成后启动可用模型后台轮询：立即查询一次 + 每 5 秒同步（设置-AI 与 AI 问答共用全局数据）
+  aiEngine.startModelPolling(5000);
+  // 注册模型数据更新钩子：每次轮询/手动刷新完成后向所有窗口推送事件，页面监听后实时刷新（类似 Vue 响应式）
+  aiEngine.onModelsUpdated(function () {
+    const avail = aiEngine.getAvailableModels();
+    BrowserWindow.getAllWindows().forEach(function (win) {
+      if (!win.isDestroyed()) win.webContents.send('ai:models-updated', avail);
+    });
   });
 }
 
@@ -1920,6 +1932,8 @@ vaultHandle('ai:manageOllamaModel', (_e, p) => aiEngine.manageOllamaModel(p || {
 
 /* 获取 Ollama 正在运行的模型列表（生成模型按运行状态显示 加载/卸载 按钮） */
 vaultHandle('ai:listRunningModels', (_e, baseUrl) => aiEngine.listRunningModels(baseUrl));
+vaultHandle('ai:runningMap', () => aiEngine.getRunningMap());
+vaultHandle('ai:availableModels', () => aiEngine.getAvailableModels());
 
 /* 加载本地嵌入模型（返回最新状态） */
 vaultHandle('ai:loadEmbedding', async () => {
@@ -1960,23 +1974,28 @@ vaultHandle('ai:deleteIndex', async (_e, vaultPath) => {
   return aiEngine.deleteIndex(vaultPath);
 });
 
-/* 发起 AI 问答：检索上下文 → 流式生成，token 经 ai:token 推送；agentId 为当前选中的自定义 Agent（可空） */
-vaultHandle('ai:ask', async (e, question, history, agentId) => {
+/* 发起 AI 问答：检索上下文 → 流式生成，token 经 ai:token 推送；agentId 为当前选中的自定义 Agent（可空），
+ * modelId 为下拉选中的模型（可为 avail: 临时 id，未传用 currentModel）；devMode 为「开发者模式」开关（可空） */
+vaultHandle('ai:ask', async (e, question, history, agentId, modelId, devMode) => {
   const sender = e.sender;
   try {
     // 按 agentId 解析当前 Agent（自定义角色），未命中/未配置时为 null（走默认助手）
     const agents = aiEngine.getConfig().agents || [];
     const agent = agents.find(function (a) { return a.id === String(agentId || ''); }) || null;
-    const { sources } = await aiEngine.ask({
+    const result = await aiEngine.ask({
       question: String(question || ''),
       history: Array.isArray(history) ? history : [],
       agent: agent,
+      modelId: String(modelId || ''),
+      devMode: !!devMode,
       onToken: function (t) { if (!sender.isDestroyed()) sender.send('ai:token', t); },
     });
-    if (!sender.isDestroyed()) sender.send('ai:ask-done', { sources });
+    if (!sender.isDestroyed()) sender.send('ai:ask-done', { sources: result.sources, retrieveMs: result.retrieveMs || 0 });
     return { ok: true };
   } catch (err) {
     const msg = String((err && err.message) || err);
+    // 问答失败落盘（userData/logs/app.log），便于定位连续失败原因
+    appendLog({ level: 'error', msg: 'AI 问答失败: ' + msg, detail: (err && err.stack) || '' });
     if (!sender.isDestroyed()) sender.send('ai:ask-error', { message: msg });
     return { ok: false, message: msg };
   }

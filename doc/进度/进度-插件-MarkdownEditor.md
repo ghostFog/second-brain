@@ -14,4 +14,8 @@
 
 | MD-05 | 图片/附件上传（原 ED-48） | Markdown Editor 编辑器支持上传「图片+附件」：vditor 工具栏新增 upload 按钮，上传落盘到 `.resources`（UUID 命名保留扩展名），图片插 `![名](url)`、附件插 `> [!attach] 名 url` 卡片引言；`note://` 协议 `vault_res` 路由 → `.resources`；附件点击经捕获拦截调 `notes:openResource` 用系统默认程序打开；`.resources` 在 walkNotes/scanVaultMeta 跳过 | 测试完成 | 2026-09-11 | 2026-09-11 | 见原 `进度-知识库.md` ED-48 归档记录（已迁出本文件）；交互增强含拖拽上传/右键插入/Obsidian 附件卡片语法；回归 124 通过 |
 
+| MD-06 | 表格列宽模式切换按钮 | 在 Markdown Editor 编辑器**主工具栏**（editor-tabs-row）新增「列宽模式」按钮：`sbTableAuto` 记忆键持久化「按内容宽度显示（table-layout:auto）」/「固定宽度展示」，供 `html.fe-table-auto` 类切样式；固定宽度时样式表对 `.vditor-reset table th/td` 强制 `white-space:normal` 覆盖 vditor 自带 nowrap 实现自动换行避免横向溢出；按钮经 `MutationObserver` 监听 `#ed-plugin-wide-slot` 注入并随记忆恢复/高亮；修复 `mdeWideObserve()` 调用时机（移动文件末尾）避免 `mdeTableKey` TDZ 导致宽屏功能失效 | 测试完成 | 2026-09-16 | 2026-09-16 | 与 MD-08 宽屏共用同一注入槽与观察器；npm test 通过 |
+
+| MD-09 | 编辑器查找/替换（Ctrl+F 查找、Ctrl+R 替换） | vditor 4.0 无内置查找条，宿主旧实现已随 `#ed-edit` textarea 退役失效。在 `editor-vditor.js` 实现统一查找替换（函数 `vd` 前缀，`window.vdFindbar` 导出 open/close/refresh）：sv 用 textarea value + setSelectionRange，ir/wysiwyg 用 TreeWalker 文本节点 + Range 映射跳转，替换走 execCommand 触发 input 回传宿主；findbar DOM 放 `#ed-vditor` 外（`#ed-vditor-find`，复用 app.css `.ed-findbar/.show-replace`）不受 vditor 重建清空；document keydown 绑定 Ctrl+F/Ctrl+R（`e.isComposing` 防中文输入法误触发，焦点在编辑器外放行系统查找；Esc 关闭沿用宿主 `findOpen`/`closeFindbar`）。宿主 `editor-host.js` 删除失效实现改为薄转发（保留 openFindbar/closeFindbar/runFind 函数名与 findOpen 布尔）。UI 复用无需改 CSS | 测试完成 | 2026-09-17 | 2026-09-17 | 回归新增 testFindbar 3 条断言，**216 通过、0 失败**；node --check 语法通过 |
+
 <!-- 后续 Markdown Editor 插件自身的功能点追加入上表（编号建议 MD-01、MD-02 …） -->

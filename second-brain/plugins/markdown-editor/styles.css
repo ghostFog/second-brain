@@ -181,3 +181,55 @@
   background: var(--note-danger-50, #fef2f2);
   color: var(--note-danger, #dc2626);
 }
+
+/* ===== 编辑器宽屏模式 + 表格宽度 100%（作者: 火 冰）===== */
+/* 宽屏：编辑内容（编辑 body）显式铺满 100%，清掉任何水平版心/居中留白，并禁止横向顶破外框。
+   挂到 <html>.ed-wide（与 ed-fs-active 同用 html/body 双类，便于首启与全屏交互共存）。
+   注意：vditor 在 IR 模式会给编辑区 `pre.vditor-reset` 内联 `padding: 10px 35px`、预览会给
+   `.vditor-reset` 内联 `max-width: 800px`，这两者都属于 inline style，普通样式表盖不掉，
+   会让内容向里挤/宽度被限制。因此这里统一用 !important 把这些内边距/最大宽度覆盖为铺满，
+   再保留宿主默认的 `0 8px` 视觉留白（对称、不靠内挤压）。 */
+html.ed-wide #ed-vditor .vditor-reset,
+html.ed-wide #ed-vditor .vditor-sv textarea.vditor-reset,
+html.ed-wide #ed-vditor .vditor-ir .vditor-reset,
+html.ed-wide #ed-vditor .vditor-wysiwyg .vditor-reset,
+html.ed-wide #ed-vditor .vditor-preview > .vditor-reset {
+  width: 100% !important;
+  max-width: 100% !important;   /* 覆盖 vditor 预览区的 inline max-width:800px */
+  box-sizing: border-box;
+  margin-left: 0;
+  margin-right: 0;
+  padding: 0 35px !important;    /* 覆盖 vditor IR 编辑区 inline padding:10px 35px，改为对称小留白 */
+}
+/* 表格固定宽度 100%：vditor 自带 `.vditor-reset table{ display:block }` 会把表格按块级横铺撑爆显示区。
+   关键：必须用 `table-layout: fixed`——`auto` 布局下列宽由单元格内容的最小宽度决定，
+   `overflow-wrap`/`word-break` 在做最小内容测算时不生效，长（无空格）内容会把整表撑得比父级宽。
+   `fixed` 让列宽严格遵守 `width:100%`，单元格内容靠 `overflow-wrap:anywhere` 强制断行，
+   从而保证表格始终 ≤ 父级宽度、不产生横向滚动（按需求不做容器滚动）。此条与宽屏开关无关，任何模式下均生效。 */
+#ed-vditor .vditor-reset table {
+  display: table;
+  table-layout: fixed;       /* 关键：fixed 布局让 width:100% 真正生效，内容不再撑爆列宽 */
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;    /* width:100% 计入边框/内边距，避免叠加溢出 */
+  margin-bottom: 16px;
+  overflow: visible;
+  word-break: break-word;
+}
+#ed-vditor .vditor-reset table th,
+#ed-vditor .vditor-reset table td {
+  min-width: 0;                 /* table-cell 默认 min-width:auto，需清零以允许收缩 */
+  box-sizing: border-box;
+  white-space: normal;          /* 覆盖 vditor 自带的 white-space:nowrap，固定宽度下内容必须自动换行 */
+  word-break: break-word;       /* 兜底换行 */
+  overflow-wrap: anywhere;      /* 强制断行：中英文/无空格超长串都可在任意字符断开，避免横溢 */
+}
+/* 表格「按内容宽度」模式：挂 html.fe-table-auto 时切回 table-layout:auto，让列宽贴合内容。
+   上文的 fixed + overflow-wrap:anywhere 仍保留在 th/td 上做兜底，故内容超长时依然断行、不撑爆父级；
+   空间足够时各列按内容自然分配宽度（不再一律等宽）。与宽屏开关（ed-wide）相互独立，可任意组合。 */
+html.fe-table-auto #ed-vditor .vditor-reset table {
+  table-layout: auto;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+}

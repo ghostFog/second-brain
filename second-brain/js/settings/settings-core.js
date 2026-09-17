@@ -63,6 +63,7 @@
     if (key.indexOf('openAs:') === 0) { const ext = key.slice(7); return ext ? '默认打开方式已更新：' + ext : null; }
     if (key === 'wrap') { setEditorWrap(on); return on ? '自动换行已开启' : '自动换行已关闭'; }
     if (key === 'reduceMotion') { applyReduceMotion(on); return on ? '减少动画已开启' : '减少动画已关闭'; }
+    if (key === 'devMode') return on ? '开发者模式已开启' : '开发者模式已关闭';
     if (key === 'density') { applyDensity(val); return '界面密度：' + val; }
     return null;
   }

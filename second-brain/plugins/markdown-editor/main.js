@@ -65,6 +65,10 @@ try {
     'mde-delete': function () { fireAction('delete-note'); },
     /* 打开当前笔记（命令面板调用） */
     'mde-open': function () { if (typeof openCurrentNote === 'function') openCurrentNote(); },
+    /* 切换编辑器宽屏模式（编辑内容铺满宽度 100%，记忆恢复） */
+    'mde-widescreen': function () { mdeToggleWide(); },
+    /* 切换表格列宽模式：固定宽度(各列等宽) / 按内容宽度显示（记忆恢复） */
+    'mde-table-layout': function () { mdeToggleTableAuto(); },
     /* 链接：浏览器打开 */
     'mde-link-open': function () {
       const link = document.querySelector('a[href]:hover') || document.activeElement.closest('a[href]');
@@ -95,3 +99,141 @@ try {
     },
   });
 } catch (_) { /* 装配异常由宿主沙箱兜底 */ }
+
+/* ============================================
+ * 宽屏模式（编辑内容铺满宽度 100%）
+ * 作者: 火 冰
+ * 功能: 给 html/body 挂 ed-wide 类（由 styles.css 把编辑 body 与表格宽度强制 100%），
+ *       经 #ed-plugin-wide-slot 向宿主页签栏注入「宽屏」按钮并绑定，
+ *       启动/切回编辑器视图（DOM 重建）后用 MutationObserver 重新注入并按记忆恢复。
+ *============================================ */
+const mdeWideKey = 'sbWide';     // 宽屏状态记忆键（沿用宿主旧键，兼容既有设置）
+
+/** 宽屏是否开启 */
+function mdeWideOn() {
+  return document.documentElement.classList.contains('ed-wide');
+}
+
+/** 应用/撤销宽屏：挂 ed-wide 类并记忆 */
+function mdeSetWide(on) {
+  document.documentElement.classList.toggle('ed-wide', !!on);
+  if (document.body) document.body.classList.toggle('ed-wide', !!on);
+  if (typeof saveS === 'function') saveS(mdeWideKey, !!on);
+  mdeSyncWideBtn();
+}
+
+/** 切换宽屏模式（命令面板 / 按钮共用） */
+function mdeToggleWide() {
+  mdeSetWide(!mdeWideOn());
+}
+
+/** 刷新「宽屏」按钮高亮态（开启时高亮品牌色） */
+function mdeSyncWideBtn() {
+  const btn = document.querySelector('[data-action="mde-widescreen"]');
+  if (btn) btn.style.color = mdeWideOn() ? 'var(--note-brand-400)' : 'var(--note-ink-3)';
+}
+
+/** 向宿主页签栏注入「宽屏」按钮（幂等：插槽内已有按钮则跳过） */
+function mdeInjectWideBtn() {
+  const slot = document.getElementById('ed-plugin-wide-slot');
+  if (!slot || slot.querySelector('[data-action="mde-widescreen"]')) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.dataset.action = 'mde-widescreen';
+  btn.title = '宽屏模式（编辑内容占满宽度，Esc 退出全屏不受影响）';
+  btn.className = 'w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80';
+  btn.style.cssText = 'background: transparent; color: var(--note-ink-3);';
+  btn.innerHTML = '<i data-lucide="move-horizontal" class="w-3.5 h-3.5"></i>';
+  btn.addEventListener('click', function () { mdeToggleWide(); });
+  slot.appendChild(btn);
+  // 唤醒宿主 lucide 图标渲染（宿主导入的是 lucide.createIcons，图标 <i> 会替换为 SVG）
+  if (window.lucide && typeof window.lucide.createIcons === 'function') {
+    try { window.lucide.createIcons(); } catch (_) { /* 忽略 */ }
+  }
+  mdeSyncWideBtn();
+}
+
+/** 按记忆恢复宽屏状态（编辑器视图每次 DOM 重建后调用） */
+function mdeRestoreWide() {
+  const on = (typeof restoreS === 'function') ? !!restoreS(mdeWideKey, false) : false;
+  if (on !== mdeWideOn()) mdeSetWide(on);
+}
+
+/** 监听宿主 loadView 重建编辑视图 DOM：注入槽出现时注入按钮并按记忆恢复 */
+function mdeWideObserve() {
+  const onChange = function () {
+    mdeInjectWideBtn();
+    mdeRestoreWide();
+    mdeInjectTableBtn();
+    mdeRestoreTableAuto();
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { onChange(); startWideObserver(); });
+  } else {
+    onChange();
+    startWideObserver();
+  }
+  function startWideObserver() {
+    const mo = new MutationObserver(onChange);
+    mo.observe(document.body, { childList: true, subtree: true });
+  }
+}
+
+/* ============================================
+ * 表格列宽模式（固定宽度 等宽 / 按内容宽度 显示）
+ * 作者: 火 冰
+ * 功能: 默认 fixed 等宽（styles.css table-layout:fixed），按钮切到 auto 让列宽贴合内容。
+ *       挂 html.fe-table-auto 类（独立于 ed-wide），经 #ed-plugin-wide-slot 追加「列宽」按钮，
+ *       状态存 saveS/restoreS（键 sbTableAuto）。observer 复用上面 mdeWideObserve 的统一回调。
+ *============================================ */
+const mdeTableKey = 'sbTableAuto';    // 表格列宽模式记忆键（true=按内容宽度，缺省=固定等宽）
+
+/** 表格是否「按内容宽度」显示 */
+function mdeTableAutoOn() {
+  return document.documentElement.classList.contains('fe-table-auto');
+}
+
+/** 应用列宽模式：挂/摘 fe-table-auto 类并记忆 */
+function mdeSetTableAuto(on) {
+  document.documentElement.classList.toggle('fe-table-auto', !!on);
+  if (typeof saveS === 'function') saveS(mdeTableKey, !!on);
+  mdeSyncTableBtn();
+}
+
+/** 切换表格列宽模式（命令面板 / 按钮共用） */
+function mdeToggleTableAuto() {
+  mdeSetTableAuto(!mdeTableAutoOn());
+}
+
+/** 刷新「列宽」按钮高亮态（按内容宽度时高亮品牌色） */
+function mdeSyncTableBtn() {
+  const btn = document.querySelector('[data-action="mde-table-layout"]');
+  if (btn) btn.style.color = mdeTableAutoOn() ? 'var(--note-brand-400)' : 'var(--note-ink-3)';
+}
+
+/** 向宿主页签栏注入「表格列宽」按钮（幂等，复用宽屏插槽） */
+function mdeInjectTableBtn() {
+  const slot = document.getElementById('ed-plugin-wide-slot');
+  if (!slot || slot.querySelector('[data-action="mde-table-layout"]')) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.dataset.action = 'mde-table-layout';
+  btn.title = '表格列宽：固定等宽 / 按内容宽度显示';
+  btn.className = 'w-7 h-7 flex items-center justify-center rounded transition-colors hover:opacity-80';
+  btn.style.cssText = 'background: transparent; color: var(--note-ink-3);';
+  btn.innerHTML = '<i data-lucide="stretch-horizontal" class="w-3.5 h-3.5"></i>';
+  btn.addEventListener('click', function () { mdeToggleTableAuto(); });
+  slot.appendChild(btn);
+  if (window.lucide && typeof window.lucide.createIcons === 'function') {
+    try { window.lucide.createIcons(); } catch (_) { /* 忽略 */ }
+  }
+  mdeSyncTableBtn();
+}
+
+/** 按记忆恢复表格列宽模式（编辑器视图每次 DOM 重建后调用） */
+function mdeRestoreTableAuto() {
+  const on = (typeof restoreS === 'function') ? !!restoreS(mdeTableKey, false) : false;
+  if (on !== mdeTableAutoOn()) mdeSetTableAuto(on);
+}
+
+mdeWideObserve();   // 统一启动：注入宽屏/列宽按钮并按记忆恢复（须在全部 const 声明之后，避免 TDZ）

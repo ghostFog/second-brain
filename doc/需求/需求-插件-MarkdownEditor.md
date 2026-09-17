@@ -1,7 +1,7 @@
 # 第二脑 · 需求文档：Markdown Editor 插件
 
 > 归属：单个插件功能需求登记于此；插件市场/插件体系能力见 `需求-插件.md`（PL-）。编号前缀 `MD-`。
-> 编号延续进度侧 `进度-插件-MarkdownEditor.md`（MD-01/MD-02 已完结）。本文件登记 MD-02~MD-06：MD-02 = 原 ED-49（已完结）、MD-03~MD-05 = 原 ED-46~ED-48、MD-06 = 表格列宽（新需求）。
+> 编号延续进度侧 `进度-插件-MarkdownEditor.md`（MD-01/MD-02 已完结）。本文件登记 MD-02~MD-08：MD-02 = 原 ED-49（已完结）、MD-03~MD-05 = 原 ED-46~ED-48、MD-06 = 表格列宽、MD-07 = 大纲浮层、MD-08 = 编辑器宽屏模式 + 表格 100%（新需求）。
 
 - 插件目录：`plugins/markdown-editor/`，当前 manifest 版本 `1.0.0`
 - 能力：注册 `.md`/`.markdown` 后缀，提供 编辑（源码/所见即所得）、预览、分屏 打开方式，工具按钮与右侧边面板
@@ -15,6 +15,7 @@
 | MD-05 | 图片/附件上传（原 ED-48） | vditor 工具栏新增 **upload** 按钮，`accept` 覆盖 `image/*` 与 `.pdf/.doc/.docx/.xls/.xlsx/.ppt/.pptx/.html/.htm/.md/.txt/.sh/.bat/.cmd/.ps1/.csv/.zip/.rar/.7z/.asc`；支持多选、单文件 ≤50MB。上传经桌面端 IPC `notes:uploadResource` 落盘到库根 `.resources`（UUID 命名保留扩展名），返回 `note://vault_res/<uuid.ext>`；**图片**按真实名插入 `![名](url)`（编辑/预览行内展示），**附件**插入为 Obsidian 风格卡片引言 `> [!attach] 名 url`（编辑区显示醒目指示块、预览/阅读渲染完整卡片）。`note://` 协议新增 `vault_res` 主机路由 → `.resources`；`.resources` 在 walkNotes/scanVaultMeta 中跳过（`.` 开头且被排除，文件树不可见）。附件链接点击经捕获阶段拦截，调 `notes:openResource` 用系统默认程序打开，避免窗口整体导航 | 编辑器工具栏点 **upload** 选择图片/附件 → 自动落盘并在光标处插入；图片行内展示、附件卡片展示，均可点击/右键下载；网页版无桌面桥接时提示「上传仅桌面版支持」 |
 | MD-06 | 表格列宽设定与拖拽调整 | 依据表格第二行分隔符 `| ---- | ---- |` 中每列的 `-` 个数计算该列百分比宽度（`-` 越多列越宽，按各列 `-` 个数占比分配）；编辑器内渲染**表格宽度 100%**、**`td` 内容自动换行**（列宽按固定值计算，不因内容撑破）；支持**拖拽调整列宽**，拖动列边框改变列宽后按新宽度**重算该列 `-` 个数**并回写 Markdown 分隔行 | 拖拽列边界调整宽度，松手后按新宽度重算各列 `-` 个数并写回分隔行；渲染时按分隔行 `-` 个数等比例分配表格宽度（100%） |
 | MD-07 | 大纲移至 vditor 浮层 + 快捷键 | 大纲不再占用宿主右侧边面板（移除 sidebar 的 outline 项）；Markdown Editor 插件新增命令「显示大纲」(`mde-outline`，默认快捷键 `Ctrl+Shift+Q`)，经宿主 `window.vdToggleOutline` 切换 **vditor 内置大纲浮层**（对 sv 源码模式保持 vditor 原生禁用行为） | 按 `Ctrl+Shift+Q` 或命令面板触发即可展开/收起 vditor 内的大纲浮层（点标题跳转） |
+| MD-08 | 编辑器宽屏模式 + 表格 100%（功能与按钮均归插件） | Markdown Editor 插件承载「宽屏模式」功能与按钮：给 `html/body` 挂 `ed-wide` 类（由插件 `styles.css` 将编辑区 body 强制宽度 100%、清除水平版心/居中留白），开启态记忆（键 `sbWide`，兼容既有设置）；**表格默认宽度 100%**（vditor 自带 `.vditor-reset table{display:block}` 会横铺溢出，插件样式改回 `display:table` + 单元格 `word-break`，保证表格始终占满编辑区宽度且不产生横向滚动，不做容器滚动）。工具按钮经宿主页签栏 `#ed-plugin-wide-slot` 注入槽由插件渲染（`data-action="mde-widescreen"`，图标用左右箭头 `move-horizontal`，区别于全屏），命令面板命令「切换编辑器宽屏模式」（`mde-widescreen`）；宿主 `loadView` 重建编辑视图 DOM 时插件用 `MutationObserver` 重注入按钮并按记忆恢复。**宽屏铺满修复**：vditor 在 IR 模式会给编辑区 `pre.vditor-reset` 内联 `padding:10px 35px`、预览给 `.vditor-reset` 内联 `max-width:800px`（inline 样式，普通样式表盖不掉），宽屏下需用 `!important` 统一覆盖为 `padding:0 8px` + `max-width:100%`，否则内容向内挤压、预览仍被 800px 限制 | 点页签栏「宽屏」按钮或命令面板「切换编辑器宽屏模式」切换编辑内容是否铺满 100% 宽度，开启态按钮高亮、持久记忆、重启/切回编辑器视图自动恢复；宽屏下 IR/所见即所得/预览内容均铺满且表格不溢出 |
 ## Vditor 三模式兼容规则
 
 > Markdown Editor 插件涉及编辑区交互的功能必须同步支持 Vditor 三种编辑模式，不能只适配单一模式。

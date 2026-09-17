@@ -69,23 +69,34 @@
 }
 
 /* ---------- 查找 / 替换条（Ctrl+F / Ctrl+R） ----------
- * 作者: 火 冰 */
+ * 悬浮浮层：absolute 锚定在编辑内容容器（position:relative）右上角，不占文档流；
+ * 上下两行布局（flex-wrap）：第一行查找（输入框+计数+上一/下一+关闭），第二行替换（替换框+替换+全部替换）；
+ * 文字 14px。匹配变色用 CSS Custom Highlight（::highlight），不破坏编辑区 DOM。作者: 火 冰 */
 .ed-findbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 40;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--note-border);
-  background: var(--note-surface);
+  width: min(360px, calc(100% - 16px));
+  padding: 8px;
+  border: 1px solid var(--note-border);
+  border-radius: 8px;
+  background: var(--note-popover, var(--note-surface));
+  box-shadow: 0 8px 24px var(--note-shadow-2, rgba(0, 0, 0, 0.18));
+  font-size: 14px;
 }
 .ed-findbar[hidden] { display: none; }
 .ed-findbar .find-input {
-  flex: 1;
-  min-width: 90px;
-  max-width: 240px;
-  height: 26px;
-  padding: 0 8px;
-  font-size: 12px;
+  flex: 1 1 150px;
+  min-width: 110px;
+  max-width: 220px;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 14px;
   color: var(--note-ink);
   background: var(--note-surface-2);
   border: 1px solid var(--note-border);
@@ -93,15 +104,18 @@
   outline: none;
 }
 .ed-findbar .find-input:focus { border-color: var(--note-brand-500); }
-.ed-findbar .find-count { font-size: 11px; color: var(--note-ink-3); white-space: nowrap; }
+.ed-findbar .find-count { font-size: 13px; color: var(--note-ink-3); white-space: nowrap; }
 .ed-findbar .find-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  height: 30px;
+  padding: 0 8px;
+  min-width: 0;
   flex-shrink: 0;
   border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
   color: var(--note-ink-2);
   background: var(--note-surface-2);
   border: 1px solid var(--note-border);
@@ -109,10 +123,13 @@
   transition: opacity 0.15s;
 }
 .ed-findbar .find-btn:hover { opacity: 0.8; }
-/* 替换行：Ctrl+F 时隐藏，Ctrl+R 时显示 */
-.ed-findbar .find-replace { display: none; }
-.ed-findbar.show-replace .find-replace { display: inline-flex; }
-.ed-findbar.show-replace .find-replace.find-input { display: inline-block; }
+/* 替换行：占据第二行（flex-wrap 100% 换行），输入框与查找框等宽 */
+.ed-findbar .find-replace { display: flex; flex: 1 1 100%; align-items: center; gap: 6px; }
+.ed-findbar:not(.show-replace) .find-replace { display: none; }
+
+/* 匹配临时变色（CSS Custom Highlight，不破坏 DOM；富文本 ir/wysiwyg 生效） */
+::highlight(sb-find) { background: var(--note-brand-200, rgba(255, 213, 0, 0.4)); }
+::highlight(sb-find-current) { background: var(--note-brand-400, rgba(255, 160, 0, 0.55)); }
 
 /* 视图切换 */
 .view { display: none; height: 100%; }
@@ -368,6 +385,12 @@ body.resizing { user-select: none; }
 #ai-sidebar.collapsed { display: none; }
 /* 收起后显示的展开把手：紧贴左侧 Ribbon(48px) 内侧 */
 #ai-sidebar-open { left: 54px; }
+
+/* ============================================
+ * AI 问答组删除按钮（一组 = 一次完整问答）
+ * ============================================ */
+/* 删除按钮：始终红色（危险操作标识）；悬浮到气泡（组）上显示，垂直居中对齐气泡 */
+.ai-qa-group .ai-del-btn { color: #ef4444; background: transparent; }
 
 /* ============================================
  * 多端适配（响应式）
