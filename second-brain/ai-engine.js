@@ -925,6 +925,18 @@ class AiEngine {
     return { vaultName: this.index.vaultName, files: this.index.files, chunks: this.index.chunks.length, builtAt: this.index.builtAt };
   }
 
+  /**
+   * 确保内存索引与「当前请求所在窗口的知识库」一致：二者根目录不一致时懒加载该库索引。
+   * 应用支持多窗口/多知识库，而 AI 引擎为全局单实例、内存索引仅一份；检索前调用本方法，
+   * 可让每个窗口的 AI 问答都引用『当前打开的知识库』自己的索引，而非默认库或上次加载的库。
+   * @returns {object} 当前索引（可能为该库的空索引）
+   * @author 火 冰
+   */
+  _ensureCurrentIndex() {
+    if (!this.index || this.index.vaultPath !== this._currentRoot()) this.activateVault();
+    return this.index;
+  }
+
   /** 统计当前索引涉及的去重笔记数 */
   _distinctNotes() {
     const s = new Set();
@@ -1264,10 +1276,13 @@ class AiEngine {
    */
   async retrieve(query, topK) {
     const k = topK || 20;
-    if (!this.index || !this.index.chunks.length) return [];
+    // 使用「当前打开的知识库」的索引：检索前懒加载当前库索引（多窗口多库时与发起窗口的库绑定一致）。
+    // 同步快照该库索引供后续异步(embed/rerank)使用，避免期间被其他窗口的检索重载覆盖。
+    const idx = this._ensureCurrentIndex();
+    if (!idx || !idx.chunks.length) return [];
     const qv = await this.embed(query);
     // 兜底：过滤隐藏路径 chunk（.gitignore 等），与索引口径一致，双保险
-    const scored = this.index.chunks
+    const scored = idx.chunks
       .filter(c => !this._isDotPath(c.path))
       .map(c => ({ path: c.path, text: c.text, vec: c.vec, sim: cosine(qv, c.vec) }));
     scored.sort((a, b) => b.sim - a.sim);
