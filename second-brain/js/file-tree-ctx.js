@@ -27,6 +27,7 @@ function treeSpec(label, icon, action, disabled) {
 }
 
 /* 列出全部非空目录（不含 .md 文件），用于「移动到…」子菜单 / 根目录下新建的父选择
+ * 过滤掉隐藏目录（任一路径段以 . 开头，如 .obsidian/.second-brain），避免移动到隐藏目录中。
  * 作者: 火 冰 */
 async function listDirs() {
   try {
@@ -34,7 +35,7 @@ async function listDirs() {
     const set = new Set();
     list.forEach(n => {
       const f = n.folder;
-      if (f) set.add(f);
+      if (f && !f.split('/').some(seg => seg.startsWith('.'))) set.add(f);
     });
     const dirs = Array.from(set).sort((a, b) => a.localeCompare(b, 'zh'));
     return dirs;
@@ -291,6 +292,7 @@ function bindFileTreeContextMenu() {
         treeSpec('新建笔记', 'file-plus', () => doNewNote(targetDir)),
         '-',
         { label: '移动到…', icon: 'move-right', children: moveChildren },
+        treeSpec('重命名', 'edit-3', () => renameDirInline(targetDir)),
         '-',
         treeSpec('删除目录', 'trash-2', () => actDeleteDir(targetDir)),
         treeSpec('重建笔记数据', 'refresh-cw', () => rebuildMeta(targetDir)),

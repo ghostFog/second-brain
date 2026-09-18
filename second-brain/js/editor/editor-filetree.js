@@ -277,6 +277,105 @@
         if (edCurrent === path) edCurrent = newPath;
         renderFileTree(edNotes); renderTabs(); renderArticle(); persistRecentTabs();
         showToast('已重命名为「' + v + '」');
+        // 只作用域重建该笔记所在目录的数据并同步关联反链（不改全库），保证该笔记属性即时刷新
+        const parentDir = newPath.includes('/') ? newPath.slice(0, newPath.lastIndexOf('/')) : '';
+        if (window.noteDesktop && window.noteDesktop.refreshDirMeta) {
+          try { await noteStore.refreshDirMeta(parentDir, false); } catch (_) { /* 重建失败不影响重命名 */ }
+        } else {
+          rebuildMeta();
+        }
+      } catch (err) {
+        showToast('重命名失败：' + ((err && err.message) || err));
+        restore();
+      }
+    }
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); input.dataset.closed = '1'; restore(); }
+      e.stopPropagation();
+    });
+    input.addEventListener('blur', commit);
+    input.addEventListener('dblclick', function (e) { e.stopPropagation(); });
+  }
+
+  /* 目录就地重命名：把该行目录名替换为输入框，Enter/失焦提交、Esc 取消。
+   * 提交后仅修改目录名（父级不变，目录内相对结构保持不变），带同名冲突校验、
+   * 打开标签路径同步，并重建该目录下全部子孙目录的笔记数据。
+   * 由文件树右键菜单「重命名」与「双击目录名」共用。作者: 火 冰 */
+  async function renameDirInline(oldDir) {
+    if (!oldDir) return;
+    const row = Array.prototype.find.call(document.querySelectorAll('.tree-folder'),
+      function (f) { return f.dataset.folder === oldDir; });
+    if (!row) return;
+    const nameSpan = row.querySelector('span.truncate.font-medium');
+    if (!nameSpan) return;
+    const oldName = nameSpan.textContent || '';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = oldName;
+    input.className = 'w-full outline-none text-[13px]';
+    input.style.cssText = 'background:transparent; color:var(--note-ink); border-bottom:1px solid var(--note-brand-400); min-width:0;';
+    nameSpan.replaceWith(input);
+    input.focus(); input.select();
+
+    // 结束输入：取消时还原；提交时执行重命名
+    const restore = function () { if (input.parentNode) input.parentNode.replaceChild(nameSpan, input); };
+    async function commit() {
+      if (input.dataset.closed) return; input.dataset.closed = '1';
+      const v = input.value.trim();
+      if (!v || v === oldName) { restore(); return; }
+      const parent = oldDir.includes('/') ? oldDir.slice(0, oldDir.lastIndexOf('/')) : '';
+      const newDir = parent ? parent + '/' + v : v;
+      if (newDir === oldDir) { restore(); return; }
+      // 同名冲突拦截：目标目录已存在（存在于任意笔记路径中；空目录冲突由主进程兜底）
+      const oldPrefix = oldDir.replace(/[\\/]+$/, '') + '/';
+      const conflict = edNotes.some(function (n) {
+        return n.path.startsWith(newDir + '/') || n.folder === newDir;
+      });
+      if (conflict) { showToast('已存在同名目录「' + v + '」，无法重命名'); restore(); return; }
+      try {
+        // 该目录下当前打开且存在未保存内容时，先落盘再移动，避免 read→delete 丢失内存改动
+        for (const p of edOpenTabs) {
+          if (p.startsWith(oldPrefix) && edOutdated[p] != null) await noteStore.save(p, edOutdated[p]);
+        }
+        await noteStore.renameDir(oldDir, v);
+        // 同步内存状态：笔记列表、未保存内容、标签、当前笔记、锁定、未保存标记、最近打开
+        const newPrefix = newDir + '/';
+        edNotes = edNotes.map(function (n) {
+          if (n.path.startsWith(oldPrefix)) {
+            const np = newPrefix + n.path.slice(oldPrefix.length);
+            return Object.assign({}, n, { path: np, folder: np.includes('/') ? np.slice(0, np.lastIndexOf('/')) : '' });
+          }
+          return n;
+        });
+        const remap = function (p) { return p.startsWith(oldPrefix) ? newPrefix + p.slice(oldPrefix.length) : p; };
+        edOpenTabs = edOpenTabs.map(remap);
+        const nextOutdated = {};
+        for (const k in edOutdated) nextOutdated[remap(k)] = edOutdated[k];
+        edOutdated = nextOutdated;
+        const remapSet = function (set) { const ns = new Set(); set.forEach(function (p) { ns.add(remap(p)); }); return ns; };
+        edPinned = remapSet(edPinned);
+        edDirty = remapSet(edDirty);
+        if (edCurrent && edCurrent.startsWith(oldPrefix)) {
+          edCurrent = remap(edCurrent);
+          await openNote(edCurrent);
+          renderTabs();
+        }
+        showToast('已重命名为「' + newDir + '」');
+        edSel = { type: 'folder', path: newDir };
+        renderFileTree(edNotes); renderFileProps();
+        // 只作用域重建该目录(及其父级以刷新 children 子目录列表)的笔记数据并同步关联反链，不再全库重建
+        if (window.noteDesktop && window.noteDesktop.refreshDirMeta) {
+          try {
+            const r = await noteStore.refreshDirMeta(newDir, true);
+            try { await refreshTreeAfterChange(); } catch (_) { /* 忽略 */ }
+            showToast('已重建「' + newDir + '」笔记数据' + (r && r.notes ? '（' + r.notes + ' 篇）' : ''));
+          } catch (err) {
+            showToast('笔记数据重建失败（不影响重命名）：' + ((err && err.message) || err));
+          }
+        } else {
+          rebuildMeta(newDir);
+        }
       } catch (err) {
         showToast('重命名失败：' + ((err && err.message) || err));
         restore();

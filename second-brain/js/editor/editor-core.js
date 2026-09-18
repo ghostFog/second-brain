@@ -27,6 +27,8 @@
   let edProvider = null;      // 当前文件命中的编辑器能力 Provider（md → markdown-editor，无匹配 → 内置兜底）
   let edClickPath = null;     // 文件树最近一次单击的文件路径（用于双击判定，renameNoteFile）
   let edClickTime = 0;        // 文件树最近一次单击的时间戳
+  let edClickFolder = null;   // 文件树最近一次单击的目录键（用于双击判定，renameDirInline）
+  let edClickFolderTime = 0;  // 文件树最近一次单击目录的时间戳
   let edTextFallback = false; // 纯文本兜底：无 Provider 匹配时以 textarea 只读渲染（保证任意后缀可打开）
   let edSaveTimers = {};       // path->autosave 去抖 timer：按文件独立，防止多笔记快速切换时去抖计时互相覆盖导致未保存内容丢失
   let edLineNum = true;       // 行号显示开关（initEditor 时从设置恢复）

@@ -126,7 +126,6 @@
 /* 替换行：占据第二行（flex-wrap 100% 换行），输入框与查找框等宽 */
 .ed-findbar .find-replace { display: flex; flex: 1 1 100%; align-items: center; gap: 6px; }
 .ed-findbar:not(.show-replace) .find-replace { display: none; }
-
 /* 匹配临时变色（CSS Custom Highlight，不破坏 DOM；富文本 ir/wysiwyg 生效） */
 ::highlight(sb-find) { background: var(--note-brand-200, rgba(255, 213, 0, 0.4)); }
 ::highlight(sb-find-current) { background: var(--note-brand-400, rgba(255, 160, 0, 0.55)); }

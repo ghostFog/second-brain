@@ -360,6 +360,8 @@
     // 绑定文件树点击 / 搜索
     const tree = $('file-tree');
     if (tree) tree.addEventListener('click', function (e) {
+      // 重命名就地输入框：点击输入框内不触发行的展开/打开/折叠，避免下方重建 DOM 销毁输入框
+      if (e.target.closest('input, textarea')) return;
       const file = e.target.closest('.tree-file');
       if (file) {
         const path = file.dataset.path;
@@ -379,6 +381,16 @@
       const folder = e.target.closest('.tree-folder');
       if (folder) {
         const key = folder.dataset.folder;
+        // 双击目录名 → 就地重命名。单击折叠/展开会重建文件树 DOM，使原生 dblclick 丢失，
+        // 故在此用时间窗判定：<320ms 内再次点击同目录视为双击，第二击直接走重命名、不再折叠
+        const now = Date.now();
+        if (edClickFolder === key && now - edClickFolderTime < 320) {
+          edClickFolder = null;
+          renameDirInline(key);
+          return;
+        }
+        edClickFolder = key;
+        edClickFolderTime = now;
         if (collapsedFolders.has(key)) collapsedFolders.delete(key); else collapsedFolders.add(key);
         edSel = { type: 'folder', path: key };   // 选中目录 → 右侧显示该目录属性
         renderFileTree(edNotes);

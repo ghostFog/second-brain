@@ -52,6 +52,10 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   revealNote: (relPath) => ipcRenderer.invoke('notes:reveal', relPath),
   /** 移动整个目录到新父目录（保留内部结构 + 空目录；源目录被移除），返回 {dir, moved} */
   moveDir: (oldDir, newParent) => ipcRenderer.invoke('notes:moveDir', oldDir, newParent),
+  /** 重命名目录（把末级目录名改为新名，父级不变），返回 {dir, moved} */
+  renameDir: (oldDir, newName) => ipcRenderer.invoke('notes:renameDir', oldDir, newName),
+  /** 作用域重建某目录子树的元数据并同步关联反链（不重建全库），返回 {dirs, notes} */
+  refreshDirMeta: (dir, scopeParent) => ipcRenderer.invoke('notes:refreshDirMeta', dir, scopeParent),
   /** 删除整个目录（含子目录与空目录本身），返回删除的 .md 篇数 */
   removeDir: (dir) => ipcRenderer.invoke('notes:removeDir', dir),
   /** 重建 .second-brain 元数据（每个目录一条 _meta.json 记录），返回 {dirs, updatedAt} */

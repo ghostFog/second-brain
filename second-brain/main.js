@@ -999,20 +999,30 @@ function ensureNoteId(text, gen, prevId) {
  * @returns {Promise<Map<string, object>>} 目录相对路径('' 表示根) -> 记录
  * @author 火 冰 */
 async function scanVaultMeta() {
-  const root = vaultRoot();
   const records = new Map();
-  const walk = async (dirRel) => {
-    const abs = dirRel ? path.join(root, dirRel) : root;
+  await walkDirMeta('', records);
+  /* 第二遍：根据全库正向链接计算反向链接 */
+  try { computeBacklinks(records); } catch (e) { /* 反链计算失败不阻断重建 */ }
+  return records;
+}
+
+/** 从指定目录 dirRel 起始，递归扫描并构建该目录（子树）的元数据记录到 records（可复用：''=全库）。
+ *  保留旧记录中的「索引分块覆盖配置」(chunk) / 「稳定雪花 id」(noteId) / 索引时间(indexTime)。
+ *  只读入磁盘与旧 _meta.json，不写任何目录镜像（写入由调用方决定）。
+ *  @author 火 冰 */
+async function walkDirMeta(dirRel, records) {
+  const root = vaultRoot();
+  const walk = async (dirRel2) => {
+    const abs = dirRel2 ? path.join(root, dirRel2) : root;
     let items = [];
     try { items = await fs.promises.readdir(abs, { withFileTypes: true }); } catch (e) { return { bytes: 0, notes: 0 }; }
-    const rec = { dir: dirRel, noteCount: 0, dirCount: 0, size: 0, totalNotes: 0, totalSize: 0, notes: [], children: [], updatedAt: Date.now() };
-    records.set(dirRel, rec);
-    // 读取本目录旧记录中每篇笔记的「索引分块覆盖配置」(chunk) 与「稳定雪花 id」(noteId)，重建时保留
+    const rec = { dir: dirRel2, noteCount: 0, dirCount: 0, size: 0, totalNotes: 0, totalSize: 0, notes: [], children: [], updatedAt: Date.now() };
+    records.set(dirRel2, rec);
     const prevOverrides = {};
     const prevNoteIds = {};
     const prevIndexTimes = {};
     try {
-      const prev = JSON.parse(await fs.promises.readFile(path.join(root, META_DIR, ...(dirRel ? dirRel.split('/') : []), '_meta.json'), 'utf8'));
+      const prev = JSON.parse(await fs.promises.readFile(path.join(root, META_DIR, ...(dirRel2 ? dirRel2.split('/') : []), '_meta.json'), 'utf8'));
       if (prev && Array.isArray(prev.notes)) prev.notes.forEach(function (n) { if (n && n.chunk) prevOverrides[n.name] = n.chunk; if (n && n.noteId) prevNoteIds[n.name] = n.noteId; if (n && n.indexTime) prevIndexTimes[n.name] = n.indexTime; });
     } catch (e) { /* 无旧记录 */ }
     let subBytes = 0, subNotes = 0;
@@ -1020,7 +1030,7 @@ async function scanVaultMeta() {
     for (const it of items) {
       if (it.name.startsWith('.')) continue;                                              // 跳过所有隐藏目录/文件（.git/.obsidian/.second-brain/.resources 等），不记录到元数据
       const childAbs = path.join(abs, it.name);
-      const childRel = (dirRel ? dirRel + '/' : '') + it.name;
+      const childRel = (dirRel2 ? dirRel2 + '/' : '') + it.name;
       if (it.isDirectory()) {
         rec.dirCount++;
         const r = await walk(childRel);
@@ -1033,14 +1043,11 @@ async function scanVaultMeta() {
         try { st = await fs.promises.stat(childAbs); } catch (e) { continue; }
         let text = '';
         try { text = await fs.promises.readFile(childAbs, 'utf8'); } catch (e) { /* 读失败仅记录元信息 */ }
-        // 唯一稳定雪花 id：复用元数据 noteId → 否则复用既有 frontmatter id（迁移）→ 否则新生成；均不写入 md
         const noteId = ensureNoteId(text, snowflake, prevNoteIds[it.name]);
-        // 从 md frontmatter 清除历史补齐写入的 id，保持 md 干净
         const clean = stripMetaId(text);
         if (clean.removed) { try { await fs.promises.writeFile(childAbs, clean.text, 'utf8'); } catch (e) { /* 清理失败不阻断 */ } text = clean.text; }
         const pm = parseNoteMeta(text, it.name, childRel);
         rec.notes.push({ name: it.name, path: childRel, noteId: noteId, wordCount: pm.wordCount, tags: pm.tags, size: st.size, created: st.birthtimeMs, mtime: st.mtimeMs, chunk: prevOverrides[it.name] || undefined, indexTime: prevIndexTimes[it.name] || Date.now(), attachments: pm.attachments || [], outlinks: pm.outlinks || [] });
-
         rec.noteCount++;
         rec.size += st.size;
       }
@@ -1048,15 +1055,11 @@ async function scanVaultMeta() {
     rec.size += subBytes;         // 占用大小 = 目录下全部文件递归合计
     rec.totalNotes = rec.noteCount + subNotes;   // 笔记个数 = 直接 + 子孙
     rec.totalSize = rec.size;
-    // children 只记录子目录（文件信息已在 notes 数组中）
     dirKids.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); });
     rec.children = dirKids;
     return { bytes: rec.size, notes: rec.totalNotes };
   };
-  await walk('');
-  /* 第二遍：根据正向链接计算反向链接 */
-  computeBacklinks(records);
-  return records;
+  await walk(dirRel);
 }
 
 /** 根据正向链接（outlinks）计算反向链接（backlinks）并回填到每篇笔记。
@@ -1064,35 +1067,109 @@ async function scanVaultMeta() {
  *  @param {Map<string, object>} records scanVaultMeta 的产物
  *  @author 火 冰 */
 function computeBacklinks(records) {
-  /* 收集所有笔记路径 → noteId 映射，用于匹配 outlinks */
-  var allNotes = new Map();
-  for (var [dir, rec] of records) {
-    if (!rec || !Array.isArray(rec.notes)) continue;
-    for (var i = 0; i < rec.notes.length; i++) {
-      var n = rec.notes[i];
-      n.backlinks = [];
-      allNotes.set(n.path, n);
-      allNotes.set(n.name, n);
-    }
-  }
+  const data = Array.isArray(records) ? records : Array.from(records.values());
+  const srcSet = new Set();
+  for (const rec of data) if (rec && Array.isArray(rec.notes)) rec.notes.forEach(function (n) { srcSet.add(n); });
+  computeBacklinksFor(records, srcSet);
+}
 
-  /* 遍历每篇笔记的 outlinks，找到目标笔记并添加反向链接 */
-  for (var [dir2, rec2] of records) {
-    if (!rec2 || !Array.isArray(rec2.notes)) continue;
-    for (var j = 0; j < rec2.notes.length; j++) {
-      var src = rec2.notes[j];
-      if (!Array.isArray(src.outlinks)) continue;
-      for (var k = 0; k < src.outlinks.length; k++) {
-        var link = src.outlinks[k];
-        /* 尝试匹配: 完整路径 → 文件名 → 去扩展名 */
-        var target = allNotes.get(link.path) || allNotes.get(link.name + '.md') || allNotes.get(link.name);
-        if (target && target.path !== src.path) {
+/** 作用域反链回填：只为 records 中每篇笔记计算 backlinks（目标都在 records 内），
+ *  反链「来源」取自 srcSet（可扩展到全库来源），这样重命名某目录后，
+ *  外部目录指向该目录内笔记的反链也能同步更新，且不触碰外部目录的记录。
+ *  @author 火 冰 */
+function computeBacklinksFor(records, srcSet) {
+  const data = Array.isArray(records) ? records : Array.from(records.values());
+  const targets = new Map();
+  for (const rec of data) {
+    if (!rec || !Array.isArray(rec.notes)) continue;
+    for (const t of rec.notes) { t.backlinks = []; targets.set(t.path, t); targets.set(t.name, t); }
+  }
+  for (const src of srcSet) {
+    if (!src || !Array.isArray(src.outlinks)) continue;
+    for (const link of src.outlinks) {
+      const target = targets.get(link.path) || targets.get(link.name + '.md') || targets.get(link.name);
+      if (target && target.path !== src.path) {
+        // 去重：旧路径缓存来源与最新扫描来源可能指向同一实际笔记，避免反链重复
+        if (!target.backlinks.some(function (b) { return b.path === src.path; })) {
           target.backlinks.push({ path: src.path, name: src.name.replace(/\.md$/i, '') });
         }
       }
     }
   }
 }
+
+/** 加载全库笔记 outlinks 快照（只读 .second-brain 下各目录 _meta.json 缓存，不重扫 md），
+ *  并叠加当前已在 records 中最新扫描的笔记（其 outlinks 为权威来源），供作用域反链回填使用。
+ *  @returns {Promise<Set<object>>} 笔记对象集合
+ *  @author 火 冰 */
+async function loadCachedSourceSet(records) {
+  const srcSet = new Set();
+  for (const rec of Array.from(records.values())) if (rec && Array.isArray(rec.notes)) rec.notes.forEach(function (n) { srcSet.add(n); });
+  const root = vaultRoot();
+  const walk = async (dirRel) => {
+    const metaAbs = path.join(root, META_DIR, ...(dirRel ? dirRel.split('/') : []), '_meta.json');
+    let rec = null; try { rec = JSON.parse(await fs.promises.readFile(metaAbs, 'utf8')); } catch (e) { /* 无记录 */ }
+    if (rec && Array.isArray(rec.notes)) rec.notes.forEach(function (n) { srcSet.add(n); });
+    if (rec && Array.isArray(rec.children)) for (const c of rec.children) if (c.type === 'dir') await walk(dirRel ? dirRel + '/' + c.name : c.name);
+  };
+  await walk('');
+  return srcSet;
+}
+
+/** 作用域写入：仅把 records 中（某目录子树）的镜像 _meta.json 落盘，并从 startRel 镜像起清理子树内已不存在的残留，不动其它目录镜像。
+ *  @author 火 冰 */
+async function writeDirMeta(records, startRel) {
+  const metaRoot = path.join(vaultRoot(), META_DIR);
+  for (const [dir, rec] of Array.from(records.entries())) {
+    const trim = dir ? (dir.split('/').map(function (s) { return s.trim(); }).filter(Boolean).join('/')) : '';
+    const mirrorAbs = path.join(metaRoot, ...(trim ? trim.split('/') : []));
+    try {
+      await fs.promises.mkdir(mirrorAbs, { recursive: true });
+      await fs.promises.writeFile(path.join(mirrorAbs, '_meta.json'), JSON.stringify(rec, null, 2), 'utf8');
+    } catch (e) { /* 单个目录元数据写入失败不阻断 */ }
+  }
+  if (startRel) await pruneDirMeta(metaRoot, records, startRel);
+}
+
+/** 仅从 startRel 镜像子树开始，清理磁盘上已不存在的残留目录镜像（只清理该子树内）。
+ *  不会触碰 startRel 之外的任何镜像目录。根级（''）不清理。作者: 火 冰 */
+async function pruneDirMeta(metaRoot, records, startRel) {
+  if (!startRel) return;
+  const startAbs = path.join(metaRoot, ...startRel.split('/'));
+  const walk = async (mirrorAbs, rel) => {
+    let items = []; try { items = await fs.promises.readdir(mirrorAbs, { withFileTypes: true }); } catch (e) { return; }
+    for (const it of items) {
+      const abs = path.join(mirrorAbs, it.name);
+      const childRel = rel ? rel + '/' + it.name : it.name;
+      if (it.isDirectory()) {
+        if (records.has(childRel)) await walk(abs, childRel);
+        else { try { await fs.promises.rm(abs, { recursive: true, force: true }); } catch (e) { /* 忽略 */ } }
+      } else if (it.isFile() && it.name === '_meta.json') {
+        if (!records.has(rel)) { try { await fs.promises.rm(abs, { force: true }); } catch (e) { /* 忽略 */ } }
+      }
+    }
+  };
+  await walk(startAbs, startRel);
+}
+
+/** 重建指定目录子树的元数据（不重建全库）：仅索引该目录(及其祖先父级以更新 children)的笔记信息，
+ *  并同步调整与其关联的反向链接（来自全库既有 outlinks 缓存）。
+ *  scopeParent=true（目录重命名场景）时同时重建其父目录记录以刷新 children 子目录列表；
+ *  scopeParent=false（文件重命名场景）时只重建该目录本身。
+ *  返回 { dirs, notes }。作者: 火 冰 */
+vaultHandle('notes:refreshDirMeta', async (_e, rel, scopeParent) => {
+  await ensureVault();
+  const clean = String(rel || '').trim().replace(/^[\\/]+|[\\/]+$/g, '').replace(/\\/g, '/');
+  const startRel = scopeParent && clean.includes('/') ? clean.slice(0, clean.lastIndexOf('/')) : clean;
+  const records = new Map();
+  await walkDirMeta(startRel, records);
+  // 反链：以全库既有 outlinks 缓存为来源，只对目标位于本(子)树内的笔记回填 backlinks
+  const srcSet = await loadCachedSourceSet(records);
+  computeBacklinksFor(records, srcSet);
+  await writeDirMeta(records, startRel);
+  let notes = 0; for (const rec of records.values()) if (rec.notes) notes += rec.notes.length;
+  return { dirs: records.size, notes: notes };
+});
 
 /** 将元数据记录逐目录写入 .second-brain/<dir>/_meta.json，并清理不对应现存目录的镜像残留。
  * @param {Map<string, object>} records scanVaultMeta 的产物
@@ -1104,10 +1181,12 @@ async function writeVaultMeta(records) {
   for (const [dir, rec] of records) {
     const trim = dir ? (dir.split('/').map(function (s) { return s.trim(); }).filter(Boolean).join('/')) : '';
     const mirrorAbs = path.join(metaRoot, ...(trim ? trim.split('/') : []));
-    await fs.promises.mkdir(mirrorAbs, { recursive: true });
-    await fs.promises.writeFile(path.join(mirrorAbs, '_meta.json'), JSON.stringify(rec, null, 2), 'utf8');
+    try {
+      await fs.promises.mkdir(mirrorAbs, { recursive: true });
+      await fs.promises.writeFile(path.join(mirrorAbs, '_meta.json'), JSON.stringify(rec, null, 2), 'utf8');
+    } catch (e) { /* 单个目录元数据写入失败不阻断整体重建 */ }
   }
-  await pruneMeta(metaRoot, records, '');
+  try { await pruneMeta(metaRoot, records, ''); } catch (e) { /* 清理残留镜像失败不阻断 */ }
 }
 
 /** 清理 .second-brain 中不对应现存目录的镜像（目录被改名/删除/移动后同步移除残留记录文件）。
@@ -1474,6 +1553,51 @@ vaultHandle('notes:moveDir', async (_e, oldDir, newParent) => {
   if (fs.existsSync(dstAbs)) {
     const exist = await fs.promises.readdir(dstAbs).catch(() => []);
     if (exist.length > 0) throw new Error('目标目录已存在，无法移动');
+  }
+  await fs.promises.mkdir(path.dirname(dstAbs), { recursive: true });
+  try {
+    await fs.promises.rename(srcAbs, dstAbs);          // 同卷：秒级原子移动
+  } catch (e) {                                        // 跨卷：复制后删源，源目录被移除
+    await fs.promises.cp(srcAbs, dstAbs, { recursive: true });
+    await fs.promises.rm(srcAbs, { recursive: true, force: true });
+  }
+  // 重建目录内全部笔记的 AI 索引：旧相对路径清除、新相对路径重建
+  const out = [];
+  await walkNotes(dstAbs, dstRel, out);
+  const files = out.filter(function (n) { return !n.isFolder; });
+  for (const n of files) {
+    const oldRel = oldClean + n.path.slice(dstRel.length);
+    aiEngine.removeNote(oldRel).catch(function () {});
+    aiEngine.updateNote(n.path).catch(function () {});
+  }
+  scheduleMetaRefresh();
+  return { dir: dstRel, moved: files.length };
+});
+
+/* 重命名目录：把 oldDir 的末级目录名改为 newName（父级不变，保留内部相对结构 + 空目录）。
+ * 与 notes:moveDir 同卷用 fs.rename、跨卷复制后删源；重命名后为目录内全部 .md 重绑 AI 索引。
+ * 并对全库元数据排程重建，确保该目录及其全部子孙目录的 _meta.json 数据更新。
+ * 返回 { dir, moved }：dir 为重命名后的相对路径，moved 为目录内的 .md 篇数。
+ * 作者: 火 冰 */
+vaultHandle('notes:renameDir', async (_e, oldDir, newName) => {
+  const oldClean = String(oldDir || '').replace(/[\\/]+$/, '');
+  if (!oldClean) throw new Error('目录不能为空');
+  const name = String(newName || '').trim();
+  if (!name || name.includes('/') || name.includes('\\')) throw new Error('目录名不合法');
+  const srcAbs = resolveVaultPath(oldClean);
+  if (!fs.existsSync(srcAbs)) throw new Error('源目录不存在: ' + oldClean);
+  // 同名无事可做：直接统计目录内笔记数返回
+  if (name === oldClean.split('/').pop()) {
+    const out0 = [];
+    await walkNotes(srcAbs, oldClean, out0);
+    return { dir: oldClean, moved: out0.filter(function (n) { return !n.isFolder; }).length };
+  }
+  const parent = oldClean.includes('/') ? oldClean.slice(0, oldClean.lastIndexOf('/')) : '';
+  const dstRel = parent ? parent + '/' + name : name;
+  const dstAbs = resolveVaultPath(dstRel);
+  if (fs.existsSync(dstAbs)) {
+    const exist = await fs.promises.readdir(dstAbs).catch(() => []);
+    if (exist.length > 0) throw new Error('目标目录已存在，无法重命名');
   }
   await fs.promises.mkdir(path.dirname(dstAbs), { recursive: true });
   try {

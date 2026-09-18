@@ -159,6 +159,42 @@
         }
         return moved;
       },
+      /** 重命名目录：把 oldDir 的末级目录名改为 newName（父级不变，保留内部相对结构 + 空目录）。
+       * 桌面端走主进程 notes:renameDir（fs.rename 整目录重命名），并自动重绑目录内笔记的 AI 索引；
+       * 网页 mock 降级为逐笔记移动（无法表达空目录实体重命名，与桌面端行为尽力对齐）。
+       * 返回移动的 .md 篇数。
+       * 作者: 火 冰 */
+      async renameDir(oldDir, newName) {
+        const oldClean = oldDir.replace(/[\\/]+$/, '');
+        if (bridge && bridge.renameDir) {
+          const r = await bridge.renameDir(oldClean, newName);
+          return (r && typeof r.moved === 'number') ? r.moved : 0;
+        }
+        const parent = oldClean.includes('/') ? oldClean.slice(0, oldClean.lastIndexOf('/')) : '';
+        const newPrefix = parent ? parent + '/' + newName : newName;
+        const oldPrefix = oldClean + '/';
+        const list = await this.list();
+        const targets = list.filter(n => n.path.startsWith(oldPrefix) && !n.isFolder);
+        let moved = 0;
+        for (const n of targets) {
+          const rel = n.path.slice(oldPrefix.length);        // 目录内相对路径
+          const ok = await this.move(n.path, newPrefix + '/' + rel);
+          if (ok) moved++;
+        }
+        return moved;
+      },
+      /** 作用域重建某目录子树的元数据并同步关联反向链接（不重建全库）。
+       * scopeParent=true（目录重命名）时连带重建父目录记录以刷新 children 子目录列表；
+       * scopeParent=false（文件重命名）时只重建该目录本身。
+       * 桌面端走主进程 notes:refreshDirMeta；网页 mock 返回 null（不做重建）。
+       * @returns {Promise<{dirs:number,notes:number}|null>}
+       * 作者: 火 冰 */
+      async refreshDirMeta(dir, scopeParent) {
+        if (bridge && bridge.refreshDirMeta) {
+          return await bridge.refreshDirMeta(dir || '', !!scopeParent);
+        }
+        return null;
+      },
       /** 交换两个笔记文件的名字（保留各自内容不变）。
        * 用途：同目录内拖拽排序时，把 A 和 B 的文件名互换实现排序；链接 [[A]] / [[B]] 指向正确内容。
        * 作者: 火 冰 */
