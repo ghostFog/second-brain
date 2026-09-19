@@ -36,7 +36,7 @@
       "!node_modules/onnxruntime-node/bin/napi-v3/darwin/**/*",
       "!node_modules/onnxruntime-node/bin/napi-v3/linux/**/*",
       "!node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**/*",
-      "!node_modules/onnxruntime-web/**/*.wasm",
+      "!node_modules/onnxruntime-web/**/*",
       "!node_modules/onnxruntime-web/**/*.map",
       "!node_modules/@xenova/transformers/dist/*.wasm",
       "!node_modules/@xenova/transformers/dist/*.map",
@@ -49,12 +49,6 @@
       "target": [
         {
           "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
           "arch": [
             "x64"
           ]
