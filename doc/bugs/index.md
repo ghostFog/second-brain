@@ -65,6 +65,8 @@
 | [Bug-059](Bug-059.md) | 已修复（测试完成） | 知识库单库多窗口：默认库每次触发「打开/恢复默认库」都新开窗口。`createWindow` 去重检查在 `if (binding)` 内，默认库归一为 `null` 跳过；改为统一按键查询（默认库用 `vaultKey(binding || defaultVaultRoot())`），命中聚焦旧窗口。 |
 | [Bug-060](Bug-060.md) | 已修复（测试完成） | 嵌入式模型库启动后不显示「已使用」：`renderAllLib`（getModelLib 扫描）与 `fillLocal`（getConfig 回填输入框）为并行异步，渲染先于回填时 `cfgPathValue` 得空串判定失败且不再刷新。修复：回填后主动补一次 `renderAllLib`。 |
 | [Bug-061](Bug-061.md) | 已修复（测试完成） | AI 问答「来源」出现 `.gitignore`：增量索引 `updateNote` 无隐藏路径过滤（与 `_scanMd` 跳过点文件口径不一致），git-sync 写 `.gitignore` 触发 `updateNote` 把过滤文件索引进向量库被检索召回。修复：新增 `_isDotPath` 统一判定，`updateNote` 跳过+清除、`_loadIndexFrom` 加载过滤、`retrieve` 兜底过滤。 |
+| [Bug-062](Bug-062.md) | 已修复（测试完成） | Git 提交偶发锁冲突 `cannot lock ref 'HEAD' ... .lock File exists`（残留锁/并发占锁）+ 无远程知识库总写「git 操作失败: git remote get-url origin」错误日志。修复：同仓库 git 命令走按 cwd 的串行队列（GIT_QUEUES），锁冲突自动清 `.git/*.lock` 并重试一次；探测类命令传 `logFailure:false` 不再记错误日志。 |
+| [Bug-063](Bug-063.md) | 已修复（测试完成） | Bug-062 锁自愈未生效：`removeStaleGitLocks` 正则 `/\.[0-9a-zA-Z-]+\.lock$/` 不匹配单点结构 `master.lock`/`HEAD.lock`，清理跳过；修复为 `/\.lock$/`。另修 git-sync 右键「对比」图标 `compare` 缺失（lucide 真实键为 `GitCompareArrows`）。 |
 
 > 注（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——语言选择器(chip)显隐保留为 Bug-011，链接弹框 `docButton` 那条纠正为 Bug-042。
 

@@ -7,6 +7,13 @@
 
 'use strict';
 
+  /* 伪路径/项目路由兜底 shim：当 project-mode.js 未加载时（如无头回归测试）为空实现；
+   * 应用运行时会加载 project-mode.js，以同名全局函数覆盖为真实实现（加载顺序更靠后）。
+   * 作者: 火 冰 */
+  function sbIsPseudoPath(p) { return false; }
+  async function sbSave(path, mdText) { return false; }
+  function sbRenderTempArea(tree) { return null; }
+
   /* 渲染编辑区内容（Provider 化）：优先调用当前 Provider 的 renderWysiwyg，
    * 未实现时回退宿主默认 markdown 渲染（renderMarkdown 全局共享）。
    * @param {string} md 源文本
@@ -132,9 +139,11 @@
       ? pluginManager.getEditorProviders(edExt) : [];
     edProvider = provs[0] || null;
     edTextFallback = !!(edProvider && edProvider.isFallback);
-    // 内容装载：缓存命中则不重复读
+    // 内容装载：缓存命中则不重复读；项目模式走项目读桥接（相对项目根的 rel 路径）
     if (!(path in edOutdated)) {
-      const c = await noteStore.read(path);
+      const c = (window.sbProject && window.sbProject.isProjectMode() && !sbIsPseudoPath(path))
+        ? (await window.sbProject.read(path)).content
+        : await noteStore.read(path);
       edOutdated[path] = c;
     }
     /* 关键时序：edCurrent 必须在「内容真正装载进编辑器」之前设置，而不是 openNote 开头。
@@ -168,11 +177,13 @@
   /* 把当前打开的标签页路径列表持久化到 .second-brain/recent.json（桌面版桥接）。
    * 持久化时把当前激活（最后打开/切换）的笔记移到列表末尾，启动恢复据此定位「最后打开的文件」。 */
   function persistRecentTabs() {
+    // 项目工作区：无知识库 recent.json，不写入（临时文件也不写入）
+    if (window.sbProject && window.sbProject.isProjectMode()) return;
     const nd = window.noteDesktop || {};
     if (nd && nd.recentSave) {
       try {
-        const cur = edOpenTabs.slice();
-        if (edCurrent && cur.length > 1) {
+        const cur = edOpenTabs.slice().filter(function (p) { return !sbIsPseudoPath(p); });
+        if (edCurrent && !sbIsPseudoPath(edCurrent) && cur.length > 1) {
           const i = cur.indexOf(edCurrent);
           if (i > -1) { cur.splice(i, 1); cur.push(edCurrent); }
         }
@@ -255,8 +266,13 @@
     if (edSaveTimers[p]) clearTimeout(edSaveTimers[p]);
     edSaveTimers[p] = setTimeout(async function () {
       delete edSaveTimers[p];
-      try { await noteStore.save(p, mdText); edDirty.delete(p); const s = $('ed-saved'); if (s) s.textContent = '已自动保存'; }
-      catch (err) { const s = $('ed-saved'); if (s) s.textContent = '保存失败'; }
+      // 临时文件只读：不落盘；项目文件/知识库按路径路由保存
+      if (sbIsPseudoPath(p)) { const s = $('ed-saved'); if (s) s.textContent = '只读'; return; }
+      const handled = (typeof sbSave === 'function') ? await sbSave(p, mdText) : false;
+      try {
+        if (!handled) await noteStore.save(p, mdText);
+        edDirty.delete(p); const s = $('ed-saved'); if (s) s.textContent = handled ? '已保存到项目' : '已自动保存';
+      } catch (err) { const s = $('ed-saved'); if (s) s.textContent = '保存失败'; }
     }, 800);
   }
 
@@ -300,10 +316,14 @@
     const tags = extractTags(md);
     const tagBox = $('ed-tags'); if (tagBox) tagBox.innerHTML = tags.map(t => '<span class="px-2 py-1 rounded text-[12px] border" style="border-color: var(--note-border); background: var(--note-surface-2); color: var(--note-brand-300);">' + esc(t) + '</span>').join('') || '<span class="text-[11px]" style="color: var(--note-ink-3);">（暂无标签）</span>';
     const tagC = $('ed-tags-count'); if (tagC) tagC.textContent = String(tags.length);
-    // 反向链接：其它笔记包含 [[当前名片段]]
-    renderBacklinks();
-    // 文件属性：文档 id / 路径 / 索引分块起止规则
-    renderFileProps();
+    // 项目工作区 / 临时文件：无知识库反链/属性数据，且侧边面板已隐藏/置空，跳过（避免 fileMeta 越界）
+    const altMode = (window.sbProject && window.sbProject.isProjectMode()) || sbIsPseudoPath(path);
+    if (!altMode) {
+      // 反向链接：其它笔记包含 [[当前名片段]]
+      renderBacklinks();
+      // 文件属性：文档 id / 路径 / 索引分块起止规则
+      renderFileProps();
+    }
   }
 
   /* 选择编辑子节点（WYSIWYG / IR）：委托 vditor 切换并进入编辑模式。
@@ -352,10 +372,17 @@
     // 先绑定目录区/侧边面板拖拽条：即使下面装载/渲染异常也保证可拖动调宽
     bindTreeResizer();
     bindSideResizer();
+    // 项目窗口识别：经 preload 探测当前窗口是否为「打开项目」工作区（非知识库）
+    if (window.sbProject) { try { await window.sbProject.detect(); } catch (_) { /* 忽略 */ } }
     let notes = [];
-    try { notes = await noteStore.list(); }
-    catch (err) { console.error('[noteStore.list] 失败：', err); }
-    edNotes = notes.sort((a, b) => (a.path).localeCompare(b.path, 'zh'));
+    // 项目模式：不走知识库笔记索引，改为项目文件树（相对项目根的 rel 路径，复用既有渲染）
+    if (window.sbProject && window.sbProject.isProjectMode()) {
+      edNotes = (await window.sbProject.list()).sort((a, b) => a.path.localeCompare(b.path, 'zh'));
+    } else {
+      try { notes = await noteStore.list(); }
+      catch (err) { console.error('[noteStore.list] 失败：', err); }
+      edNotes = notes.sort((a, b) => (a.path).localeCompare(b.path, 'zh'));
+    }
     renderFileTree(edNotes);
     // 绑定文件树点击 / 搜索
     const tree = $('file-tree');
@@ -601,7 +628,9 @@
     if (back) back.addEventListener('click', function (e) { const t = e.target.closest('[data-open]'); if (t) openNote(t.dataset.open); });
     // 启动恢复：优先读取 .second-brain/recent.json 中上次打开的笔记（多个标签）；
     // 其次图谱跳转目标；都无则打开第一篇。均已打开则保持不变。
-    if (!edCurrent) {
+    // 项目模式不走知识库 recent 恢复，改由 sbProject.applyUi 打开默认(Git变更)文件。
+    const inProject = !!(window.sbProject && window.sbProject.isProjectMode());
+    if (!edCurrent && !inProject) {
       const nd = window.noteDesktop || {};
       const gp = window.__openGraphPath;
       let tabs = [], pinned = [];
@@ -680,5 +709,9 @@
       renderFileTree(edNotes);
       const idxPanel2 = $('ed-index-panel');
       if (idxPanel2 && !idxPanel2.hidden) renderIndexPanel();
+    }
+    // 项目模式收尾：隐藏知识库专属 UI、默认打开 Git 变更文件（若已因其它分支打开了文件则跳过）
+    if (window.sbProject && window.sbProject.applyUi && window.sbProject.isProjectMode()) {
+      await window.sbProject.applyUi();
     }
   }

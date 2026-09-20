@@ -4,7 +4,7 @@
  * 功能: 在 contextIsolation 下安全地向渲染进程
  *       暴露最小化的窗口控制接口
  * ============================================ */
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('noteDesktop', {
   /** 最小化窗口 */
@@ -26,6 +26,24 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   onMainLog: (cb) => ipcRenderer.on('main:log', (_e, text) => cb && cb(text)),
   /** 打开运行日志目录（主进程错误弹窗「打开日志目录」按钮用，文件管理器定位到 logs/） */
   openLogDir: () => ipcRenderer.invoke('shell:openLogDir'),
+  /** 获取当前日志目录（设置页展示用；仅目录，不含文件名） */
+  getLogDir: () => ipcRenderer.invoke('app:getLogDir'),
+  /** 读取某份日志内容：type='info'|'error'，返回末段文本 */
+  readLog: (type) => ipcRenderer.invoke('app:readLog', type),
+  /** 设置自定义日志目录（空串回退默认 userData/logs）；返回日志目录 */
+  setLogDir: (dir) => ipcRenderer.invoke('app:setLogDir', dir),
+  /** 用系统目录选择器选择日志目录；返回选中目录路径，取消返回空串 */
+  chooseLogDir: () => ipcRenderer.invoke('app:chooseLogDir'),
+  /** 打开（或聚焦）独立日志查看浮窗（frameless，可拖出主窗口） */
+  openLogViewer: () => ipcRenderer.invoke('app:openLogViewer'),
+  /** 关闭独立日志查看浮窗 */
+  closeLogViewer: () => ipcRenderer.invoke('app:closeLogViewer'),
+  /** 获取单日志文件大小上限（MB） */
+  getLogMaxMB: () => ipcRenderer.invoke('app:getLogMaxMB'),
+  /** 设置单日志文件大小上限（MB）：校验通过后持久化，返回新值 */
+  setLogMaxMB: (mb) => ipcRenderer.invoke('app:setLogMaxMB', mb),
+  /** 清空指定日志文件内容：type='info'|'error'（只清文件文本，不删文件/不删 .1 历史） */
+  clearLogFile: (type) => ipcRenderer.invoke('app:clearLogFile', type),
   /** 同步确认对话框（window.confirm 的 Electron 实现，返回是否确定） */
   confirm: (msg) => ipcRenderer.sendSync('dialog:confirm', msg),
   /** 列出笔记库全部笔记：挂起返回 [{path,name,folder,mtime,size}] */
@@ -82,6 +100,50 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   removeVault: (dir) => ipcRenderer.invoke('vault:remove', dir),
   /** 恢复默认笔记库（userData/vault 或已迁移后的新默认库），返回 {path, name, history} */
   resetVault: () => ipcRenderer.invoke('vault:reset'),
+
+  /* ---------- 「打开项目」工作区桥接（非知识库，git 项目；不建笔记/向量索引） ---------- */
+  project: {
+    /** 弹目录选择器打开一个 git 项目目录作为非库工作区，返回 {canceled, path, name, windowOpened} */
+    open: () => ipcRenderer.invoke('project:open'),
+    /** 最近打开的项目列表：[{path, name}]（库下拉「一般项目」分组） */
+    listRecent: () => ipcRenderer.invoke('project:listRecent'),
+    /** 按绝对路径打开（或聚焦）一个项目窗口：absPath → {ok, path, name, windowOpened} */
+    openPath: (absPath) => ipcRenderer.invoke('project:openPath', absPath),
+    /** 当前窗口项目根（非项目窗口返回 null，用于渲染端判定项目模式） */
+    current: () => ipcRenderer.invoke('project:current'),
+    /** 项目文件树：[{rel,name,folder,size,mtime,isBinary}]（相对项目根） */
+    list: () => ipcRenderer.invoke('project:list'),
+    /** 读取项目文本文件：{rel} → {ok, content, binary, name, error} */
+    read: (rel) => ipcRenderer.invoke('project:read', rel),
+    /** 保存项目文本文件：{rel, content} → {ok, error} */
+    save: (rel, content) => ipcRenderer.invoke('project:save', { rel: rel, content: content }),
+    /** 项目 git 状态：{ok, repo, status:{rel:code}}（status --porcelain 解析） */
+    gitStatus: () => ipcRenderer.invoke('project:gitStatus'),
+    /** 在系统文件管理器中显示项目文件 */
+    reveal: (rel) => ipcRenderer.invoke('project:reveal', rel),
+  },
+
+  /* ---------- 文件拖拽临时打开（只读；不写库、不建索引） ---------- */
+  /** 从拖拽入窗口的 File 对象解析真实绝对路径（Electron webUtils）。参数为 renderer 侧 File。
+      返回值是绝对路径字符串；解析失败返回空串。作者: 火 冰 */
+  getPathForFile: (file) => {
+    try { return webUtils ? webUtils.getPathForFile(file) : ''; }
+    catch (_) { return ''; }
+  },
+  /** 读取外部临时文件内容：{absPath} → {ok, path, name, content, binary, error}（≤5MB） */
+  readFileExternal: (absPath) => ipcRenderer.invoke('notes:readFileExternal', { absPath: absPath }),
+  /** 在系统文件管理器中显示外部临时文件 */
+  revealExternal: (absPath) => ipcRenderer.invoke('notes:revealExternal', absPath),
+
+  /* ---------- 最近打开的临时文件（全局、跨知识库，最多 10 条；库下拉「最近打开」二级） ---------- */
+  tempRecent: {
+    /** 读取最近临时文件列表：[{path, name}] */
+    load: () => ipcRenderer.invoke('temp:recentLoad'),
+    /** 登记一个临时文件（去重置顶），返回最新列表 */
+    record: (absPath) => ipcRenderer.invoke('temp:recentRecord', absPath),
+    /** 从最近列表移除，返回最新列表 */
+    remove: (absPath) => ipcRenderer.invoke('temp:recentRemove', absPath),
+  },
 
   /* ---------- 插件目录桥接 ---------- */
   plugins: {

@@ -125,6 +125,10 @@ const vaultWinId = new Map();
 let activeVault = null;
 const vaultCtx = new AsyncLocalStorage(); // IPC 请求上下文：链内 vaultRoot() 按发起窗口解析
 
+/* 项目窗口状态：webContentsId → 项目根路径。项目为「非知识库工作区」，
+ * 不建笔记索引/向量索引，文件树展示项目内全部文本文件，可编辑 + git 状态。 */
+const winProjects = new Map();
+
 /* 从 IPC event 定位发起窗口（renderer → BrowserWindow），取不到返回 null */
 function winFromEvent(event) {
   const wc = event && event.sender;
@@ -193,16 +197,29 @@ function vaultHandle(channel, fn) {
 }
 
 /* 创建主窗口。vaultPath 为可选知识库路径：null/undefined=跟随默认库「我的笔记库」。
- * 同库已有窗口时不重复创建（聚焦旧窗口并返回 null）。 */
-function createWindow(vaultPath) {
+ * opts 可传 { project }：以「项目工作区」模式打开（非知识库，不建索引）。
+ * 同库/同项目已有窗口时不重复创建（聚焦旧窗口并返回 null）。 */
+function createWindow(vaultPath, opts) {
+  const projectPath = (opts && typeof opts.project === 'string' && opts.project) ? path.resolve(opts.project) : null;
   // 窗口绑定自己的知识库（null=跟随默认库）；切到默认库路径时也归一为 null（显示「我的笔记库」）
-  const bindingRaw = (vaultPath == null || vaultPath === '') ? null : path.resolve(vaultPath);
+  const bindingRaw = (projectPath || vaultPath == null || vaultPath === '') ? null : path.resolve(vaultPath);
   const binding = (bindingRaw && bindingRaw.toLowerCase() === defaultVaultRoot().toLowerCase()) ? null : bindingRaw;
+  // 项目窗口独立于知识库单窗口映射：按项目根去重（复用 vaultKey 忽略大小写）
+  const projKey = projectPath ? ('proj::' + vaultKey(projectPath)) : null;
+  if (projKey) {
+    for (const [winId, pp] of winProjects) {
+      if (pp && vaultKey(pp) === projKey) {
+        const ex = BrowserWindow.fromId(winId);
+        if (ex && !ex.isDestroyed()) { showWindow(ex); return null; }
+        winProjects.delete(winId);
+      }
+    }
+  }
   // 单库单窗口：无论默认库还是命名库都按「库 key」查已开窗口，命中则聚焦旧窗口（Bug-058 修复默认库也会新开窗口的回归）
   // 默认库 key 与 syncVaultWinMap 登记口径一致：null → vaultKey(defaultVaultRoot())
   const key = vaultKey(binding || defaultVaultRoot());
   const existId = vaultWinId.get(key);
-  if (existId !== undefined) {
+  if (!projectPath && existId !== undefined) {
     const ex = BrowserWindow.fromId(existId);
     if (ex && !ex.isDestroyed()) { showWindow(ex); return null; }
     vaultWinId.delete(existId);
@@ -212,7 +229,7 @@ function createWindow(vaultPath) {
     height: 820,
     minWidth: 900,
     minHeight: 600,
-    title: '第二脑 · ' + (binding ? path.basename(binding) : '我的笔记库'), // 多窗口标题带库名，便于任务栏区分
+    title: '第二脑 · ' + (projectPath ? ('项目：' + path.basename(projectPath)) : (binding ? path.basename(binding) : '我的笔记库')), // 项目/库名用于标题、任务栏区分
     backgroundColor: '#1E1E2E',
     show: false,             // 待首帧渲染完成后才显示窗口，避免先露出深色窗口背景（Bug-041 消除首屏闪烁）
     frame: false,            // 移除系统标题栏，由前端自绘 Windows 风格标题栏
@@ -230,15 +247,21 @@ function createWindow(vaultPath) {
   });
   _slog('browserwindow_created');
 
-  // 登记窗口 ↔ 知识库绑定（null=默认库），并刷新单库单窗口映射
+  // 登记窗口 ↔ 知识库/项目绑定（null=默认库），并刷新单库单窗口映射
   // 提前缓存 webContents.id：窗口销毁后（closed 回调里）webContents 已不可访问，
   // 直接访问会抛「Object has been destroyed」（Bug-053），故一律使用缓存的 wcId。
   const wcId = win.webContents.id;
-  winVaults.set(wcId, binding);
-  syncVaultWinMap();
+  if (projectPath) {
+    winProjects.set(wcId, projectPath); // 项目窗口独立登记，不参与知识库单窗口映射
+  } else {
+    winVaults.set(wcId, binding);
+    syncVaultWinMap();
+  }
 
-  // 通过自定义协议加载首页；query 携带库路径（信息性，渲染端仍以 vault:get 为准）
-  win.loadURL('note://local/index.html' + (binding ? '?vault=' + encodeURIComponent(binding) : ''));
+  // 通过自定义协议加载首页；query 携带库/项目路径（信息性，渲染端仍以 vault:get / ?project= 为准）
+  const qp = projectPath ? ('?project=' + encodeURIComponent(projectPath))
+    : (binding ? '?vault=' + encodeURIComponent(binding) : '');
+  win.loadURL('note://local/index.html' + qp);
 
   // 窗口就绪后再显示：后台加载渲染完成首帧后才 show()，
   // 不再让深色 backgroundColor 抢在浅色 body（首屏同步脚本已设 html.light）之前露出（Bug-041 窗口层根因）。
@@ -287,21 +310,22 @@ function createWindow(vaultPath) {
     e.preventDefault();
   });
 
-  // 窗口关闭：释放窗口 ↔ 库绑定，刷新单库单窗口映射。
+  // 窗口关闭：释放窗口 ↔ 库/项目绑定，刷新单库单窗口映射。
   // 注意：closed 触发时窗口已销毁，webContents 不可访问（会抛「Object has been destroyed」Bug-053），
   // 必须用创建时缓存的 wcId 而非 win.webContents.id。
   win.on('closed', function () {
     winVaults.delete(wcId);
+    winProjects.delete(wcId);
     syncVaultWinMap();
     if (mainWin === win) mainWin = null;
-    refreshTrayMenu(); // 窗口关闭后刷新托盘知识库列表
+    refreshTrayMenu(); // 窗口关闭后刷新托盘知识库/项目列表
   });
-  // 窗口聚焦：记录为最近活动库（供 note:// 协议等无窗口上下文解析）
+  // 窗口聚焦：记录为最近活动库/项目（供 note:// 协议等无窗口上下文解析）
   win.on('focus', function () {
-    activeVault = winVaults.get(wcId) || null;
+    activeVault = winProjects.has(wcId) ? winProjects.get(wcId) : (winVaults.get(wcId) || null);
   });
   mainWin = win;
-  refreshTrayMenu(); // 窗口创建后刷新托盘知识库列表（启动时 createTray 前调用会被 if(!tray) 安全跳过）
+  refreshTrayMenu(); // 窗口创建后刷新托盘知识库/项目列表（启动时 createTray 前调用会被 if(!tray) 安全跳过）
   return win;
 }
 
@@ -415,9 +439,10 @@ function createTray() {
   tray.on('double-click', showMainWindow);
 }
 
-/** 刷新托盘右键菜单：列出全部知识库（默认库 + 当前各窗口打开的库 + 历史库，去重），
- * 点击在对应库的新主窗口打开（该库已有窗口则聚焦旧窗口，单库单窗口）；尾部为「显示主窗口/退出」。
- * 在启动、窗口创建/关闭、库切换/迁移/移除时调用，保证列表实时与当前库一致。
+/** 刷新托盘右键菜单：列出全部知识库（默认库 + 当前各窗口打开的库 + 历史库，去重）与
+ * 「一般项目」（winProjects 中打开的非知识库工作区）。
+ * 点击库/项目在对应窗口打开（已存在则该类窗口聚焦旧窗口）；尾部为「显示主窗口/退出」。
+ * 在启动、窗口创建/关闭、库切换/迁移/移除时调用，保证列表实时与当前一致。
  * 作者: 火 冰 */
 function refreshTrayMenu() {
   if (!tray) return;
@@ -442,6 +467,24 @@ function refreshTrayMenu() {
   (vaultHistory || []).forEach(function (h) {
     if (h && typeof h.path === 'string' && fs.existsSync(h.path)) pushVault(h.path, h.name || path.basename(h.path));
   });
+  // 4) 一般项目（非知识库工作区）：二级子菜单展开，点击聚焦/新开项目窗口
+  const projWins = [];
+  for (const [winId, pp] of winProjects) {
+    const w = BrowserWindow.fromId(winId);
+    if (pp && w && !w.isDestroyed()) projWins.push({ winId: winId, pp: pp });
+  }
+  if (projWins.length) {
+    if (items.length) items.push({ type: 'separator' });
+    items.push({
+      label: '一般项目',
+      submenu: projWins.map(function (pw) {
+        return {
+          label: path.basename(pw.pp) || pw.pp,
+          click: function () { const w = BrowserWindow.fromId(pw.winId); if (w && !w.isDestroyed()) showWindow(w); },
+        };
+      }),
+    });
+  }
   if (items.length) items.push({ type: 'separator' });
   items.push({ label: '显示主窗口', click: showMainWindow });
   items.push({ type: 'separator' });
@@ -450,26 +493,40 @@ function refreshTrayMenu() {
 }
 
 /* ---------- 运行日志落盘 ---------- */
-/* 前端 window.onerror / unhandledrejection 以及主动日志统一经 IPC 落到
- * userData/logs/app.log，便于排查界面空白、按钮失效等运行时问题。
+/* 前端 window.onerror / unhandledrejection 以及主动日志统一经 IPC 落到运行日志
+ * （默认 userData/logs，可在设置中自定义日志目录）：普通日志 app.log、错误日志
+ * error.log 分开落盘，便于「日志查看」弹框分别切换查看与排障。
  * 作者: 火 冰 */
-const LOG_MAX_BYTES = 5 * 1024 * 1024; // 单日志文件上限 5MB，超出轮换为 .1
-function logFile() { return path.join(app.getPath('userData'), 'logs', 'app.log'); }
+let logMaxMB = 5; // 单日志文件上限（MB），超限自动轮换为 .1；可在设置中配置，默认 5
+const LOG_MAX_BYTES = function () { return logMaxMB * 1024 * 1024; }; // 计算当前单文件字节阈值
+let logDir = ''; // 运行日志目录：默认 userData/logs，可在设置中自定义（空=默认；仅目录，不含文件名）
+/* 返回日志目录（可配置，空回退默认）；此目录同时承载 app.log 与 error.log */
+function logBaseDir() {
+  return (logDir && String(logDir).trim()) ? String(logDir).trim() : path.join(app.getPath('userData'), 'logs');
+}
+/* 普通运行日志文件（info/warn） */
+function logFile() { return path.join(logBaseDir(), 'app.log'); }
+/* 错误日志文件（error/fatal，单独落盘便于切换查看） */
+function logErrorFile() { return path.join(logBaseDir(), 'error.log'); }
+/* 追加一行日志到指定文件（含目录创建与超限轮换） */
+function writeLogLine(f, line) {
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  if (fs.existsSync(f) && fs.statSync(f).size > LOG_MAX_BYTES()) {
+    try { fs.renameSync(f, f + '.1'); } catch (_) { /* 轮换冲突时忽略，继续追加 */ }
+  }
+  fs.appendFileSync(f, line, 'utf8');
+}
 function appendLog(payload) {
   try {
     const t = new Date();
     const p2 = n => String(n).padStart(2, '0');
     const ts = t.getFullYear() + '-' + p2(t.getMonth() + 1) + '-' + p2(t.getDate()) + ' '
       + p2(t.getHours()) + ':' + p2(t.getMinutes()) + ':' + p2(t.getSeconds()) + '.' + String(t.getMilliseconds()).padStart(3, '0');
-    const level = (payload && payload.level) || 'info';
+    const level = String((payload && payload.level) || 'info');
     const line = '[' + ts + '] [' + level + '] ' + ((payload && payload.msg) || '')
       + ((payload && payload.detail) ? ('\n  detail: ' + payload.detail) : '') + '\n';
-    const f = logFile();
-    fs.mkdirSync(path.dirname(f), { recursive: true });
-    if (fs.existsSync(f) && fs.statSync(f).size > LOG_MAX_BYTES) {
-      try { fs.renameSync(f, f + '.1'); } catch (_) { /* 轮换冲突时忽略，继续追加 */ }
-    }
-    fs.appendFileSync(f, line, 'utf8');
+    // error/fatal 错误流单独落盘；其余写入普通日志
+    writeLogLine((level === 'error' || level === 'fatal') ? logErrorFile() : logFile(), line);
   } catch (_) { /* 日志落盘失败不阻断主进程 */ }
 }
 ipcMain.on('app:log', (_e, p) => { appendLog(p || {}); });
@@ -485,6 +542,97 @@ let errWin = null; // 错误弹窗单例（重复异常仅聚焦已有弹窗）
 ipcMain.handle('shell:openLogDir', async () => {
   try { await shell.openPath(path.dirname(logFile())); } catch (_) { /* 打开失败忽略 */ }
   return true;
+});
+
+/* 获取当前日志目录（设置页展示用；仅目录，不含文件名） */
+ipcMain.handle('app:getLogDir', (_e) => logBaseDir());
+/* 设置自定义日志目录：保存并持久化到 settings.json；返回当前日志目录 */
+ipcMain.handle('app:setLogDir', (_e, dir) => {
+  const d = (dir && typeof dir === 'string') ? String(dir).trim() : '';
+  logDir = d; // 空串回退默认目录
+  saveConfig();
+  return logBaseDir();
+});
+/* 读取某份日志内容：type = 'info' | 'error'；返回末段文本（末 N 行），文件不存在返回空串。
+ * 复选框/实时/筛选均在渲染端完成，主进程只做按需读取。 */
+ipcMain.handle('app:readLog', (_e, type) => {
+  const f = (type === 'error') ? logErrorFile() : logFile();
+  try {
+    if (!fs.existsSync(f)) return '';
+    const raw = fs.readFileSync(f, 'utf8');
+    const lines = raw.split(/\r?\n/).filter(Boolean);
+    return lines.slice(-500).join('\n'); // 只取末段，避免弹超大文本
+  } catch (_) { return ''; }
+});
+/* ---------- 日志查看浮窗（独立 frameless 窗口，可拖出主窗口） ----------
+ * 日志查看原本是设置页内的 DOM 弹框，被主窗口边界裁剪无法拖出。
+ * 这里改建成独立无边框窗口，自绘标题栏用 -webkit-app-region: drag 实现系统级拖拽，
+ * 可自由移动到主窗口外，实时滚动查看日志。作者: 火 冰 */
+let logViewerWin = null; // 日志查看浮窗单例（重复打开仅聚焦）
+
+/* 打开（或聚焦）日志查看浮窗：已存在则 show+focus，不存在则新建独立 frameless 窗口 */
+function openLogViewer() {
+  try {
+    if (logViewerWin && !logViewerWin.isDestroyed()) { logViewerWin.show(); logViewerWin.focus(); return true; }
+    logViewerWin = new BrowserWindow({
+      width: 760, height: 560, minWidth: 480, minHeight: 320,
+      title: '第二脑 · 运行日志',
+      backgroundColor: '#1E1E2E',
+      show: false,
+      frame: false,            // 无系统边框，自绘标题栏 → 可自由拖出主窗口外
+      titleBarStyle: 'hidden',
+      icon: path.join(ROOT, 'assets', 'icon.png'),
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        preload: path.join(__dirname, 'preload.js'),
+      },
+    });
+    logViewerWin.loadURL('note://local/logview.html');
+    logViewerWin.once('ready-to-show', function () { if (!logViewerWin.isDestroyed()) logViewerWin.show(); });
+    var _lvShowTimer = setTimeout(function () { if (!logViewerWin.isDestroyed() && !logViewerWin.isVisible()) logViewerWin.show(); }, 3000);
+    logViewerWin.webContents.once('did-finish-load', function () { clearTimeout(_lvShowTimer); });
+    logViewerWin.webContents.setWindowOpenHandler(function () { return { action: 'deny' }; });
+    logViewerWin.webContents.on('will-navigate', function (e) { e.preventDefault(); });
+    logViewerWin.on('closed', function () { logViewerWin = null; });
+    return true;
+  } catch (_) { return false; }
+}
+ipcMain.handle('app:openLogViewer', () => openLogViewer());
+/* 关闭日志查看浮窗 */
+ipcMain.handle('app:closeLogViewer', () => {
+  try { if (logViewerWin && !logViewerWin.isDestroyed()) logViewerWin.close(); } catch (_) {}
+  return true;
+});
+/* 获取单日志文件大小上限（MB） */
+ipcMain.handle('app:getLogMaxMB', () => logMaxMB);
+/* 设置单日志文件大小上限（MB）：校验为正数后持久化到 settings.json，返回新值 */
+ipcMain.handle('app:setLogMaxMB', (_e, mb) => {
+  const n = Number(mb);
+  if (!(n >= 1 && n <= 1024)) return logMaxMB; // 非法值不生效，返回当前
+  logMaxMB = Math.round(n);
+  saveConfig();
+  return logMaxMB;
+});
+/* 清空指定日志文件内容（type = 'info' | 'error'）：只清空文件文本，不删除文件、不删除 .1 拆分历史 */
+ipcMain.handle('app:clearLogFile', (_e, type) => {
+  const f = (type === 'error') ? logErrorFile() : logFile();
+  try {
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, '', 'utf8');
+    return true;
+  } catch (_) { return false; }
+});
+
+/* 用系统目录选择器挑选日志目录：返回选中的目录路径，取消返回空串 */
+ipcMain.handle('app:chooseLogDir', async (event) => {
+  try {
+    const r = await dialog.showOpenDialog(winFromEvent(event), {
+      title: '选择日志目录',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return (r && !r.canceled && r.filePaths && r.filePaths[0]) ? r.filePaths[0] : '';
+  } catch (_) { return ''; }
 });
 
 /** 展示可复制错误弹窗：只读 textarea 支持右键复制错误信息，附日志路径 + 打开日志目录。
@@ -510,7 +658,7 @@ function showErrorDialog(title, text) {
       + 'button{padding:6px 14px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer;font-size:13px;}'
       + 'button.primary{background:#2563eb;border-color:#2563eb;color:#fff;}</style></head><body>'
       + '<h2>' + esc(title) + '</h2>'
-      + '<p class="hint">错误信息已写入日志：' + esc(logFile()) + '</p>'
+      + '<p class="hint">错误信息已写入日志：' + esc(logErrorFile()) + '</p>'
       + '<textarea readonly spellcheck="false" onfocus="this.select()" id="err">' + esc(text) + '</textarea>'
       + '<div class="row"><button onclick="doCopy()">复制错误信息</button>'
       + '<button id="openlog" class="primary">打开日志目录</button>'
@@ -593,12 +741,14 @@ function loadConfig() {
       .slice(0, 12);
     if (j && typeof j.closeAction === 'string' && ['confirm', 'quit', 'tray'].indexOf(j.closeAction) !== -1) closeAction = j.closeAction;
     if (j && typeof j.closeAsked === 'boolean') closeAsked = j.closeAsked;
+    if (j && typeof j.logDir === 'string' && j.logDir) logDir = j.logDir;
+    if (j && typeof j.logMaxMB === 'number' && j.logMaxMB > 0) logMaxMB = j.logMaxMB;
   } catch (e) { /* 配置不存在或损坏时回退默认库 */ }
 }
 function saveConfig() {
   try {
     fs.writeFileSync(configFile(), JSON.stringify(
-      { defaultVaultPath: defaultVaultPath, vaultPath: currentVault || null, vaultHistory: vaultHistory, closeAction: closeAction, closeAsked: closeAsked },
+      { defaultVaultPath: defaultVaultPath, vaultPath: currentVault || null, vaultHistory: vaultHistory, closeAction: closeAction, closeAsked: closeAsked, logDir: logDir, logMaxMB: logMaxMB },
       null, 2), 'utf8');
   } catch (e) { /* 写入失败不阻塞 */ }
 }
@@ -1773,6 +1923,70 @@ const GIT_ALLOWED_SUBCMDS = new Set([
   'remote', 'push', 'pull', 'rev-parse', 'ls-files', 'ls-remote', 'config', 'checkout', 'clean', 'reset',
 ]);
 
+/* 每个知识库根的 git 执行串行队列（value=前序 promise）：保证同一仓库的 git 命令
+ * 排队串行执行，避免实时提交/手动提交等并发触发「cannot lock ref」锁冲突。作者: 火 冰 */
+const GIT_QUEUES = new Map();
+/* 判断 git stderr 是否为「锁文件已存在」类冲突（残留 .lock 或并发占锁） */
+function gitLockConflict(stderr) {
+  return /\.lock'?]\s*File exists|cannot lock ref|Unable to create .*\.lock/i.test(String(stderr || ''));
+}
+/* 清理某仓库 .git 目录下残留的锁文件（refs/HEAD/index 等 .lock），
+ * 仅当判定为锁冲突且无并发写入时才调用（配合串行队列），杜绝手动删除导致损坏。
+ * 作者: 火 冰 */
+function removeStaleGitLocks(cwd) {
+  const gitDir = path.join(cwd, '.git');
+  if (!fs.existsSync(gitDir)) return;
+  const walk = function (dir) {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return []; }
+    entries.forEach(function (ent) {
+      const p = path.join(dir, ent.name);
+      if (ent.isDirectory()) walk(p);
+      else if (/\.lock$/.test(ent.name)) {
+        try { fs.unlinkSync(p); } catch (e) { /* 忽略删除失败 */ }
+      }
+    });
+  };
+  walk(gitDir);
+}
+/* 按 cwd 串行化一块 git 任务（task 为 async 函数），返回该任务结果 */
+function gitEnqueue(cwd, task) {
+  const prev = GIT_QUEUES.get(cwd) || Promise.resolve();
+  const run = prev.then(function () { return task(); }, function () { return task(); });
+  GIT_QUEUES.set(cwd, run.catch(function () { /* 队列链不因单次失败中断 */ }));
+  return run;
+}
+/* 实际执行一次 git 命令（含锁冲突清理并重试一次、失败的日志记录开关）
+ * @param {string} cwd 工作目录
+ * @param {string[]} args git 参数
+ * @param {boolean} logFailure 非零退出是否记录错误日志（探测类 false 噪音小）
+ * @author 火 冰 */
+async function gitExecOnce(cwd, args, logFailure) {
+  const out = await new Promise(function (resolve) {
+    execFile('git', args, { cwd: cwd, timeout: 120000 }, function (err, stdout, stderr) {
+      const code = (err && typeof err.code === 'number') ? err.code : (err ? 1 : 0);
+      resolve({ exit: code, stdout: String(stdout || ''), stderr: String(stderr || (err && err.message) || '') });
+    });
+  });
+  // 锁冲突（残留 .lock）：清理后重试一次
+  if (out.exit !== 0 && gitLockConflict(out.stderr)) {
+    removeStaleGitLocks(cwd);
+    const retry = await new Promise(function (resolve) {
+      execFile('git', args, { cwd: cwd, timeout: 120000 }, function (err, stdout, stderr) {
+        const code = (err && typeof err.code === 'number') ? err.code : (err ? 1 : 0);
+        resolve({ exit: code, stdout: String(stdout || ''), stderr: String(stderr || (err && err.message) || '') });
+      });
+    });
+    if (retry.exit === 0) return retry;
+    out.exit = retry.exit; out.stdout = retry.stdout; out.stderr = retry.stderr;
+  }
+  // git 操作失败（非零退出）记录到运行日志，便于排查同步/推送失败
+  if (out.exit !== 0 && logFailure) {
+    appendLog({ level: 'error', msg: 'git 操作失败: git ' + args.join(' '), detail: 'cwd=' + cwd + (out.stderr ? '\nstderr: ' + out.stderr : '') });
+  }
+  return out;
+}
+
 /* 校验并执行一条 git 命令：req = { cwd, args }。返回 { exit, stdout, stderr }。
  * 任一校验失败返回 { exit: -1, stderr: 描述 }，不抛给渲染进程裸异常。 */
 async function gitRun(req) {
@@ -1794,12 +2008,9 @@ async function gitRun(req) {
   }
   // reset 仅允许软/混合回退（不动工作区），禁止 --hard 以免丢失工作区改动
   if (args[0] === 'reset' && args.includes('--hard')) return { exit: -1, stderr: 'git reset 不允许 --hard（拒绝危险回退）' };
-  return await new Promise(function (resolve) {
-    execFile('git', args, { cwd: cwd, timeout: 120000 }, function (err, stdout, stderr) {
-      const code = (err && typeof err.code === 'number') ? err.code : (err ? 1 : 0);
-      resolve({ exit: code, stdout: String(stdout || ''), stderr: String(stderr || (err && err.message) || '') });
-    });
-  });
+  // 校验通过：进入该仓库的串行队列执行；logFailure 默认为 true（探测类命令传 false 避免噪音）
+  const logFailure = req.logFailure !== false;
+  return await gitEnqueue(cwd, function () { return gitExecOnce(cwd, args, logFailure); });
 }
 
 /* Git Sync 插件：执行一条 git 命令（白名单收口 + cwd 锁定到知识库根） */
@@ -1815,14 +2026,16 @@ vaultHandle('git:check', async (event) => {
     });
   });
   if (!ver) return { installed: false, isRepo: false };
-  const status = await gitRun({ cwd: cwd, args: ['status'] });
+  // 非仓库时 status 返回非 0；以 status 结果为准（仓库已有 .git 但首无提交也视为 isRepo）。
+  // 探测类命令传 logFailure:false：无远程/无分支等属预期状态，不当作错误记日志。
+  const status = await gitRun({ cwd: cwd, args: ['status'], logFailure: false });
   // 非仓库时 status 返回非 0；以 status 结果为准（仓库已有 .git 但首无提交也视为 isRepo）
   const repoOk = status.exit === 0;
   let branch = '', remote = '';
   if (repoOk) {
-    const b = await gitRun({ cwd: cwd, args: ['rev-parse', '--abbrev-ref', 'HEAD'] });
+    const b = await gitRun({ cwd: cwd, args: ['rev-parse', '--abbrev-ref', 'HEAD'], logFailure: false });
     branch = b.exit === 0 ? b.stdout.trim() : '';
-    const r = await gitRun({ cwd: cwd, args: ['remote', 'get-url', 'origin'] });
+    const r = await gitRun({ cwd: cwd, args: ['remote', 'get-url', 'origin'], logFailure: false });
     remote = r.exit === 0 ? r.stdout.trim() : '';
   }
   return { installed: true, isRepo: repoOk, branch: branch, remote: remote };
@@ -1853,6 +2066,266 @@ vaultHandle('vault:cloneGit', async (event, url) => {
   saveConfig();
   openVaultWindow(target);
   return { canceled: false, path: target, name: name };
+});
+
+/* ============================================
+ * 「打开项目」工作区（非知识库）：窗口=boot 时经 ?project= 进入项目模式
+ * 说明：
+ *   - 项目是普通 git 项目目录，作为只读/可编辑工作区打开，**不建笔记索引/向量索引**。
+ *   - 文件树列出项目内全部文本文件（非仅 .md）；点击文件→project:read 读内容、编辑→project:save 写回。
+ *   - git 状态经 project:gitStatus 拉取（status --porcelain 解析），复用 GIT_ALLOWED_SUBCMDS 白名单。
+ * 作者: 火 冰
+ * ============================================ */
+
+/* 项目文件树最大递归层数 / 单目录项上限，避免超大项目卡死召回 */
+const PROJECT_MAX_DEPTH = 12;
+const PROJECT_MAX_ITEMS = 20000;
+const PROJECT_READ_MAX_BYTES = 5 * 1024 * 1024; // 单文本文件读取上限 5MB
+
+/* 项目打开历史：userData/recent-projects.json，供库下拉「一般项目」分组与托盘引用 */
+function recentProjectsFile() { return path.join(app.getPath('userData'), 'recent-projects.json'); }
+function loadRecentProjects() {
+  try {
+    const j = JSON.parse(fs.readFileSync(recentProjectsFile(), 'utf8'));
+    if (Array.isArray(j)) return j.filter(function (x) { return x && typeof x.path === 'string' && fs.existsSync(x.path); });
+  } catch (_) { /* 文件缺失/损坏返回空 */ }
+  return [];
+}
+let recentProjects = loadRecentProjects();
+function persistRecentProjects() {
+  try { fs.writeFileSync(recentProjectsFile(), JSON.stringify(recentProjects, null, 2), 'utf8'); } catch (_) { /* 忽略写失败 */ }
+}
+/* 登记一个项目到「最近打开」（去重置顶，保留无上限；供库下拉列出全部已打开项目） */
+function recordRecentProject(p) {
+  recentProjects = recentProjects.filter(function (x) { return x.path !== p; });
+  recentProjects.unshift({ path: p, name: path.basename(p) || p });
+  persistRecentProjects();
+}
+
+/* 递归收集项目目录文件树（跳过 .git 与常见元数据目录、二进制文件标 isBinary）
+ * @returns {Array<{rel,name,folder,size,mtime,isBinary}>} */
+async function walkProject(root) {
+  const out = [];
+  const seen = new Set();
+  async function walk(dir, rel, depth) {
+    if (depth > PROJECT_MAX_DEPTH || out.length >= PROJECT_MAX_ITEMS) return;
+    let entries;
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
+    catch (_) { return; }
+    entries.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); });
+    for (const it of entries) {
+      if (out.length >= PROJECT_MAX_ITEMS) return;
+      const name = it.name;
+      if (it.isDirectory()) {
+        if (name === '.git' || name === '.second-brain' || name === 'node_modules' || name === '.idea' || name === '.vscode') continue;
+        const r = rel ? (rel + '/' + name) : name;
+        out.push({ rel: r, name: name, folder: true, size: 0, mtime: 0, isBinary: false });
+        seen.add(r.toLowerCase());
+        await walk(path.join(dir, name), r, depth + 1);
+      } else if (it.isFile()) {
+        const r = rel ? (rel + '/' + name) : name;
+        let stat = null;
+        try { stat = await fs.promises.stat(path.join(dir, name)); } catch (_) { /* 忽略 */ }
+        out.push({ rel: r, name: name, folder: false, size: stat ? stat.size : 0, mtime: stat ? Math.floor(stat.mtimeMs) : 0, isBinary: false });
+      }
+    }
+  }
+  await walk(root, '', 0);
+  // 标记二进制（只探测文本文件，遇 null 字节视为二进制）
+  for (const f of out) {
+    if (f.folder) continue;
+    try {
+      const fd = await fs.promises.open(path.join(root, ...f.rel.split('/')), 'r');
+      const buf = Buffer.alloc(4096);
+      const { bytesRead } = await fd.read(buf, 0, 4096, 0);
+      await fd.close();
+      if (bytesRead > 0 && buf.slice(0, bytesRead).includes(0)) f.isBinary = true;
+    } catch (_) { f.isBinary = true; }
+  }
+  return out;
+}
+
+/* 校验项目相对路径在项目根内，防止 ../ 越权 */
+function resolveProjectRel(projectRoot, rel) {
+  const base = path.resolve(projectRoot);
+  const target = path.resolve(base, ...String(rel || '').split('/'));
+  if (target !== base && !target.startsWith(base + path.sep)) return null;
+  return target;
+}
+
+/* 选择项目目录并作为项目工作区打开（返回 { canceled, path, name }） */
+vaultHandle('project:open', async (event) => {
+  const win = winFromEvent(event);
+  const picked = await dialog.showOpenDialog(win, {
+    title: '选择要打开的项目目录（git 项目工作区，非知识库）',
+    buttonLabel: '打开项目',
+    properties: ['openDirectory'],
+  });
+  if (picked.canceled || !picked.filePaths[0]) return { canceled: true };
+  const p = path.resolve(picked.filePaths[0]);
+  recordRecentProject(p);
+  refreshTrayMenu(); // 项目登记后刷新托盘「一般项目」列表
+  const w = createWindow(null, { project: p });
+  return { canceled: false, path: p, name: path.basename(p) || p, windowOpened: !!w };
+});
+
+/* 返回最近打开的项目列表（库下拉「一般项目」分组 + 托盘引用） */
+vaultHandle('project:listRecent', async () => recentProjects);
+
+/* 按绝对路径打开（或聚焦）一个项目窗口：库下拉「一般项目」历史项点击用。
+ * 路径非空则记录并托盘刷新；已在某个项目窗口打开时聚焦之，否则新开窗口。作者: 火 冰 */
+vaultHandle('project:openPath', async (event, p) => {
+  if (typeof p !== 'string' || !p.trim()) return { ok: false, error: '无效路径' };
+  const abs = path.resolve(p.trim());
+  recordRecentProject(abs);
+  refreshTrayMenu();
+  // 已在该项目窗口打开则聚焦，否则新建
+  let w = null;
+  const all = BrowserWindow.getAllWindows();
+  for (const [wid, proot] of winProjects) {
+    const bw = all.find(b => b && !b.isDestroyed() && b.webContents && b.webContents.id === wid);
+    if (proot === abs && bw) { w = bw; break; }
+  }
+  if (!w) w = createWindow(null, { project: abs });
+  if (w && !w.isDestroyed()) { if (w.isMinimized()) w.restore(); w.focus(); }
+  return { ok: !!w, path: abs, name: path.basename(abs) || abs, windowOpened: !!w };
+});
+
+/* 返回当前窗口项目根（渲染端判定项目模式）；非项目窗口返回 null */
+vaultHandle('project:current', async (event) => {
+  const win = winFromEvent(event);
+  return win ? (winProjects.get(win.webContents.id) ?? null) : null;
+});
+
+/* 返回项目文件树（相对项目根） */
+vaultHandle('project:list', async (event) => {
+  const root = winProjects.get(winFromEvent(event)?.webContents?.id) || null;
+  if (!root) return [];
+  return await walkProject(root);
+});
+
+/* 读取项目文本文件内容：{ rel } → { ok, content, binary, name } */
+vaultHandle('project:read', async (event, rel) => {
+  const root = winProjects.get(winFromEvent(event)?.webContents?.id) || null;
+  if (!root) return { ok: false, error: '非项目窗口' };
+  const abs = resolveProjectRel(root, rel);
+  if (!abs) return { ok: false, error: '非法的项目文件路径' };
+  try {
+    const st = await fs.promises.stat(abs);
+    if (st.isDirectory()) return { ok: false, error: '不能打开目录' };
+    if (st.size > PROJECT_READ_MAX_BYTES) return { ok: false, error: '文件超过 ' + Math.round(PROJECT_READ_MAX_BYTES / 1024 / 1024) + 'MB 限制' };
+    const buf = await fs.promises.readFile(abs);
+    const binary = buf.includes(0);
+    return { ok: true, content: binary ? '' : buf.toString('utf8'), binary: binary, name: path.basename(rel) };
+  } catch (e) { return { ok: false, error: String(e.message || e) }; }
+});
+
+/* 保存项目文本文件内容：{ rel, content } → { ok, error }（禁止写二进制/越权路径） */
+vaultHandle('project:save', async (event, req) => {
+  const root = winProjects.get(winFromEvent(event)?.webContents?.id) || null;
+  if (!root) return { ok: false, error: '非项目窗口' };
+  const rel = req && req.rel;
+  const content = (req && typeof req.content === 'string') ? req.content : null;
+  if (!rel || content == null) return { ok: false, error: '参数缺失' };
+  const abs = resolveProjectRel(root, rel);
+  if (!abs) return { ok: false, error: '非法的项目文件路径' };
+  try {
+    await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+    await fs.promises.writeFile(abs, content, 'utf8');
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String(e.message || e) }; }
+});
+
+/* 项目 git 状态：status --porcelain 解析为 文件相对路径 → 状态码（增/改/删/未跟踪）。
+ * 复用 GIT_ALLOWED_SUBCMDS 白名单，但 cwd=项目根（不经既有 git:run 的知识库锁）。 */
+vaultHandle('project:gitStatus', async (event) => {
+  const root = winProjects.get(winFromEvent(event)?.webContents?.id) || null;
+  if (!root) return { ok: false, repo: false };
+  const r = await gitRun({ cwd: root, args: ['status', '--porcelain'] });
+  if (r.exit !== 0) return { ok: true, repo: false, status: {} };
+  const map = {};
+  const lines = String(r.stdout || '').split('\n');
+  for (const ln of lines) {
+    if (!ln.trim()) continue;
+    const code = ln.slice(0, 2).trim();
+    const p = ln.slice(3).replace(/^"|"$/g, '').replace(/^([^ ]+) -> /, '');
+    if (p) map[p] = code;
+  }
+  return { ok: true, repo: true, status: map };
+});
+
+/* 在资源管理器显示项目文件 */
+vaultHandle('project:reveal', async (event, rel) => {
+  const root = winProjects.get(winFromEvent(event)?.webContents?.id) || null;
+  if (!root) return false;
+  const abs = resolveProjectRel(root, rel);
+  if (!abs) return false;
+  await shell.openPath(abs);
+  return true;
+});
+
+/* ============================================
+ * MD-03：文件拖拽临时打开（只读桥接）
+ * 说明：外部文件拖入窗口→渲染端取绝对路径→本桥接只读文件内容（≤5MB）。
+ * 不写盘、不建索引、不纳入知识库。临时文件的全局「最近打开」记录见下方 temp:* 。
+ * 作者: 火 冰
+ * ============================================ */
+
+/* 读取外部临时文件内容：{ absPath } → { ok, path, name, content, binary, error } */
+vaultHandle('notes:readFileExternal', async (_e, req) => {
+  const absPath = req && typeof req.absPath === 'string' ? req.absPath : null;
+  if (!absPath) return { ok: false, error: '缺少文件路径' };
+  try {
+    const st = await fs.promises.stat(absPath);
+    if (st.isDirectory()) return { ok: false, error: '不能打开目录' };
+    if (st.size > PROJECT_READ_MAX_BYTES) return { ok: false, error: '文件超过 5MB 限制' };
+    const buf = await fs.promises.readFile(absPath);
+    return { ok: true, path: absPath, name: path.basename(absPath), content: buf.toString('utf8'), binary: buf.includes(0) };
+  } catch (e) { return { ok: false, error: String(e.message || e) }; }
+});
+
+/* 在资源管理器显示外部临时文件 */
+vaultHandle('notes:revealExternal', async (_e, absPath) => {
+  if (!absPath || typeof absPath !== 'string') return false;
+  await shell.openPath(absPath);
+  return true;
+});
+
+/* ============================================
+ * 最近打开的临时文件（全局、跨知识库，最多 10 条）
+ * 说明：拖拽临时打开的文件记录在此（userData/recent-temp.json），
+ * 库下拉「最近打开」二级菜单展示，任意知识库窗口/项目窗口均可看到与再次打开。
+ * 作者: 火 冰
+ * ============================================ */
+function recentTempFile() { return path.join(app.getPath('userData'), 'recent-temp.json'); }
+const TEMP_RECENT_MAX = 10;
+function loadRecentTemp() {
+  try {
+    const j = JSON.parse(fs.readFileSync(recentTempFile(), 'utf8'));
+    if (Array.isArray(j)) return j.filter(function (x) { return x && typeof x.path === 'string' && fs.existsSync(x.path); });
+  } catch (_) { /* 缺失返回空 */ }
+  return [];
+}
+let recentTemp = loadRecentTemp();
+function persistRecentTemp() {
+  try { fs.writeFileSync(recentTempFile(), JSON.stringify(recentTemp, null, 2), 'utf8'); } catch (_) { /* 忽略 */ }
+}
+/* 登记一个临时文件到「最近打开」（去重置顶，超出上限截断） */
+function recordRecentTemp(p) {
+  recentTemp = recentTemp.filter(function (x) { return x.path !== p; });
+  recentTemp.unshift({ path: p, name: path.basename(p) || p });
+  if (recentTemp.length > TEMP_RECENT_MAX) recentTemp = recentTemp.slice(0, TEMP_RECENT_MAX);
+  persistRecentTemp();
+}
+vaultHandle('temp:recentLoad', async () => recentTemp);
+vaultHandle('temp:recentRecord', async (_e, absPath) => {
+  if (absPath && typeof absPath === 'string') recordRecentTemp(absPath);
+  return recentTemp.slice(0, TEMP_RECENT_MAX);
+});
+vaultHandle('temp:recentRemove', async (_e, absPath) => {
+  if (absPath && typeof absPath === 'string') recentTemp = recentTemp.filter(function (x) { return x.path !== absPath; });
+  persistRecentTemp();
+  return recentTemp.slice(0, TEMP_RECENT_MAX);
 });
 
 /* 把默认知识库内容迁移到新目录（移动语义：复制成功后清空原默认库）。

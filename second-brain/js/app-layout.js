@@ -246,6 +246,9 @@
    * ============================ */
 
   function init() {
+    // 外部文件拖拽临时打开：绑定全局 dragover/drop + 加载跨知识库「最近打开」临时文件历史
+    if (window.sbTempFiles) { (async function () { try { await window.sbTempFiles.init(); } catch (_) { /* 忽略 */ } })(); }
+
     // 路由监听
     window.addEventListener('hashchange', function () { loadView(getRoute()); });
 

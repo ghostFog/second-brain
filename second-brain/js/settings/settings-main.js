@@ -26,6 +26,7 @@
     if (cat === '插件管理') bindPluginManager(content);
     bindKeyedControls(content);
     bindCloseAction(content);
+    bindLogDir(content);
     bindActionButtons(content);
     bindShortcuts(content);
   }

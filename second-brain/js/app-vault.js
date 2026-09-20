@@ -36,6 +36,13 @@
       if (v && Array.isArray(v.history)) history = v.history;
     } catch (e) { /* 忽略 */ }
 
+    // 「一般项目」列表（已打开/最近打开的非知识库工作区）与「最近打开」临时文件（全局跨知识库）
+    let projects = [], tempRec = [];
+    if (window.noteDesktop) {
+      try { const r = await window.noteDesktop.project.listRecent(); if (Array.isArray(r)) projects = r; } catch (_) { projects = []; }
+      try { const t = await window.noteDesktop.tempRecent.load(); if (Array.isArray(t)) tempRec = t.slice(0, 10); } catch (_) { tempRec = []; }
+    }
+
     const rect = anchor.getBoundingClientRect();
     const dd = document.createElement('div');
     dd.id = 'vault-dropdown';
@@ -84,7 +91,34 @@
     }
     /* 二级菜单按目标库动态生成（append 到 dd 内，复用 dd 点击委托）；delete=仅历史移除，
      * migrate=迁移默认知识库，default=设为新默认库（不迁移）；isCurrent/isDefault 决定展示项与图标 */
+    /* 一般项目：非知识库 git 项目工作区（与知识库分开列出）。点击经 project:openPath 打开/聚焦。 */
     html += '<div class="vault-dropdown-sep"></div>'
+      + '<div class="vault-dropdown-head" data-vault-hist-head><i data-lucide="folder-git-2" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
+      + '<span style="color:var(--note-ink-3)">一般项目</span></div>';
+    if (projects.length) {
+      projects.forEach(function (pj) {
+        const pn = pj.name || pj.path.split(/[\\/]/).pop() || pj.path;
+        html += '<div class="vault-dropdown-item vault-project-item" data-vault-act="open-project-path" data-project-path="' + esc(pj.path) + '" title="' + esc(pj.path) + '">'
+          + '<i data-lucide="briefcase" class="w-4 h-4"></i><span class="vault-h-name">' + esc(pn) + '</span></div>';
+      });
+    } else {
+      html += '<div class="vault-dropdown-item vault-empty-hint" style="color:var(--note-ink-3);cursor:default;">尚未打开项目</div>';
+    }
+    /* 最近打开：全局跨知识库的最近临时文件（最多 10 条），点击临时打开（只读） */
+    html += '<div class="vault-dropdown-sep"></div>'
+      + '<div class="vault-dropdown-head" data-vault-hist-head><i data-lucide="clock-3" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
+      + '<span style="color:var(--note-ink-3)">最近打开</span></div>';
+    if (tempRec.length) {
+      tempRec.forEach(function (t) {
+        html += '<div class="vault-dropdown-item vault-temp-item" data-vault-act="open-temp" data-temp-path="' + esc(t.path) + '" title="' + esc(t.path) + '">'
+          + '<i data-lucide="file-clock" class="w-4 h-4"></i><span class="vault-h-name">' + esc(t.name || t.path) + '</span></div>';
+      });
+    } else {
+      html += '<div class="vault-dropdown-item vault-empty-hint" style="color:var(--note-ink-3);cursor:default;">暂无临时文件</div>';
+    }
+    /* 动作项：打开项目 / 打开知识库 */
+    html += '<div class="vault-dropdown-sep"></div>'
+      + '<div class="vault-dropdown-item" data-vault-act="open-project"><i data-lucide="folder-plus" class="w-4 h-4"></i><span>打开项目…</span></div>'
       + '<div class="vault-dropdown-item" data-vault-act="open"><i data-lucide="folder-open" class="w-4 h-4"></i><span>打开知识库…</span></div>';
     dd.innerHTML = html;
 
@@ -156,7 +190,13 @@
         return;
       }
       const act = e.target && e.target.closest ? e.target.closest('[data-vault-act]') : null;
-      if (act) { closeSubmenu(); onVaultAction.call(act, e); }
+      if (act) {
+        closeSubmenu();
+        const a = act.dataset.vaultAct;
+        // 项目/临时文件动作单独分流（需要元素上的路径属性），其余走知识库动作
+        if (a === 'open-project' || a === 'open-project-path' || a === 'open-temp') openProjectAction(a, act);
+        else onVaultAction.call(act, e);
+      }
     });
     // 点击二级菜单外的任意区域关闭
     document.addEventListener('mousedown', function subCloseHandler(ev) {
@@ -223,6 +263,36 @@
     const res = (act === 'open') ? await bridge.chooseVault() : null;
     if (!res || res.canceled) return;
     // 主进程已新开窗口显示目标库（或聚焦已有窗口），当前窗口保持原知识库，无需重载
+  }
+
+  /* 打开项目动作分流：open-project=弹目录选择器；open-project-path=按历史路径打开/聚焦。
+   * 均在主进程另开项目窗口，当前窗口保持原知识库不变。作者: 火 冰 */
+  async function openProjectAction(act, el) {
+    const bridge = window.noteDesktop;
+    if (!bridge || !bridge.project) return;
+    if (act === 'open-project') {
+      const res = await bridge.project.open();
+      if (!res || res.canceled) { /* 用户取消 */ }
+      return;
+    }
+    if (act === 'open-project-path') {
+      const p = el ? el.getAttribute('data-project-path') : '';
+      if (!p) return;
+      await bridge.project.openPath(p);
+      return;
+    }
+    if (act === 'open-temp') {
+      const p = el ? el.getAttribute('data-temp-path') : '';
+      if (!p) return;
+      // 临时打开需要编辑器视图：先切到编辑器，待装载后再打开
+      const toEditor = (location.hash !== '#/editor') || (document.getElementById('view-root') && !document.getElementById('view-root').querySelector('#file-tree'));
+      if (toEditor) {
+        if (location.hash !== '#/editor') location.hash = '#/editor';
+        setTimeout(function () { if (window.sbTempFiles) window.sbTempFiles.openTemp(p); }, 300);
+      } else if (window.sbTempFiles) {
+        await window.sbTempFiles.openTemp(p);
+      }
+    }
   }
 
   /* 初始化标题栏库选择器：绑定点击 + 显示当前库名 */

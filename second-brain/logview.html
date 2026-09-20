@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>第二脑 · 运行日志</title>
+<style>
+  /* ============================================
+   * 第二脑 — 独立日志查看浮窗页面
+   * 作者: 火 冰
+   * 功能: 承载于 main.js 打开的独立 frameless 窗口（logview.html），
+   *       自绘标题栏（-webkit-app-region: drag）可把整个窗口拖到主窗口外，
+   *       支持普通/错误日志切换、关键字筛选、实时滚动查看。
+   * ============================================ */
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; overflow:hidden; }
+  body {
+    font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background:#1E1E2E; color:#E6E6EA;
+    display:flex; flex-direction:column; user-select:none;
+  }
+  /* 自绘标题栏：整条区域由 -webkit-app-region:drag 支持系统级拖拽，可移出主窗口 */
+  .titlebar {
+    height:44px; flex:0 0 44px; display:flex; align-items:center;
+    justify-content:space-between; padding:0 10px 0 14px;
+    border-bottom:1px solid rgba(255,255,255,0.08);
+    -webkit-app-region: drag; cursor:move;
+  }
+  .titlebar .tabs { display:flex; gap:6px; -webkit-app-region:no-drag; }
+  .titlebar .tab {
+    padding:5px 14px; border-radius:8px; font-size:12px; border:none;
+    background:rgba(255,255,255,0.06); color:#A9A9B3; cursor:pointer;
+  }
+  .titlebar .tab.on { background:#6C5CE7; color:#FFF; }
+  .titlebar .tools { display:flex; align-items:center; gap:12px; -webkit-app-region:no-drag; }
+  .titlebar input#lgfilter {
+    width:200px; padding:6px 12px; border-radius:8px; font-size:12px;
+    background:rgba(255,255,255,0.06); color:#E6E6EA; border:1px solid rgba(255,255,255,0.12);
+    outline:none; user-select:text;
+  }
+  .titlebar input#lgfilter:focus { border-color:#6C5CE7; }
+  .titlebar label.live { display:flex; align-items:center; gap:6px; font-size:12px; color:#A9A9B3; cursor:pointer; }
+  .titlebar .tool-btn {
+    -webkit-app-region:no-drag; padding:5px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.14);
+    background:rgba(255,255,255,0.06); color:#D3D3DA; font-size:12px; cursor:pointer; font-family:inherit;
+  }
+  .titlebar .tool-btn:hover { background:rgba(255,255,255,0.14); color:#FFF; }
+  .titlebar .tool-btn.danger { color:#FF8A87; }
+  .titlebar .tool-btn.danger:hover { background:#E81123; border-color:#E81123; color:#FFF; }
+  .titlebar .win-btn {
+    -webkit-app-region:no-drag; width:30px; height:30px; border-radius:8px; border:none;
+    background:transparent; color:#A9A9B3; font-size:14px; cursor:pointer; line-height:1;
+  }
+  .titlebar .win-btn:hover { background:rgba(255,255,255,0.12); color:#FFF; }
+  .titlebar .win-btn.close:hover { background:#E81123; color:#FFF; }
+  pre#lgbody {
+    flex:1; overflow:auto; padding:14px; margin:0; font-size:12px; line-height:1.7;
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    white-space:pre-wrap; word-break:break-all; user-select:text; color:#B8B8C2;
+  }
+</style>
+</head>
+<body>
+  <div class="titlebar">
+    <div class="tabs">
+      <button class="tab on" data-lt="info">运行日志</button>
+      <button class="tab" data-lt="error">错误日志</button>
+    </div>
+    <div class="tools">
+      <input id="lgfilter" type="text" placeholder="筛选关键字…" spellcheck="false">
+      <label class="live"><input type="checkbox" id="lglive"> 实时</label>
+      <button class="tool-btn" id="lgclear" title="清屏：仅清除界面显示，不删文件">清屏</button>
+      <button class="tool-btn danger" id="lgclean" title="清理：清空当前日志文件内容">清理</button>
+      <button class="win-btn" id="lgmin" title="最小化">—</button>
+      <button class="win-btn close" id="lgclose" title="关闭">✕</button>
+    </div>
+  </div>
+  <pre id="lgbody">(无日志)</pre>
+<script>
+  'use strict';
+  // 独立浮窗的日志查看逻辑：复用主线 same preload（window.noteDesktop）读取日志。
+  // 作者: 火 冰
+  const nd = window.noteDesktop || {};
+
+  let logType = 'info';                     // 当前日志类型：info | error
+  let liveTimer = null;                     // 实时刷新定时器句柄
+  const body   = document.getElementById('lgbody');
+  const tabs   = document.querySelectorAll('.tab');
+  const filter = document.getElementById('lgfilter');
+  const live   = document.getElementById('lglive');
+
+  /** 读取并渲染当前类型 + 关键字的日志；实时时由定时器重复调用。
+   * @author 火 冰 */
+  function refreshLog() {
+    if (!nd.readLog) { body.textContent = '(桌面版才能读取日志)'; return; }
+    nd.readLog(logType).then(function (text) {
+      const kw = (filter.value || '').trim().toLowerCase();
+      let out = text || '';
+      if (kw) out = String(text || '').split('\n').filter(function (l) { return l.toLowerCase().indexOf(kw) !== -1; }).join('\n');
+      body.textContent = out || '(无日志)';
+      if (live.checked) body.scrollTop = body.scrollHeight;  // 实时自动滚底
+    }).catch(function () { body.textContent = '(读取日志失败)'; });
+  }
+
+  /** 切换日志类型（info/error）并立即刷新；更新 tab 选中态。
+   * @param {string} type 日志类型
+   * @author 火 冰 */
+  function switchLog(type) {
+    logType = type;
+    tabs.forEach(function (t) { t.classList.toggle('on', t.dataset.lt === type); });
+    refreshLog();
+  }
+
+  // 事件绑定
+  tabs.forEach(function (t) { t.addEventListener('click', function () { switchLog(t.dataset.lt); }); });
+  filter.addEventListener('input', refreshLog);                     // 筛选实时生效（不重读磁盘）
+  live.addEventListener('change', function (e) {
+    clearInterval(liveTimer);
+    if (e.target.checked) liveTimer = setInterval(refreshLog, 1500); // 实时轮询
+    else refreshLog();
+  });
+  /** 清屏：只清界面显示（不改文件、不持久化）；清空后，若实时开启则继续从当前点接收新日志。
+   * @author 火 冰 */
+  function clearScreen() {
+    body.textContent = '';            // 清空显示区，不清日志文件
+    if (!live.checked) body.textContent = '(已清屏)';
+  }
+  /** 清理：清空当前日志文件内容；成功后同步清屏并刷新显示。
+   * @author 火 冰 */
+  function cleanFile() {
+    if (!nd.clearLogFile) { body.textContent = '(桌面版才能清理日志文件)'; return; }
+    nd.clearLogFile(logType).then(function (ok) {
+      clearScreen();                  // 文件已清空，界面同步清掉旧内容
+      if (ok && live.checked) refreshLog(); // 实时模式清空后立即刷新（文件已空，显示为空）
+    });
+  }
+  document.getElementById('lgclear').addEventListener('click', clearScreen);
+  document.getElementById('lgclean').addEventListener('click', cleanFile);
+  document.getElementById('lgmin').addEventListener('click', function () { if (nd.minimize) nd.minimize(); });
+  document.getElementById('lgclose').addEventListener('click', function () { if (nd.closeLogViewer) nd.closeLogViewer(); else if (nd.close) nd.close(); });
+
+  // 初始渲染
+  switchLog('info');
+</script>
+</body>
+</html>

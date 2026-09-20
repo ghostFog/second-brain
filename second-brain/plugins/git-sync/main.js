@@ -672,6 +672,35 @@
       });
   }
 
+  /* 目录区/空白区右键「远程路径」：弹框展示当前 origin 并允许修改后保存
+   * @author 火 冰 */
+  async function setRemoteFromCtx() {
+    await refreshVault();
+    let cur = window.__gsRemote || '';
+    const existing = await git(['remote', 'get-url', 'origin']);
+    if (existing.exit === 0 && existing.stdout.trim()) cur = existing.stdout.trim();
+    openModal('设置远程地址',
+      '<div class="gitsync-form">'
+      + '<div class="gitsync-field">远程地址（origin）<input type="text" id="gs-remote-ctx" value="' + escapeHtml(cur) + '" placeholder="https:// 或 git@ 仓库地址"></div>'
+      + '<div class="gitsync-form-actions">'
+      + '<button data-act="cancel">取消</button>'
+      + '<button data-act="save" class="primary">保存</button>'
+      + '</div></div>',
+      function (m) {
+        m.addEventListener('click', function (e) {
+          const actBtn = e.target.closest('[data-act]');
+          if (!actBtn) return;
+          const act = actBtn.getAttribute('data-act');
+          if (act === 'cancel') { closeModal(); return; }
+          if (act === 'save') {
+            const v = (m.querySelector('#gs-remote-ctx').value || '').trim();
+            if (!v) { showToast('请输入远程仓库地址'); return; }
+            saveRemote(v).then(function () { closeModal(); });
+          }
+        });
+      });
+  }
+
   /* 设置/更新远程 origin 地址 */
   async function saveRemote(url) {
     await refreshVault();
@@ -857,10 +886,12 @@
     'gs-ctx-pull': function () { pullNow(); },
     'gs-ctx-push': function () { pushNow(false); },
     'gs-ctx-squash': function () { const p = resolveFileTarget(); if (!p) { showToast('请先右键选择一篇笔记，或打开当前笔记'); return; } squashFile(p); },
+    'gs-ctx-repo-remote': function () { setRemoteFromCtx(); },
     'gs-ctx-repo-commit': function () { commitNow(false); },
     'gs-ctx-repo-squash': function () { squashAll(); },
     'gs-ctx-repo-pull': function () { pullNow(); },
     'gs-ctx-repo-push': function () { pushNow(false); },
+    'gs-ctx-dir-remote': function () { setRemoteFromCtx(); },
     'gs-ctx-dir-commit': function () { const d = resolveDirTarget(); if (d === null) { showToast('请先右键选择目录'); return; } commitDir(d); },
     'gs-ctx-dir-squash': function () { const d = resolveDirTarget(); if (d === null) { showToast('请先右键选择目录'); return; } squashDir(d); },
     'gs-ctx-dir-push': function () { pushNow(false); },

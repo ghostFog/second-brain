@@ -12,6 +12,12 @@
    `知识库.html`、`命令面板.html`、`图谱视图.html`、`插件市场.html`、`设置.html`。
 4. **视觉规范（Design Token）**：`second-brain/css/base.css`。
 
+## 方案文档落点
+
+- **功能/设计方案文档一律放 `design/documents/`**（与 `design/pages/*.html` 同级，都是设计产物）。
+- **不放** `.trae/documents/`（那不是设计文档的固定落点）。
+- 实现一个功能的详细设计先落地为 `design/documents/<功能>.md`，再按需求/开发进度登记。
+
 ## 变更前标准动作
 
 1. 先读 `doc/功能需求文档.md` + `doc/设计文档.md` + 对应设计稿，明确视觉与交互目标、扫描是否有遗漏功能点。

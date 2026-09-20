@@ -28,6 +28,43 @@
           const p = pluginData.find(x => x.name === name);
           if (p) { p.installed = false; showToast('已卸载插件：' + name); switchSettings('插件管理'); }
         }
+        else if (act === 'set-logdir') {
+          const input = document.getElementById('gen-logdir');
+          const dir = input ? input.value.trim() : '';
+          const nd = window.noteDesktop || {};
+          if (nd && nd.setLogDir) {
+            nd.setLogDir(dir).then(function (f) {
+              if (input && f) input.value = f;
+              showToast(dir ? '日志目录已设置' : '已恢复默认日志目录');
+            }).catch(function () { showToast('桌面版才能调整日志目录'); });
+          } else { showToast('桌面版才能调整日志目录'); }
+        }
+        else if (act === 'pick-logdir') {
+          const input = document.getElementById('gen-logdir');
+          const nd = window.noteDesktop || {};
+          if (nd && nd.chooseLogDir) {
+            nd.chooseLogDir().then(function (dir) {
+              if (dir && input) input.value = dir; // 选中后填入输入框，由用户点「保存目录」生效
+            }).catch(function () { /* 取消或失败静默 */ });
+          } else { showToast('桌面版才能选择日志目录'); }
+        }
+        else if (act === 'set-logmax') {
+          const inputM = document.getElementById('gen-logmax');
+          const mb = inputM ? Number(inputM.value) : NaN;
+          const nd = window.noteDesktop || {};
+          if (nd && nd.setLogMaxMB && !isNaN(mb)) {
+            nd.setLogMaxMB(mb).then(function (v) {
+              if (inputM && v) inputM.value = v;
+              showToast('日志单文件大小已设为 ' + v + ' MB');
+            }).catch(function () { showToast('桌面版才能设置日志大小'); });
+          } else { showToast('请输入有效的日志大小（1-1024 MB）'); }
+        }
+        else if (act === 'view-log') {
+          const nd = window.noteDesktop || {};
+          // 桌面版：打开独立日志查看浮窗（frameless，可拖出主窗口）；网页模式回退旧 DOM 弹框
+          if (nd && nd.openLogViewer) { nd.openLogViewer(); }
+          else { viewLogModal(); }
+        }
       });
     });
   }
@@ -203,4 +240,108 @@
         }
       });
     });
+  }
+
+  /* ---------- 日志查看弹框 ----------
+   * 从设置「常规 → 运行日志目录 → 查看」打开：可切换普通日志/错误日志、实时刷新、
+   * 关键字筛选（筛选也实时生效）。作者: 火 冰 */
+  let __logViewTimer = null; // 实时刷新定时器句柄
+  let __logViewType = 'info'; // 当前查看的日志类型：info | error
+
+  /* 读取并渲染一份日志到弹框正文（实时时由定时器重复调用）。
+   * @author 火 冰 */
+  function logViewRefresh() {
+    const nd = window.noteDesktop || {};
+    if (!nd || !nd.readLog) return;
+    const ta = document.getElementById('logview-body');
+    if (!ta) return;
+    nd.readLog(__logViewType).then(function (text) {
+      if (!ta) return;
+      const kw = (document.getElementById('logview-filter') || {}).value || '';
+      const k = kw.trim().toLowerCase();
+      let out = text || '';
+      if (k) out = String(text || '').split('\n').filter(function (l) { return l.toLowerCase().indexOf(k) !== -1; }).join('\n');
+      ta.textContent = out || '(无日志)';
+      // 实时模式下自动滚动到底部
+      if (ta.closest('.logview-box') && ta.closest('.logview-box').dataset.live === '1') {
+        ta.scrollTop = ta.scrollHeight;
+      }
+    }).catch(function () { /* 读取失败静默 */ });
+  }
+  /* 切换日志类型（info/error）并立即刷新 */
+  function logViewSwitch(type) {
+    __logViewType = type;
+    document.querySelectorAll('#logview-tabs [data-lt]').forEach(function (b) {
+      const on = b.dataset.lt === type;
+      b.style.background = on ? 'var(--note-brand-600)' : 'var(--note-surface-2)';
+      b.style.color = on ? '#FFFFFF' : 'var(--note-ink-2)';
+    });
+    logViewRefresh();
+  }
+  /* 打开日志查看弹框 */
+  function viewLogModal() {
+    if (document.getElementById('logview-modal')) return; // 已打开不重复
+    const ov = document.createElement('div');
+    ov.id = 'logview-modal';
+    ov.className = 'logview-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:400;background:rgba(0,0,0,0.45);';
+    ov.innerHTML =
+      '<div class="logview-box" style="position:fixed;left:10vw;top:12vh;width:min(720px,92vw);height:min(520px,80vh);display:flex;flex-direction:column;border-radius:12px;overflow:hidden;background:var(--note-popover);border:1px solid var(--note-border);box-shadow:0 16px 48px rgba(0,0,0,.3);">'
+      + '<div class="logview-titlebar flex items-center justify-between px-4" style="height:48px;border-bottom:1px solid var(--note-border);cursor:move;user-select:none;-webkit-user-select:none;">'
+      + '<div id="logview-tabs" class="flex items-center gap-1.5">'
+      + '<button data-lt="info" class="px-3 py-1 rounded text-[12px]" style="background:var(--note-brand-600);color:#FFF;border:none;cursor:pointer;">运行日志</button>'
+      + '<button data-lt="error" class="px-3 py-1 rounded text-[12px]" style="background:var(--note-surface-2);color:var(--note-ink-2);border:1px solid var(--note-border);cursor:pointer;">错误日志</button>'
+      + '</div>'
+      + '<div class="flex items-center gap-3">'
+      + '<input id="logview-filter" type="text" placeholder="筛选关键字…" class="px-2 py-1 rounded text-[12px] w-40" style="background:var(--note-surface-2);color:var(--note-ink);border:1px solid var(--note-border);outline:none;">'
+      + '<label class="flex items-center gap-1 text-[12px]" style="color:var(--note-ink-2);cursor:pointer;"><input type="checkbox" id="logview-live"> 实时</label>'
+      + '<button data-act="close" class="px-2.5 py-1 rounded text-[12px]" style="background:var(--note-surface-2);color:var(--note-ink-2);border:1px solid var(--note-border);cursor:pointer;">关闭</button>'
+      + '</div></div>'
+      + '<pre id="logview-body" class="flex-1 overflow-auto p-3 text-[12px] leading-relaxed font-mono" style="margin:0;color:var(--note-ink);white-space:pre-wrap;word-break:break-all;"></pre>'
+      + '</div>';
+    document.body.appendChild(ov);
+    const box = ov.querySelector('.logview-box');
+    box.dataset.live = '0';
+    // 关闭
+    ov.querySelector('[data-act="close"]').addEventListener('click', function () { closeLogView(); });
+    // 切换日志类型
+    ov.querySelectorAll('#logview-tabs [data-lt]').forEach(function (b) {
+      b.addEventListener('click', function () { logViewSwitch(b.dataset.lt); });
+    });
+    // 实时开关：开启则轮询刷新，关闭停止
+    ov.querySelector('#logview-live').addEventListener('change', function (e) {
+      box.dataset.live = e.target.checked ? '1' : '0';
+      clearInterval(__logViewTimer);
+      if (e.target.checked) __logViewTimer = setInterval(logViewRefresh, 1500);
+    });
+    // 关键字筛选：input 时实时过滤（已显示内容按关键字过滤，不重读磁盘）
+    ov.querySelector('#logview-filter').addEventListener('input', function () { logViewRefresh(); });
+    // 标题栏拖拽移动弹框（过遮罩伪元素，只响应标题栏）
+    const bar = ov.querySelector('.logview-titlebar');
+    bar.addEventListener('mousedown', function (e) {
+      if (e.target.closest('button, label, input')) return; // 不拦截标题栏内控件
+      const startX = e.clientX, startY = e.clientY;
+      const rect = box.getBoundingClientRect();
+      const sx = rect.left, sy = rect.top;
+      const onMove = function (ev) {
+        box.style.left = (sx + (ev.clientX - startX)) + 'px';
+        box.style.top = (sy + (ev.clientY - startY)) + 'px';
+      };
+      const onUp = function () {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+    // 初始渲染
+    logViewSwitch('info');
+    logViewRefresh();
+  }
+  /* 关闭日志查看弹框并清理定时器 */
+  function closeLogView() {
+    clearInterval(__logViewTimer);
+    __logViewTimer = null;
+    const el = document.getElementById('logview-modal');
+    if (el && el.parentNode) el.parentNode.removeChild(el);
   }

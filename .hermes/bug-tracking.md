@@ -86,6 +86,8 @@
 | CD-46 | 必须 | 任何「按实体归一后以 `null` 代表默认态」的去重/归一逻辑（默认库 `binding=null` 等），其**去重检查不得只写在 `if (binding)` / `if (p)` 等仅覆盖「有值分支」的守卫内**——那样默认态会整个跳过检查，导致默认实体每次都新建资源（多窗口）而非复用；应先算出默认态对应的非空查找键（如 `vaultKey(binding || defaultVaultRoot())`），与登记表口径一致后**无条件**执行查重覆盖全部态 | Bug-059 |
 | CD-47 | 必须 | 渲染结果若依赖「输入框/配置值」的解析（如「已使用」需 `cfgPathValue` 展开 `{modelDir}` 与本地 `localPath` 比较），而回填该值（`fillLocal`）与实际渲染（`renderAllLib`）分属**不同的并行异步链**（如 `getConfig` 回填 vs `getModelLib` 扫描）时，必须在**配置回填完成后主动重绘一次**，不得只依赖异步结果链自身触发——否则竞态下由配置驱动显示的状态（如「已使用」）会丢失且不再刷新 | Bug-060 |
 | CD-48 | 必须 | 凡写入/更新 vault 文件的路径，其**进入向量索引的入口（增量 `updateNote`、全量扫描）必须使用同一套隐藏路径判定**（任一路径段以 `.` 开头即隐藏路径，覆盖 `.gitignore`/`.obsidian`/`.second-brain` 等）；且对历史已误入的脏 chunk 要在**索引加载（`_loadIndexFrom`）与检索（`retrieve`）时兜底过滤**，防止过滤文件/配置类文件污染检索来源 | Bug-061 |
+| CD-49 | 必须 | ① 面向同一仓库目录的 git 写命令（status/add/commit/push/checkout/reset 等）必须经**按 cwd 的串行队列**执行并防重入，观测到 `.lock ... File exists / cannot lock ref` 时先清除 `.git` 下残留 `*.lock` 再重试一次，不得直接失败；② 纯探测类 git 命令（`remote get-url`、分支名等）失败属预期状态，**不得**记入错误日志（调用侧对探测命令传 `logFailure:false`）。**补充**：清理残留锁的正则必须匹配真实文件名样例（`master.lock`/`HEAD.lock` 单点 `.lock` 结构，用 `/\.lock$/`，勿用「点段.lock」式正则） | Bug-062·063 |
+| CD-50 | 必须 | 插件/UI 声明的 **lucide 图标名必须存在于实际打包的 lucide 包内**：改动图标后以包 `icons`（`kebab-case` → PascalCase 键）核对命中，勿凭「看着像」取名；渲染端对缺失图标默认抛 `createIcons` 告警（NDEBUG 下仍进控制台/error 日志） | Bug-063 |
 
 ## 维护要求
 

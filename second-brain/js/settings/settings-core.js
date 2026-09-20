@@ -133,6 +133,28 @@
     });
   }
 
+  /* 绑定「日志目录」输入（#gen-logdir）：
+   * 初值从主进程读取当前日志文件路径填充，点「保存目录」写回主进程持久化。
+   * web 模式无主进程则静默降级。
+   * @param {HTMLElement} content 设置面板容器
+   * @author 火 冰 */
+  function bindLogDir(content) {
+    const input = content && content.querySelector ? content.querySelector('#gen-logdir') : null;
+    if (!input) return;
+    const nd = window.noteDesktop || {};
+    // 从主进程读取当前日志文件路径，回填输入框（点「保存目录」由 bindActionButtons 写回主进程）
+    if (nd && nd.getLogDir) {
+      nd.getLogDir().then(function (v) { if (input && v) input.value = v; })
+        .catch(function () { /* 主进程不可用保持空 */ });
+    }
+    // 回填单日志文件大小上限（MB）到 #gen-logmax 输入框（点「保存」由 bindActionButtons 写回主进程）
+    const maxInput = content && content.querySelector ? content.querySelector('#gen-logmax') : null;
+    if (maxInput && nd && nd.getLogMaxMB) {
+      nd.getLogMaxMB().then(function (v) { if (maxInput && v) maxInput.value = v; })
+        .catch(function () { /* 主进程不可用保持默认 */ });
+    }
+  }
+
   /* 文件类型（编辑器分类）主从交互：左侧选择后缀 → 重建右侧明细，
    * 明细内打开方式下拉单独绑定保存（openAs:<ext>）。
    * @param {HTMLElement} box 设置面板容器 */

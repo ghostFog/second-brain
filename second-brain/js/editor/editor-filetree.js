@@ -84,7 +84,8 @@
     });
     tree.innerHTML = html;
     refreshIcons();
-    // 库统计
+    // 临时文件区：置于文件树最上方（打开外部拖入文件的集中入口）
+    if (typeof sbRenderTempArea === 'function') sbRenderTempArea(tree);
     const stat = $('vault-stat'); if (stat) stat.textContent = '共 ' + notes.length + ' 篇笔记' + (noteStore.isMock() ? ' · 网页演示' : '');
     const sizeEl = $('vault-size');
     if (sizeEl) { const kb = notes.reduce((s, n) => s + (n.size || 0), 0) / 1024; sizeEl.textContent = (kb < 1024 ? kb.toFixed(1) : (kb / 1024).toFixed(1)) + (kb < 1024 ? ' KB' : ' MB'); }
