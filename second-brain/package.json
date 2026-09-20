@@ -1,7 +1,7 @@
 {
   "name": "second-brain",
-  "version": "0.0.1",
-  "description": "第二脑 桌面版 — Obsidian 风格笔记应用 (Electron)",
+  "version": "0.1.0",
+  "description": "第二脑 桌面版 — 辅助个人成长",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
