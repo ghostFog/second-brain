@@ -123,6 +123,25 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     reveal: (rel) => ipcRenderer.invoke('project:reveal', rel),
   },
 
+  /* ---------- 应用安全桥接（SEC-01 启动密码 / SEC-02 超时锁定） ---------- */
+  security: {
+    /** 读取安全状态：{hasPwd, lockEnabled, lockMinutes, unlocked}（不下发任何密码哈希） */
+    getState: () => ipcRenderer.invoke('app:getSecurity'),
+    /** 同步读取启动锁定态（sendSync，首帧前用，避免启动/召回先闪内容再弹密码框） */
+    getStateSync: () => ipcRenderer.sendSync('app:getSecuritySync'),
+    /** 设置/修改/移除密码：data={old?, next?}，返回 {ok, reason?} */
+    setPassword: (data) => ipcRenderer.invoke('app:setPassword', data),
+    /** 解锁校验：传密码返回是否解锁成功 */
+    unlock: (pwd) => ipcRenderer.invoke('app:unlock', pwd),
+    /** 配置超时锁定：data={enabled?, minutes?}，返回最新状态 */
+    setLockConfig: (data) => ipcRenderer.invoke('app:setLockConfig', data),
+    /** 监听主进程锁定推送（桌面端 powerMonitor 超时触发） */
+    onLocked: (cb) => {
+      ipcRenderer.removeAllListeners('app:locked');
+      ipcRenderer.on('app:locked', () => { if (typeof cb === 'function') cb(); });
+    },
+  },
+
   /* ---------- 文件拖拽临时打开（只读；不写库、不建索引） ---------- */
   /** 从拖拽入窗口的 File 对象解析真实绝对路径（Electron webUtils）。参数为 renderer 侧 File。
       返回值是绝对路径字符串；解析失败返回空串。作者: 火 冰 */

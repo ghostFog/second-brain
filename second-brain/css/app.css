@@ -853,3 +853,11 @@ body.ed-fs-active #ed-vditor .vditor { height: 100% !important; }
   white-space: nowrap;
 }
 .sb-ctx-item:hover { background: var(--note-surface-2); color: var(--note-brand-600); }
+/* ---------- 应用安全遮罩（SEC-01 启动密码 / SEC-02 超时锁定） ---------- */
+#lock-screen { position: fixed; inset: 0; z-index: 99999; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(3px); }
+#lock-screen .lock-card { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 300px; padding: 28px 24px; border-radius: var(--note-radius-lg, 12px); text-align: center; }
+#lock-screen .lock-card input:focus { border-color: var(--note-brand-500); }
+#lock-screen .lock-card button { cursor: pointer; transition: opacity 0.15s; }
+#lock-screen .lock-card button:hover { opacity: 0.9; }
+body.locked #lock-screen ~ #view-templates,
+body.locked .app-main { visibility: hidden; }

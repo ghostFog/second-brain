@@ -155,6 +155,73 @@
     }
   }
 
+  /* 绑定「隐私与安全 → 应用密码」区块（SEC-01/02）：
+   * 从主进程读安全状态回填；设置/修改/移除密码写回主进程（scrypt 校验）；
+   * 超时锁定开关与分钟数持久化到主进程。web 模式无主进程则静默降级并提示。
+   * @param {HTMLElement} content 设置面板容器
+   * @author 火 冰 */
+  function bindSecurity(content) {
+    const g = (id) => (content && content.querySelector) ? content.querySelector(id) : null;
+    const status = g('#sec-status'), newEl = g('#sec-pwd-new'), confEl = g('#sec-pwd-confirm'), oldEl = g('#sec-pwd-old');
+    const chk = g('#sec-lock-enable'), minEl = g('#sec-lock-min');
+    const nd = window.noteDesktop || {};
+    if (!status && !chk) return; // 区块未渲染
+    const showToast = function (msg) { try { window.showToast && window.showToast(msg); } catch (e) {} };
+    // 读取安全状态回填
+    const refresh = function (cfg) {
+      if (cfg && typeof cfg.hasPwd === 'boolean') {
+        if (status) { status.textContent = cfg.hasPwd ? '已启用' : '未启用'; status.style.color = cfg.hasPwd ? 'var(--state-success)' : 'var(--note-ink-3)'; }
+        document.querySelector('#sec-group').style.opacity = '1';
+      }
+      if (chk && cfg && typeof cfg.lockEnabled === 'boolean') chk.checked = cfg.lockEnabled;
+      if (minEl && cfg && typeof cfg.lockMinutes === 'number') minEl.value = cfg.lockMinutes;
+    };
+    const seg = nd && nd.security;
+    if (seg && seg.getState) seg.getState().then(refresh).catch(function () { if (status) status.textContent = '不可用'; });
+    else if (status) status.textContent = '网页版不可用';
+    // 设置/修改/移除密码的公共调用
+    const commit = function (action) {
+      if (!seg || !seg.setPassword) { showToast('桌面版才能设置启动密码'); return; }
+      const next = newEl ? newEl.value : '', conf = confEl ? confEl.value : '', old = oldEl ? oldEl.value : '';
+      if (next !== conf) { showToast('两次输入的密码不一致'); return; }
+      if (action === 'set' && next.length < 4) { showToast('新密码至少 4 位'); return; }
+      if (action === 'set' || action === 'change') {
+        if (!next) { showToast('请输入新密码'); return; }
+      }
+      if ((action === 'change' || action === 'remove') && !old) { showToast('修改/移除密码需要输入当前密码'); return; }
+      const data = (action === 'set') ? { next: next } : ((action === 'change') ? { old: old, next: next } : { old: old, next: '' });
+      seg.setPassword(data).then(function (r) {
+        if (r && r.ok) {
+          showToast(action === 'remove' ? '已移除密码' : '密码已保存');
+          if (newEl) newEl.value = ''; if (confEl) confEl.value = ''; if (oldEl) oldEl.value = '';
+          seg.getState().then(refresh).catch(function () {});
+        } else {
+          const reason = r && r.reason;
+          showToast(reason === 'wrong_old' ? '当前密码错误' : (reason === 'too_short' ? '新密码至少 4 位' : '操作失败'));
+        }
+      }).catch(function () { showToast('操作失败'); });
+    };
+    const set = g('[data-saction="sec-set"]'), chg = g('[data-saction="sec-change"]'), rem = g('[data-saction="sec-remove"]');
+    if (set) set.addEventListener('click', function () { commit('set'); });
+    if (chg) chg.addEventListener('click', function () { commit('change'); });
+    if (rem) rem.addEventListener('click', function () { commit('remove'); });
+    // 超时锁定开关与分钟数持久化
+    if (chk && seg && seg.setLockConfig) {
+      chk.addEventListener('change', function () {
+        seg.setLockConfig({ enabled: chk.checked }).catch(function () {});
+        if (chk.checked && (!minEl || !minEl.value)) { minEl && (minEl.value = 10); }
+      });
+    }
+    if (minEl && seg && seg.setLockConfig) {
+      minEl.addEventListener('change', function () {
+        let v = parseInt(minEl.value, 10);
+        if (isNaN(v)) v = 10; if (v < 1) v = 1; if (v > 120) v = 120;
+        minEl.value = v;
+        seg.setLockConfig({ minutes: v }).catch(function () {});
+      });
+    }
+  }
+
   /* 文件类型（编辑器分类）主从交互：左侧选择后缀 → 重建右侧明细，
    * 明细内打开方式下拉单独绑定保存（openAs:<ext>）。
    * @param {HTMLElement} box 设置面板容器 */

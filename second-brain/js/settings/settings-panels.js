@@ -180,6 +180,25 @@
         + tgRow('插件沙箱', '隔离插件权限，降低风险', true, 'pluginSandbox')
         + tgRow('应用通知', '允许应用发送系统通知', false, 'appNotify')
         + tgRow('崩溃报告', '匿名提交崩溃与错误报告', false, 'crashReport')
+        + '</section>'
+        // 应用密码（SEC-01/02）：密码本地 scrypt 哈希存储；开启后启动/超时需输入密码
+        + '<section class="settings-group" id="sec-group">'
+        + '<div class="flex items-center justify-between mb-3"><h3 class="text-body font-semibold" style="color:var(--note-ink);">应用密码</h3><span id="sec-status" class="text-[11px] px-2 py-0.5 rounded-full border" style="border-color:var(--note-border); color:var(--note-ink-3); background:var(--note-surface-2);">检测中…</span></div>'
+        + '<p class="text-caption mb-2" style="color:var(--note-ink-3);">开启后，每次打开应用或超时自动锁定后都需输入密码。密码仅本地存储，忘记无法找回。</p>'
+        + '<div class="border-t pt-3" style="border-color:var(--note-border);">'
+        + '<div class="text-[14px]" style="color:var(--note-ink);">新密码</div><div class="text-caption mb-1" style="color:var(--note-ink-3);">至少 4 位</div>'
+        + '<input type="password" id="sec-pwd-new" placeholder="请输入新密码" autocomplete="off" class="w-full rounded-md px-3 py-2 text-[13px] outline-none mb-2" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);">'
+        + '<input type="password" id="sec-pwd-confirm" placeholder="再次输入确认" autocomplete="off" class="w-full rounded-md px-3 py-2 text-[13px] outline-none mb-2" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);">'
+        + '<div class="text-[14px]" style="color:var(--note-ink);">当前密码</div><div class="text-caption mb-1" style="color:var(--note-ink-3);">设置时留空；修改/移除密码时需要</div>'
+        + '<input type="password" id="sec-pwd-old" placeholder="请输入当前密码" autocomplete="off" class="w-full rounded-md px-3 py-2 text-[13px] outline-none mb-3" style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);">'
+        + '<div class="flex gap-2">'
+        + '<button data-saction="sec-set" class="flex-1 py-2 rounded-md text-[13px] font-medium" style="background:var(--note-brand-600); color:#FFFFFF;">设置密码</button>'
+        + '<button data-saction="sec-change" class="flex-1 py-2 rounded-md text-[13px] font-medium" style="border:1px solid var(--note-border); color:var(--note-ink-2); background:var(--note-surface-2);">修改密码</button>'
+        + '<button data-saction="sec-remove" class="flex-1 py-2 rounded-md text-[13px] font-medium" style="border:1px solid var(--note-border); color:var(--state-danger,#dc2626); background:var(--note-surface-2);">移除密码</button>'
+        + '</div></div>'
+        // 超时锁定
+        + '<div class="border-t flex items-center justify-between py-3" style="border-color:var(--note-border);"><div class="flex-1 pr-4"><div class="text-[14px]" style="color:var(--note-ink);">超时自动锁定</div><div class="text-caption" style="color:var(--note-ink-3);">无操作达到设定时间后锁定（需已设置密码）</div></div><label class="toggle"><input type="checkbox" id="sec-lock-enable"><span class="toggle-track"></span></label></div>'
+        + '<div class="border-t flex items-center justify-between py-3" style="border-color:var(--note-border);"><div class="flex-1 pr-4"><div class="text-[14px]" style="color:var(--note-ink);">锁定时间（分钟）</div><div class="text-caption" style="color:var(--note-ink-3);">范围 1 - 120</div></div><input type="number" id="sec-lock-min" min="1" max="120" class="rounded-md px-3 py-1.5 text-[13px] outline-none nums" style="width:88px;background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);"></div>'
         + '</section>');
     }
     if (cat === '插件管理') {

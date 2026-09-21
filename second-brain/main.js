@@ -4,11 +4,11 @@
  * 功能: 创建主窗口、注册自定义协议 note:// 以支持
  *       在 file 环境通过 fetch 加载本地视图文件
  * ============================================ */
-const { app, BrowserWindow, protocol, ipcMain, dialog, shell, Menu, session, Tray, nativeImage, screen } = require('electron');
+const { app, BrowserWindow, protocol, ipcMain, dialog, shell, Menu, session, Tray, nativeImage, screen, powerMonitor } = require('electron');
 const { AsyncLocalStorage } = require('node:async_hooks'); // 多窗口：IPC 请求链内按窗口解析知识库根
 const path = require('path');
 const fs = require('fs');
-const { randomUUID } = require('crypto'); // 上传资源（图片/附件）落盘用 UUID 重命名，避免重名冲突
+const { randomUUID, scrypt, randomBytes, timingSafeEqual } = require('crypto'); // randomUUID: 上传资源重命名；scrypt/randomBytes/timingSafeEqual: 应用安全（SEC-01/02）密码哈希与校验
 const { execFile } = require('child_process'); // Git 同步插件：以非 shell 方式执行 git 命令，避免注入
 const grayMatter = require('gray-matter'); // 解析笔记 frontmatter（获取 id / tags 元数据）
 const { default: SnowflakeId } = require('snowflake-id'); // 雪花算法：生成全局唯一文档 id，方便索引/元数据稳定定位
@@ -273,6 +273,9 @@ function createWindow(vaultPath, opts) {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.js'),
+      // 关闭后台渲染节流：避免窗口最小化/缩托盘后异步锁定消息（app:locked）被节流延迟，
+      // 到窗口恢复可见才执行 → 先闪过已解锁内容再弹密码框。关闭后锁定在隐藏阶段立即生效（SEC-01）。
+      backgroundThrottling: false,
     },
   });
   _slog('browserwindow_created');
@@ -299,6 +302,15 @@ function createWindow(vaultPath, opts) {
   win.once('ready-to-show', function () {
     if (!win.isDestroyed()) win.show();
   });
+  // 每次窗口「重新显示」（从托盘召回最小化/隐藏的窗口、或 restore 最小化窗口）且已设启动密码时，
+  // 重置该窗口解锁并推送锁定事件，需重新输入密码才能查看内容（SEC-01 窗口级锁定）。
+  // 窗口全程保持显示、仅正常前置时不触发，不打断已解锁的窗口使用。
+  win.on('show', function () { secRequireLock(win); });
+  win.on('restore', function () { secRequireLock(win); });
+  // 最小化/缩托盘瞬间即锁定工作区（窗口已隐藏，锁定过程不可见）：召回显示时遮罩已在，
+  // 直接呈现密码界面，彻底规避「先闪内容再弹密码框」。
+  win.on('minimize', function () { secRequireLock(win); });
+  win.on('hide', function () { secRequireLock(win); });
   // 兜底：渲染异常/过慢时强制显示，避免白窗/黑屏卡死；首帧渲染完成即取消兜底
   var _sbShowTimer = setTimeout(function () {
     if (!win.isDestroyed() && !win.isVisible()) win.show();
@@ -2716,6 +2728,180 @@ vaultHandle('ai:getActiveSession', async () => {
   } catch (e) { return ''; }
 });
 
+/* ============================================
+ * 应用安全（SEC-01 启动密码 / SEC-02 超时锁定）
+ * 密码以 scrypt 哈希（salt+hash）存 security.json（与 settings.json 分离），
+ * 校验用 timingSafeEqual 防时序侧信道。超时锁定优先走 powerMonitor 系统空闲检测。
+ * 作者: 火 冰
+ * ============================================ */
+function securityFile() { return path.join(app.getPath('userData'), 'security.json'); }
+let secPwdHash = null;    // scrypt 派生的密码哈希（hex）
+let secSalt = null;       // 随机盐（hex）
+let secLockEnabled = false; // 超时自动锁定开关
+let secLockMinutes = 10;    // 空闲锁定阈值（分钟）
+let appUnlocked = true;     // 应用整体解锁标记（未设密码时恒为 true，超时锁定用）。窗口级解锁见 secWinUnlocked
+/* 按窗口记录的解锁状态（winId -> boolean）：保证从托盘新建的窗口也需各自通过启动密码后才可见 */
+let secWinUnlocked = new Map();
+/* 判断某窗口是否已解锁：未设密码总为 true；设了密码仅当该窗口显式解锁过才为 true。
+ * @param {number|undefined} winId webContents id（undefined 视为未解锁）
+ * @returns {boolean}
+ * @author 火 冰 */
+function secWinIsUnlocked(winId) {
+  if (!secPwdHash) return true;
+  return winId != null && secWinUnlocked.get(winId) === true;
+}
+/* 窗口重新显示（托盘召回最小化/隐藏、restore）时强制要求重新输入密码：
+ * 重置该窗口解锁记录并推送锁定事件，配合渲染端弹遮罩隐藏内容。全程保持显示的窗口不触发。
+ * @param {BrowserWindow} win 目标窗口
+ * @author 火 冰 */
+function secRequireLock(win) {
+  if (!secPwdHash || !win || win.isDestroyed()) return;
+  secWinUnlocked.delete(win.id);
+  try { win.webContents.send('app:locked'); } catch (e) { /* 忽略 */ }
+}
+
+/* 读取 security.json 恢复安全状态；无文件（未设过密码）时保持全默认。
+ * @author 火 冰 */
+function loadSecurity() {
+  try {
+    const j = JSON.parse(fs.readFileSync(securityFile(), 'utf8'));
+    secPwdHash = (j && typeof j.hash === 'string' && j.hash) ? j.hash : null;
+    secSalt = (j && typeof j.salt === 'string' && j.salt) ? j.salt : null;
+    secLockEnabled = !!(j && j.lockEnabled);
+    secLockMinutes = (j && typeof j.lockMinutes === 'number' && j.lockMinutes >= 1 && j.lockMinutes <= 120) ? Math.round(j.lockMinutes) : 10;
+  } catch (e) { /* 无文件/损坏：全默认 */ }
+  appUnlocked = !secPwdHash; // 未设密码视为已解锁
+}
+
+/* 持久化安全状态到 security.json（写失败静默，不影响主流程）。
+ * @author 火 冰 */
+function saveSecurity() {
+  try {
+    fs.writeFileSync(securityFile(), JSON.stringify({ hash: secPwdHash, salt: secSalt, lockEnabled: secLockEnabled, lockMinutes: secLockMinutes }, null, 2));
+  } catch (e) { /* 忽略 */ }
+}
+
+/* 用 scrypt 派生密码摘要（64 字节）。返回 Promise<Buffer>。
+ * @param {string} password 明文密码
+ * @param {string} saltHex  十六进制盐
+ * @author 火 冰 */
+function secDerive(password, saltHex) {
+  return new Promise(function (resolve, reject) {
+    scrypt(String(password || ''), saltHex, 64, function (err, key) {
+      if (err) reject(err); else resolve(key);
+    });
+  });
+}
+
+/* 校验密码是否与已存哈希匹配（timingSafeEqual）。返回 Promise<boolean>。
+ * @param {string} password 待校验明文
+ * @author 火 冰 */
+async function secVerify(password) {
+  if (!secPwdHash || !secSalt) return false;
+  try {
+    const h = await secDerive(password, secSalt);
+    const a = Buffer.from(secPwdHash, 'hex');
+    const b = Buffer.from(h);
+    return a.length === b.length && timingSafeEqual(a, b);
+  } catch (e) { return false; }
+}
+
+/* 向所有窗口推送锁定事件（渲染端据此弹全屏遮罩）。
+ * @author 火 冰 */
+function secBroadcastLocked() {
+  secWinUnlocked.clear(); // 锁定后所有窗口一律需要重新验证
+  BrowserWindow.getAllWindows().forEach(function (w) {
+    try { if (!w.isDestroyed()) w.webContents.send('app:locked'); } catch (e) { /* 忽略 */ }
+  });
+}
+
+/* 系统空闲定时器句柄 */
+let secIdleTimer = null;
+const SEC_POLL_MS = 15000; // 空闲检测轮询间隔 15s
+
+/* 启动空闲锁定轮询（桌面端）：到达锁定阈值时置未解锁并向窗口推送锁定事件。
+ * @author 火 冰 */
+function startSecIdleMonitor() {
+  if (secIdleTimer) return;
+  secIdleTimer = setInterval(function () {
+    if (!secLockEnabled || !secPwdHash || !appUnlocked) return; // 未开/未设密码/已锁定则跳过
+    let idleS = -1;
+    try { idleS = powerMonitor.getSystemIdleTime(); } catch (e) { return; }
+    if (idleS >= secLockMinutes * 60) {
+      appUnlocked = false;
+      secBroadcastLocked();
+    }
+  }, SEC_POLL_MS);
+}
+
+/* 设置/修改/移除密码。data={old?, next?}：
+ * next 非空 → 设置或修改（已有密码时须先通过 old 校验）；next 空 → 移除密码（须提供 old）。
+ * 返回 { ok, reason? }。
+ * @author 火 冰 */
+ipcMain.handle('app:setPassword', async (_e, data) => {
+  const d = (data && typeof data === 'object') ? data : {};
+  const hasPwd = !!secPwdHash;
+  const next = String(d.next || '');
+  try {
+    if (!next) {
+      // 移除密码：未设过则直接成功；已设则须先校验旧密码
+      if (hasPwd && !(await secVerify(d.old))) return { ok: false, reason: 'wrong_old' };
+      secPwdHash = null; secSalt = null;
+      secWinUnlocked.clear(); // 无密码后所有窗口不再锁定
+      saveSecurity(); appUnlocked = true;
+      return { ok: true };
+    }
+    // 设置/修改：已有密码须先校验旧密码
+    if (hasPwd && !(await secVerify(d.old))) return { ok: false, reason: 'wrong_old' };
+    if (next.length < 4) return { ok: false, reason: 'too_short' };
+    secSalt = randomBytes(16).toString('hex');
+    secPwdHash = (await secDerive(next, secSalt)).toString('hex');
+    if (_e && _e.sender) secWinUnlocked.set(_e.sender.id, true); // 当前窗口已通过密码，标记解锁
+    saveSecurity(); appUnlocked = true;
+    return { ok: true };
+  } catch (e) { return { ok: false, reason: 'error' }; }
+});
+
+/* 解锁校验：密码正确（或未设密码）则置已解锁并返回 true。
+ * @author 火 冰 */
+ipcMain.handle('app:unlock', async (event, pwd) => {
+  if (!secPwdHash) { appUnlocked = true; return true; }
+  const ok = await secVerify(pwd);
+  if (ok) {
+    appUnlocked = true;
+    if (event && event.sender) secWinUnlocked.set(event.sender.id, true); // 窗口级解锁
+  }
+  return ok;
+});
+
+/* 读取安全状态（供设置页/遮罩层回填；绝不下发任何密码哈希或盐）。
+ * unlocked 按发起窗口返回：该窗口未解锁则返回 false，供渲染端弹遮罩（覆盖托盘新开窗口）。
+ * @author 火 冰 */
+ipcMain.handle('app:getSecurity', (event) => ({
+  hasPwd: !!secPwdHash,
+  lockEnabled: secLockEnabled,
+  lockMinutes: secLockMinutes,
+  unlocked: secWinIsUnlocked(event && event.sender ? event.sender.id : undefined),
+}));
+/* 同步读取安全状态（sendSync，仅渲染端启动时用，只读不经计算）。
+ * 在窗口首帧 paint 前拿到「需锁定」，渲染端立即隐藏主视图，规避启动时先闪内容再弹密码框（SEC-01）。 */
+ipcMain.on('app:getSecuritySync', function (event) {
+  event.returnValue = {
+    hasPwd: !!secPwdHash,
+    unlocked: secWinIsUnlocked(event && event.sender ? event.sender.id : undefined),
+  };
+});
+
+/* 超时锁定配置：data={enabled?, minutes?}；持久化并返回最新状态。
+ * @author 火 冰 */
+ipcMain.handle('app:setLockConfig', (_e, data) => {
+  const d = (data && typeof data === 'object') ? data : {};
+  if (typeof d.enabled === 'boolean') secLockEnabled = d.enabled;
+  if (typeof d.minutes === 'number' && d.minutes >= 1 && d.minutes <= 120) secLockMinutes = Math.round(d.minutes);
+  saveSecurity();
+  return { ok: true, lockEnabled: secLockEnabled, lockMinutes: secLockMinutes };
+});
+
 /* ---------- 应用生命周期 ---------- */
 /* 启动耗时打点：记录 whenReady 各阶段与窗口加载完成耗时，便于排查「启动慢/界面空白」类问题。
  * 作者: 火 冰 */
@@ -2732,6 +2918,8 @@ app.whenReady().then(async () => {
   // Ctrl+R（Reload）会与编辑器的「替换」快捷键冲突，需禁用默认加速器
   Menu.setApplicationMenu(null);
   loadConfig(); // 恢复上次选择的笔记库目录
+  loadSecurity(); // 恢复应用安全状态（启动密码/超时锁定，SEC-01/02）
+  startSecIdleMonitor(); // 启动系统空闲锁定轮询（桌面端 powerMonitor）
   initAiEngine(); // 初始化 AI 引擎（配置/索引持久化路径）
   registerNoteProtocol();
   _slog('before_clearCache');

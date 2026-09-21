@@ -158,12 +158,31 @@
     </div>
   </main>
 
+  <!-- ===== 应用安全遮罩（SEC-01 启动密码 / SEC-02 超时锁定） ===== -->
+  <div id="lock-screen" style="display:none;">
+    <div class="lock-card" style="position:relative;border:1px solid var(--note-border); background:var(--note-popover); box-shadow: var(--note-shadow-3);">
+      <button id="lock-close" title="关闭窗口（不输入密码也可退出密码界面）"
+              style="position:absolute; top:6px; right:10px; border:none; background:transparent; color:var(--note-ink-3); cursor:pointer; font-size:20px; line-height:1;">×</button>
+      <i data-lucide="shield" class="lock-icon w-8 h-8" style="color:var(--note-brand-600);"></i>
+      <div class="lock-title text-h4 font-semibold" style="color:var(--note-ink);">第二脑已锁定</div>
+      <div class="lock-sub text-caption" style="color:var(--note-ink-3);">输入密码以继续</div>
+      <input id="lock-pwd" type="password" placeholder="请输入密码" autocomplete="off"
+             class="w-full rounded-md px-3 py-2 text-[14px] outline-none"
+             style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);" />
+      <div id="lock-err" class="text-caption" style="color:var(--state-danger, #dc2626); min-height:16px;"></div>
+      <button id="lock-unlock" class="w-full py-2.5 rounded-md text-[13px] font-medium"
+              style="background:var(--note-brand-600); color:#FFFFFF;">解锁</button>
+    </div>
+  </div>
+
   <!-- 视图模板注入 -->
   <div id="view-templates" style="display:none;"></div>
   <script>
     lucide.createIcons();
   </script>
   <script src="js/app-log.js?v=1"></script>
+  <!-- 应用安全：启动密码遮罩 + 超时锁定（SEC-01/02）。依赖 #lock-screen 与 noteDesktop.security；网页版用本模块空闲计时兜底 -->
+  <script src="js/app-security.js?v=1"></script>
   <script src="js/app-input.js?v=2"></script>
   <script src="js/app-ribbon.js?v=1"></script>
   <script src="js/app-core.js?v=4"></script>

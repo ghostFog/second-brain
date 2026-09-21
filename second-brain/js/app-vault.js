@@ -71,10 +71,12 @@
       + (isDefaultPath(pathOfVault) ? '<span class="vault-def-badge">默认</span>' : '')
       + '<span style="font-size:11px;color:var(--note-ink-3)">当前知识库</span>'
       + (pathOfVault ? '<i data-lucide="ellipsis" class="vault-h-more w-5 h-5"></i>' : '') + '</div>';
-    html += '<div class="vault-dropdown-sep"></div>'; // 当前知识库与「其他知识库」之间的分割线
-    html += '<div class="vault-dropdown-head" data-vault-hist-head><i data-lucide="clock-3" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
-      + '<span style="color:var(--note-ink-3)">其他知识库</span></div>';
+    // 分组按需渲染：其他知识库/一般项目/最近打开——无数据时整块隐藏（标题与分割线均不出现）。
+    // 最近打开为「悬浮二级菜单」：无临时文件不显示；有则悬浮 head 展开文件列表（见下方 dup append 后的 hover 绑定）。
     if (otherList.length) {
+      html += '<div class="vault-dropdown-sep"></div>'
+        + '<div class="vault-dropdown-head" data-vault-hist-head><i data-lucide="clock-3" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
+        + '<span style="color:var(--note-ink-3)">其他知识库</span></div>';
       otherList.forEach(function (h) {
         // 旧默认库退化：记录时名称可能残留「我的笔记库」（当时是默认库），若当前已非默认库则显示真实目录名
         const dispName = (h.name === '我的笔记库' && !isDefaultPath(h.path)) ? (h.path.split(/[\\/]/).pop() || h.path) : h.name;
@@ -85,42 +87,59 @@
           + '<i data-lucide="ellipsis" class="vault-h-more w-5 h-5"></i>'
           + '</div>';
       });
-    } else {
-      // 无其他知识库：灰色占一行
-      html += '<div class="vault-dropdown-item vault-history-item vault-empty-hint" style="color:var(--note-ink-3);cursor:default;">无其他知识库</div>';
     }
-    /* 二级菜单按目标库动态生成（append 到 dd 内，复用 dd 点击委托）；delete=仅历史移除，
-     * migrate=迁移默认知识库，default=设为新默认库（不迁移）；isCurrent/isDefault 决定展示项与图标 */
-    /* 一般项目：非知识库 git 项目工作区（与知识库分开列出）。点击经 project:openPath 打开/聚焦。 */
-    html += '<div class="vault-dropdown-sep"></div>'
-      + '<div class="vault-dropdown-head" data-vault-hist-head><i data-lucide="folder-git-2" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
-      + '<span style="color:var(--note-ink-3)">一般项目</span></div>';
+    // 一般项目：非知识库 git 项目工作区，仅当存在已打开/最近项目时才渲染分组
     if (projects.length) {
+      html += '<div class="vault-dropdown-sep"></div>'
+        + '<div class="vault-dropdown-head" data-vault-hist-head><i data-lucide="folder-git-2" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
+        + '<span style="color:var(--note-ink-3)">一般项目</span></div>';
       projects.forEach(function (pj) {
         const pn = pj.name || pj.path.split(/[\\/]/).pop() || pj.path;
         html += '<div class="vault-dropdown-item vault-project-item" data-vault-act="open-project-path" data-project-path="' + esc(pj.path) + '" title="' + esc(pj.path) + '">'
           + '<i data-lucide="briefcase" class="w-4 h-4"></i><span class="vault-h-name">' + esc(pn) + '</span></div>';
       });
-    } else {
-      html += '<div class="vault-dropdown-item vault-empty-hint" style="color:var(--note-ink-3);cursor:default;">尚未打开项目</div>';
     }
-    /* 最近打开：全局跨知识库的最近临时文件（最多 10 条），点击临时打开（只读） */
-    html += '<div class="vault-dropdown-sep"></div>'
-      + '<div class="vault-dropdown-head" data-vault-hist-head><i data-lucide="clock-3" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
-      + '<span style="color:var(--note-ink-3)">最近打开</span></div>';
+    // 最近打开：全局跨知识库临时文件（最多 10 条）；选项作为二次菜单由悬浮 head 展开
     if (tempRec.length) {
-      tempRec.forEach(function (t) {
-        html += '<div class="vault-dropdown-item vault-temp-item" data-vault-act="open-temp" data-temp-path="' + esc(t.path) + '" title="' + esc(t.path) + '">'
-          + '<i data-lucide="file-clock" class="w-4 h-4"></i><span class="vault-h-name">' + esc(t.name || t.path) + '</span></div>';
-      });
-    } else {
-      html += '<div class="vault-dropdown-item vault-empty-hint" style="color:var(--note-ink-3);cursor:default;">暂无临时文件</div>';
+      html += '<div class="vault-dropdown-sep"></div>'
+        + '<div class="vault-dropdown-head vault-temp-head" data-vault-hist-head><i data-lucide="clock-3" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
+        + '<span style="color:var(--note-ink-3)">最近打开</span></div>';
     }
     /* 动作项：打开项目 / 打开知识库 */
     html += '<div class="vault-dropdown-sep"></div>'
       + '<div class="vault-dropdown-item" data-vault-act="open-project"><i data-lucide="folder-plus" class="w-4 h-4"></i><span>打开项目…</span></div>'
       + '<div class="vault-dropdown-item" data-vault-act="open"><i data-lucide="folder-open" class="w-4 h-4"></i><span>打开知识库…</span></div>';
     dd.innerHTML = html;
+
+    // 最近打开：悬浮 head 展开临时文件二级菜单；选项复用 dd 点击委托走 open-temp 动作。
+    // 移出下拉即收起；选项挂在 dd 内（fixed 定位），不影响上方事件委托分派。
+    const tempHead = dd.querySelector('.vault-temp-head');
+    if (tempRec.length && tempHead) {
+      tempHead.addEventListener('mouseenter', function () {
+        const oldT = document.getElementById('vault-tempmenu');
+        if (oldT) oldT.remove();
+        const tm = document.createElement('div');
+        tm.id = 'vault-tempmenu';
+        tm.className = 'vault-submenu';
+        let th = '';
+        tempRec.forEach(function (t) {
+          th += '<div class="vault-dropdown-item vault-temp-item" data-vault-act="open-temp" data-temp-path="' + esc(t.path) + '" title="' + esc(t.path) + '">'
+            + '<i data-lucide="file-clock" class="w-4 h-4"></i><span class="vault-h-name">' + esc(t.name || t.path) + '</span></div>';
+        });
+        tm.innerHTML = th;
+        const r = tempHead.getBoundingClientRect();
+        tm.style.top = r.top + 'px';
+        let lp = r.right + 6;
+        if (lp + 160 > window.innerWidth) lp = r.left - 160 - 6;
+        tm.style.left = lp + 'px';
+        dd.appendChild(tm);
+        refreshIcons();
+      });
+      dd.addEventListener('mouseleave', function () {
+        const t = document.getElementById('vault-tempmenu');
+        if (t) t.remove();
+      });
+    }
 
     // 距底部不足时改向上展开（高度随其他知识库项数估算）
     const estH = 150 + otherList.length * 36;

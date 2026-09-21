@@ -24,6 +24,7 @@
     if (cat === '常规') bindAppearance();
     if (cat === 'AI 问答') bindAiSettings();
     if (cat === '插件管理') bindPluginManager(content);
+    if (cat === '隐私与安全') bindSecurity(content);
     bindKeyedControls(content);
     bindCloseAction(content);
     bindLogDir(content);
