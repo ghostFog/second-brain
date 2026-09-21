@@ -211,11 +211,16 @@ globalThis.sbTempFiles = (function () {
    * 作者: 火 冰 */
   function renderInto(tree) {
     if (!tree) return;
+    // 先移除已存在的「临时文件」区（仅直接子级），避免每次插入叠加新区块而在目录区出现多个「临时文件」。
+    // 注意：标记属性必须打在真正插入的元素上，若打在临时 wrapper 上（元素不会被插入）则去重永远定位不到旧块。
+    const old = tree.querySelector('[data-temp-area]');
+    if (old) old.remove();
     const patch = document.createElement('div');
-    patch.dataset.tempArea = '1';
     patch.innerHTML = areaHtml();
-    // 插入到现有内容之前
-    tree.insertBefore(patch.firstElementChild, tree.firstChild);
+    const areaEl = patch.firstElementChild;
+    if (!areaEl) { refreshIcons(); return; }
+    areaEl.dataset.tempArea = '1';
+    tree.insertBefore(areaEl, tree.firstChild);
     refreshIcons();
   }
 
@@ -317,21 +322,41 @@ globalThis.sbTempFiles = (function () {
     if (window.__sbTempDragBound) return;
     window.__sbTempDragBound = 1;
     window.addEventListener('dragover', function (e) {
-      if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.indexOf('Files') !== -1 && e.dataTransfer.files && e.dataTransfer.files.length) {
+      // 编辑区：交给 vditor 自身拖拽逻辑（图片行内 / 附件卡片），不在此放行，避免干扰其 drop 指示
+      const t = e.target;
+      if (t && t.closest && t.closest('#ed-vditor')) return;
+      // 外部文件拖入目录区/页签栏等：dragover 阶段 dataTransfer.files 为空（内容要到 drop 才可读），
+      // 不能依赖 files.length 判断（否则恒 0 → 不 preventDefault → 拖入显示禁止图标）。
+      // 只要 types 含 'Files' 即放行并设 copy，显示可拖入；是否 .md 在 drop 阶段再校验。
+      if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.indexOf('Files') !== -1) {
         e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
       }
     }, true);
     window.addEventListener('drop', async function (e) {
-      const files = (e.dataTransfer && Array.isArray(e.dataTransfer.files)) ? e.dataTransfer.files : null;
-      if (!files || !files.length) return;
+      const dt = e.dataTransfer;
+      // 注意：dataTransfer.files 是 FileList 而非数组，不能用 Array.isArray 判断（否则恒 false，drop 静默失效）
+      const files = (dt && dt.files && dt.files.length) ? dt.files : null;
+      if (!files) return;
       e.preventDefault();
+      const t = e.target;
+      // 编辑区：让 vditor 自身上传逻辑处理（非图片 → `> [!attach]` 附件卡片，图片 → 行内预览），不劫持为临时打开
+      if (t && t.closest && t.closest('#ed-vditor')) return;
+      // 页签栏：由页签栏自身 drop 处理（作为新临时页签打开），避免与下方重复且防止落入编辑器
+      if (t && t.closest && t.closest('#editor-tabs')) return;
       const nd = window.noteDesktop || {};
-      for (const f of files) {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
         let abs = '';
         if (nd.getPathForFile) abs = nd.getPathForFile(f);     // 优先 webUtils（精确）
-        const file = f;                                        // 尽力
-        if (!abs && file && typeof file.path === 'string') abs = file.path;
+        if (!abs && f && typeof f.path === 'string') abs = f.path;
         if (!abs) { showToast('无法获取拖入文件的路径'); return; }
+        // 仅支持 .md / .markdown / .txt 临时打开，其它类型提示不支持
+        const ext = (abs.split('.').pop() || '').toLowerCase();
+        if (ext !== 'md' && ext !== 'markdown' && ext !== 'txt') {
+          showToast('仅支持拖拽 .md / .markdown / .txt 文件');
+          return;
+        }
         await globalThis.sbTempFiles.openTemp(abs);
       }
     }, true);

@@ -509,6 +509,20 @@
       });
       tabs.addEventListener('drop', function (e) {
         e.preventDefault();
+        // 外部文件拖到页签栏：作为新临时页签打开；stopImmediatePropagation 阻止落入编辑器/再次冒泡
+        const dt = e.dataTransfer;
+        if (window.sbTempFiles && dt && dt.files && dt.files.length) {
+          e.stopImmediatePropagation();
+          edDragFrom = null; edDragTarget = null; clearDragHint(); renderTabs();
+          const nd = window.noteDesktop || {};
+          const f = dt.files[0];
+          let abs = '';
+          if (nd && nd.getPathForFile) abs = nd.getPathForFile(f);               // 优先 webUtils（精确）
+          if (!abs && f && typeof f.path === 'string') abs = f.path;
+          if (abs) { window.sbTempFiles.openTemp(abs); return; }
+          if (typeof showToast === 'function') showToast('无法获取拖入文件的路径');
+          return;
+        }
         const from = edDragFrom, target = edDragTarget;
         edDragFrom = null; edDragTarget = null; clearDragHint();
         if (from && target && from !== target) reorderTab(from, target);

@@ -1762,6 +1762,38 @@ function testDirPluginToolbarOverride() {
   assert(hit && hit.id === 'minimal-theme:cycle-theme', 'Bug-056-5: Ctrl+Q 全局键命中 minimal-theme:cycle-theme');
 }
 
+/* ---- 临时文件区去重：renderInto 每次应在文件树顶部只保留一个「临时文件」区块 ----
+ * Bug 复现：标记属性曾打在临时 wrapper 上（该元素不会被插入树），querySelector 定位不到旧块，
+ * 导致每次重渲染（展开折叠/多次拖入）在目录区叠加多个「临时文件」区块。此处注入 project-mode.js，
+ * 连续多次 renderInto，断言 #file-tree 内 [data-temp-area] 恒只有 1 个。
+ * 作者: 火 冰 */
+function testTempAreaDedupe() {
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body>'
+    + '<div id="file-tree"><div class="tree-file">存量条目</div></div></body></html>',
+    { url: 'https://localhost/', runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'project-mode.js'), 'utf8');
+  W.document.head.appendChild(s);
+  // 桩宿主依赖：折叠集合记忆 / 图标刷新 / HTML 转义 / 提示
+  W.collapsedFolders = new Set();
+  W.refreshIcons = function () {};
+  W.esc = function (v) { return String(v).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); };
+  W.showToast = function () {};
+
+  const tree = W.document.getElementById('file-tree');
+  W.sbTempFiles.renderInto(tree);
+  W.sbTempFiles.renderInto(tree);
+  W.sbTempFiles.renderInto(tree);
+  let blocks = tree.querySelectorAll('[data-temp-area]');
+  assert(blocks.length === 1, '临时文件: renderInto 三次后 #file-tree 内 [data-temp-area] 仅剩 1 个（实际 ' + blocks.length + '）');
+  // 折叠态重渲染（展开/收起箭头触发 renderInto）仍只保留一个
+  W.sbTempFiles.renderInto(tree);
+  blocks = tree.querySelectorAll('[data-temp-area]');
+  assert(blocks.length === 1, '临时文件: 折叠态重渲染后 [data-temp-area] 仍仅 1 个（实际 ' + blocks.length + '）');
+  dom.window.close();
+}
+testTempAreaDedupe();
 testLinkNavDelegate();
 testLogBadge();
 testSemanticChunk();
