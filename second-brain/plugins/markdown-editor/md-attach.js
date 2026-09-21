@@ -19,6 +19,8 @@
   /* ---------- 状态 ---------- */
   var observer = null;
   var debounceTimer = null;
+  var openMenu = null;       /* 当前唯一打开的附件右键菜单 */
+  var outsideHandler = null; /* 外部点击关闭菜单的监听（capture） */
 
   /* ---------- 工具函数 ---------- */
 
@@ -278,6 +280,61 @@
 
   /* ---------- 右键菜单 ---------- */
 
+  /* 关闭当前打开的附件右键菜单并移除外部点击监听。
+   * 保证任意时刻全局最多只有一个附件菜单在显示。 */
+  function closeAttachMenu() {
+    if (openMenu) { openMenu.remove(); openMenu = null; }
+    if (outsideHandler) {
+      document.removeEventListener('mousedown', outsideHandler, true);
+      outsideHandler = null;
+    }
+  }
+
+  /* 在附件块上方插入一个空行并同步落盘。
+   * 优先委托宿主 window.__vdBlock.irInsertAbove（表格/代码块「上方插入空行」同一实现）：
+   * 插入 `<p data-block="0">ZWSP<wbr></p>` 空段，并以其内部 vdInst.getValue()+sync2Host 同步，
+   * 保证切换页签重载后空行不丢失。宿主不可用时回退到等价手拆实现。
+   * @param {HTMLElement} bq 附件 blockquote 元素
+   * 作者: 火 冰 */
+  function insertBlankLineAbove(bq) {
+    if (!bq || !bq.parentNode) return;
+
+    /* 优先复用与表格/代码块「上方插入空行」完全一致的成熟实现（window.__vdBlock.irInsertAbove）：
+     * 内部用真实 vdInst.getValue() + sync2Host 落盘，序列化/同步口径与表格、代码块一致，
+     * 避免手写同步与 vditor 时序不一致导致空行落盘丢失。 */
+    if (typeof window.__vdBlock === 'object' && typeof window.__vdBlock.irInsertAbove === 'function') {
+      try { window.__vdBlock.irInsertAbove(bq); return; } catch (_) { /* 回退下方手拆实现 */ }
+    }
+
+    var p = document.createElement('p');
+    p.setAttribute('data-block', '0');
+    p.appendChild(document.createTextNode('\u200b')); /* ZWSP：占位非空、序列化为空行 */
+    p.appendChild(document.createElement('wbr')); /* vditor IR 以 <wbr> 锚定光标 */
+    bq.parentNode.insertBefore(p, bq);
+
+    /* 光标定位到新空段 */
+    try {
+      var range = document.createRange();
+      range.setStart(p, 0);
+      range.collapse(true);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (_) { /* 忽略定位异常 */ }
+
+    /* 同步到宿主保存：与表格/代码块「上方插入空行」一致（IR 下 getValue 按当前 DOM 推导） */
+    try {
+      if (typeof window.vdGetValue === 'function' && typeof onEdInput === 'function') {
+        onEdInput(window.vdGetValue());
+        return;
+      }
+    } catch (_) { /* 忽略同步异常 */ }
+
+    /* 兜底：无法直接同步时触发 vditor input 回调（历史兼容路径） */
+    var editor = document.querySelector('.vditor-ir') || document.querySelector('.vditor-wysiwyg');
+    if (editor) { try { editor.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) { /* 忽略 */ } }
+  }
+
   /* 附件块右键菜单 */
   function onContextmenu(e) {
     var bq = e.target && e.target.closest ? e.target.closest('.' + ATTACH_CLASS) : null;
@@ -288,6 +345,8 @@
 
     e.preventDefault();
     e.stopPropagation();
+
+    closeAttachMenu(); /* 先关闭已打开的菜单，保证同时只有一个 */
 
     var menu = document.createElement('div');
     menu.className = 'sb-attach-menu';
@@ -309,7 +368,7 @@
           try { window.noteDesktop.openResource(stored[1]); } catch (_) { /* 忽略 */ }
         }
       }
-      menu.remove();
+      closeAttachMenu();
     });
 
     /* 下载附件 */
@@ -323,7 +382,19 @@
       if (typeof downloadResource === 'function') {
         downloadResource(info.url, info.name);
       }
-      menu.remove();
+      closeAttachMenu();
+    });
+
+    /* 在上方插入空行 */
+    var insItem = document.createElement('button');
+    insItem.type = 'button';
+    insItem.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;'
+      + 'padding:6px 12px;border:none;background:transparent;color:var(--note-ink,#333);'
+      + 'font-size:13px;text-align:left;cursor:pointer;';
+    insItem.innerHTML = '<i data-lucide="corner-up-left" class="w-4 h-4"></i><span>在上方插入空行</span>';
+    insItem.addEventListener('click', function () {
+      insertBlankLineAbove(bq);
+      closeAttachMenu();
     });
 
     /* 删除附件 */
@@ -335,11 +406,12 @@
     delItem.innerHTML = '<i data-lucide="trash-2" class="w-4 h-4"></i><span>删除</span>';
     delItem.addEventListener('click', function () {
       deleteAttachBlock(bq);
-      menu.remove();
+      closeAttachMenu();
     });
 
     menu.appendChild(openItem);
     menu.appendChild(dlItem);
+    menu.appendChild(insItem);
     menu.appendChild(delItem);
     document.body.appendChild(menu);
 
@@ -351,13 +423,12 @@
     menu.style.left = Math.min(Math.max(8, e.clientX), Math.max(8, window.innerWidth - rect.width)) + 'px';
     menu.style.top = Math.min(Math.max(8, e.clientY), Math.max(8, window.innerHeight - rect.height)) + 'px';
 
-    var closeMenu = function () {
-      menu.remove();
-      document.removeEventListener('click', closeMenu);
+    openMenu = menu;
+    /* 点击非菜单区域（含左键/右键 mousedown）时销毁菜单；菜单内点击不触发 */
+    outsideHandler = function (ev) {
+      if (openMenu && !openMenu.contains(ev.target)) closeAttachMenu();
     };
-    setTimeout(function () {
-      document.addEventListener('click', closeMenu);
-    }, 0);
+    document.addEventListener('mousedown', outsideHandler, true);
   }
 
   /* ---------- 卡片内点击事件 ---------- */

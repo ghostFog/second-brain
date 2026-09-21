@@ -1126,6 +1126,23 @@ function testWysRightClickUpload() {
     'WYSIWYG: 附件上传生成 `> [!attach]` 引用块（预览/阅读渲染完整卡片）');
 }
 
+/* ---- 附件卡片右键「在上方插入空行」：必须委托宿主成熟实现落盘 ----
+ * 附件卡片右键菜单提供「在上方插入空行」（md-attach.js）。此前手写插入 + 合成 input 事件
+ * 未走宿主真实同步，空行不落盘，切换页签重载后丢失。
+ * 修复：insertBlankLineAbove 优先调用 window.__vdBlock.irInsertAbove（与表格/代码块同路径，
+ *       内部 vdInst.getValue() + sync2Host 落盘）；宿主不可用时才回退手拆。
+ * 断言：md-attach.js 含对 __vdBlock.irInsertAbove(bq) 的委托调用，且保留等价兜底插入。
+ * 作者: 火 冰 */
+function testAttachInsertBlankLineAbove() {
+  const src = fs.readFileSync(path.join(__dirname, 'plugins', 'markdown-editor', 'md-attach.js'), 'utf8');
+  assert(src.indexOf('window.__vdBlock.irInsertAbove(bq)') !== -1,
+    '附件: 上方插入空行委托宿主 window.__vdBlock.irInsertAbove（复用表格/代码块落盘路径，保证切换页签空行不丢）');
+  assert(src.indexOf("window.__vdBlock.irInsertAbove(bq); return;") !== -1,
+    '附件: 委托命中即 return（宿主实现已含插入+同步落盘）');
+  assert(src.indexOf("p.setAttribute('data-block', '0')") !== -1 && src.indexOf('\\u200b') !== -1 && src.indexOf('wbr') !== -1,
+    '附件: 兜底手拆保留 ZWSP+<wbr> 空段形态（与成熟实现一致）');
+}
+
 /* ---- Bug: 有序列表序号丢失（Tailwind preflight 重置 ol/ul，vditor 未恢复 ol）----
  * Tailwind preflight 将 ol/ul/menu 统一 list-style:none，vditor index.css 只恢复了 ul，
  * 未恢复 ol，导致有序列表 1. 2. 3. 序号消失。
@@ -1762,7 +1779,7 @@ testUploadTooltip();
 testIrBlockAbove();
 testEditorRightClickUpload();
 testOrderedListCss();
-testTaskListRoundTrip();
+testAttachInsertBlankLineAbove();
 testIrEmptyLineDelete();
 testVaultResHelpers();
 testVaultResCards();

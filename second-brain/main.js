@@ -4,7 +4,7 @@
  * 功能: 创建主窗口、注册自定义协议 note:// 以支持
  *       在 file 环境通过 fetch 加载本地视图文件
  * ============================================ */
-const { app, BrowserWindow, protocol, ipcMain, dialog, shell, Menu, session, Tray, nativeImage } = require('electron');
+const { app, BrowserWindow, protocol, ipcMain, dialog, shell, Menu, session, Tray, nativeImage, screen } = require('electron');
 const { AsyncLocalStorage } = require('node:async_hooks'); // 多窗口：IPC 请求链内按窗口解析知识库根
 const path = require('path');
 const fs = require('fs');
@@ -186,6 +186,34 @@ function openVaultWindow(target) {
   return createWindow(target || null);
 }
 
+/* 级联偏移：新窗口相对最近可见窗口向右下错位，避免「完整遮挡旧窗口」。
+ * 多窗口（多知识库/项目）场景，新开窗口逐次偏移；超出当前显示器工作区则折返左上重排。
+ * 无可见锚点窗口（如程序启动首窗）时返回 null，交给系统居中定位。
+ * @param {number} width  新窗口宽
+ * @param {number} height 新窗口高
+ * @returns {{x:number,y:number}|null} 偏移到工作区内的窗口坐标
+ * @author 火 冰 */
+function computeCascadePos(width, height) {
+  const anchor = BrowserWindow.getAllWindows().find(function (w) {
+    return w && !w.isDestroyed() && w.isVisible();
+  });
+  if (!anchor) return null;
+  const bp = anchor.getBounds(); // 锚点窗口位置与尺寸
+  const STEP = 28; // 每次偏移量（px）
+  const disp = screen.getDisplayMatching(bp); // 锚点窗口所在显示器
+  const wa = disp.workArea; // 该显示器工作区
+  const maxX = wa.x + wa.width - width; // x 允许最大值（避免右沿出屏）
+  const maxY = wa.y + wa.height - height; // y 允许最大值
+  // 锚点位置 + 1 档偏移；越界则折返到工作区左上角继续排
+  let x = bp.x + STEP;
+  let y = bp.y + STEP;
+  if (x > maxX || y > maxY) {
+    x = wa.x + STEP;
+    y = wa.y + STEP;
+  }
+  return { x: Math.max(wa.x, Math.min(x, maxX)), y: Math.max(wa.y, Math.min(y, maxY)) };
+}
+
 /* IPC handler 包装：在请求链内注入「发起窗口的库根」，使 vaultRoot() 按窗口解析。
  * 所有 ipcMain.handle 均改走本包装，内部工具函数与 aiEngine 无需感知窗口。 */
 function vaultHandle(channel, fn) {
@@ -224,9 +252,11 @@ function createWindow(vaultPath, opts) {
     if (ex && !ex.isDestroyed()) { showWindow(ex); return null; }
     vaultWinId.delete(existId);
   }
+  const cascade = computeCascadePos(1280, 820); // 多窗口级联偏移：避免新窗口完整遮挡旧窗口
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
+    ...(cascade ? { x: cascade.x, y: cascade.y } : {}), // 有锚点窗口时向右下错位显示，否则系统居中
     minWidth: 900,
     minHeight: 600,
     title: '第二脑 · ' + (projectPath ? ('项目：' + path.basename(projectPath)) : (binding ? path.basename(binding) : '我的笔记库')), // 项目/库名用于标题、任务栏区分
