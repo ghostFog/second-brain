@@ -210,6 +210,9 @@ function showFileTreeContextMenu(x, y, schema) {
   let top = Math.min(Math.max(8, y), Math.max(8, vh - r.height));
   menu.style.left = left + 'px';
   menu.style.top = top + 'px';
+  // 二级子菜单方向自适应：父菜单靠近右边缘/底部时，让子菜单向左/向上展开，避免超出可视区
+  if (left + r.width + 210 > vw) menu.classList.add('ctx-flip-sub');
+  if (top + r.height + 240 > vh) menu.classList.add('ctx-grow-up');
   // 遮罩：点击 / 右键 / 滚动 关闭
   const overlay = document.createElement('div');
   overlay.id = 'tree-ctx-backdrop';

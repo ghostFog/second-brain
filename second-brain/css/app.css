@@ -501,6 +501,9 @@ html[data-reduce-motion] *, html[data-reduce-motion] *::before, html[data-reduce
 }
 .edit-ctx-item:hover > .ctx-submenu { display: block; }
 .edit-ctx-item > .ctx-submenu.show { display: block; }
+/* 二级子菜单方向自适应：父菜单靠右/靠底时翻转，避免超出可视区（文件树右键 git 等子菜单） */
+.edit-ctx.ctx-flip-sub > .edit-ctx-item > .ctx-submenu { left: auto; right: 98%; }
+.edit-ctx.ctx-grow-up > .edit-ctx-item > .ctx-submenu { top: auto; bottom: 0; }
 
 /* ---------- vditor 引擎（Markdown 编辑区唯一实现） ----------
  * 说明: vditor 接管源码/所见即所得/预览全部编辑能力；#ed-vditor 为唯一挂载容器。
