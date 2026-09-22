@@ -2333,6 +2333,26 @@ vaultHandle('notes:revealExternal', async (_e, absPath) => {
   return true;
 });
 
+/* 写回外部临时文件内容：{ absPath, content } → 直接 UTF-8 写盘（可编辑保存）。
+ * 安全边界：仅允许写「最近打开」记录中已登记的临时文件绝对路径（白名单），
+ * 阻止渲染端任意路径写盘；返回 { ok, path, error }。作者: 火 冰 */
+vaultHandle('notes:writeFileExternal', async (_e, req) => {
+  const absPath = req && typeof req.absPath === 'string' ? req.absPath : null;
+  const content = req && typeof req.content === 'string' ? req.content : null;
+  if (!absPath || content === null) return { ok: false, error: '缺少文件路径或内容' };
+  const listed = recentTemp.some(function (x) { return x.path === absPath; });
+  if (!listed) return { ok: false, error: '仅支持写回已打开的临时文件' };
+  try {
+    const st = await fs.promises.stat(absPath);
+    if (!st.isFile()) return { ok: false, error: '目标不是文件' };
+    // 额外：当前上下文知识库不应被误写，用扩展名与文本内容校验放宽（外部 md/txt 才允许）
+    const ext = path.extname(absPath).toLowerCase();
+    if (['.md', '.markdown', '.txt'].indexOf(ext) === -1) return { ok: false, error: '仅支持写回 .md/.txt 文件' };
+    await fs.promises.writeFile(absPath, content, 'utf8');
+    return { ok: true, path: absPath };
+  } catch (e) { return { ok: false, error: String(e.message || e) }; }
+});
+
 /* ============================================
  * 最近打开的临时文件（全局、跨知识库，最多 10 条）
  * 说明：拖拽临时打开的文件记录在此（userData/recent-temp.json），

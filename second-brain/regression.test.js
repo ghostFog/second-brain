@@ -1762,10 +1762,10 @@ function testDirPluginToolbarOverride() {
   assert(hit && hit.id === 'minimal-theme:cycle-theme', 'Bug-056-5: Ctrl+Q 全局键命中 minimal-theme:cycle-theme');
 }
 
-/* ---- 临时文件区去重：renderInto 每次应在文件树顶部只保留一个「临时文件」区块 ----
- * Bug 复现：标记属性曾打在临时 wrapper 上（该元素不会被插入树），querySelector 定位不到旧块，
- * 导致每次重渲染（展开折叠/多次拖入）在目录区叠加多个「临时文件」区块。此处注入 project-mode.js，
- * 连续多次 renderInto，断言 #file-tree 内 [data-temp-area] 恒只有 1 个。
+/* ---- 目录区不再渲染临时文件区（ED-51） ----
+ * 临时文件区已从文件树顶部移除（外部拖入改由 tab 栏临时打开、目录区新增文件）。
+ * 注入 project-mode.js，连续多次 renderInto，断言 #file-tree 内不再出现 [data-temp-area] 区块
+ * （renderInto 仅清理残留旧块、不再重建），目录区只展示库内笔记/项目文件。
  * 作者: 火 冰 */
 function testTempAreaDedupe() {
   const dom = new JSDOM('<!DOCTYPE html><html><head></head><body>'
@@ -1786,11 +1786,11 @@ function testTempAreaDedupe() {
   W.sbTempFiles.renderInto(tree);
   W.sbTempFiles.renderInto(tree);
   let blocks = tree.querySelectorAll('[data-temp-area]');
-  assert(blocks.length === 1, '临时文件: renderInto 三次后 #file-tree 内 [data-temp-area] 仅剩 1 个（实际 ' + blocks.length + '）');
-  // 折叠态重渲染（展开/收起箭头触发 renderInto）仍只保留一个
+  assert(blocks.length === 0, '临时文件: renderInto 三次后 #file-tree 内不再出现 [data-temp-area]（实际 ' + blocks.length + '）');
+  // 折叠态重渲染（展开/收起动作调用 renderInto）仍不渲染临时文件区
   W.sbTempFiles.renderInto(tree);
   blocks = tree.querySelectorAll('[data-temp-area]');
-  assert(blocks.length === 1, '临时文件: 折叠态重渲染后 [data-temp-area] 仍仅 1 个（实际 ' + blocks.length + '）');
+  assert(blocks.length === 0, '临时文件: 折叠态重渲染后 #file-tree 内仍无 [data-temp-area]（实际 ' + blocks.length + '）');
   dom.window.close();
 }
 testTempAreaDedupe();

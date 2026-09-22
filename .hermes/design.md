@@ -14,8 +14,9 @@
 
 ## 方案文档落点
 
-- **功能/设计方案文档一律放 `design/documents/`**（与 `design/pages/*.html` 同级，都是设计产物）。
-- **不放** `.trae/documents/`（那不是设计文档的固定落点）。
+- **方案文档正式落点 `design/documents/`**（与 `design/pages/*.html` 同级，都是设计产物）。
+- **规划/确认阶段**：方案先在 `.trae/documents/` 承载（Plan 模式固定落点，无法直接在规划时写入 `design/documents/`）。
+- **方案确认后**：把 `.trae/documents/<功能>.md` **转移到 `design/documents/<功能>.md`**，统一归档正式设计产物，`.trae/documents/` 不残留正式方案。
 - 实现一个功能的详细设计先落地为 `design/documents/<功能>.md`，再按需求/开发进度登记。
 
 ## 变更前标准动作

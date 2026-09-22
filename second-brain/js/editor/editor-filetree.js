@@ -84,8 +84,6 @@
     });
     tree.innerHTML = html;
     refreshIcons();
-    // 临时文件区：置于文件树最上方（打开外部拖入文件的集中入口）
-    if (typeof sbRenderTempArea === 'function') sbRenderTempArea(tree);
     const stat = $('vault-stat'); if (stat) stat.textContent = '共 ' + notes.length + ' 篇笔记' + (noteStore.isMock() ? ' · 网页演示' : '');
     const sizeEl = $('vault-size');
     if (sizeEl) { const kb = notes.reduce((s, n) => s + (n.size || 0), 0) / 1024; sizeEl.textContent = (kb < 1024 ? kb.toFixed(1) : (kb / 1024).toFixed(1)) + (kb < 1024 ? ' KB' : ' MB'); }
@@ -115,6 +113,11 @@
       if (e.target.closest && e.target.closest('.tree-file, .tree-folder')) return;
       e.preventDefault();
       root.classList.remove('drop-root-active');
+      // 外部文件拖入根空白区：在根目录新增一篇笔记（知识库读写一层：走 noteStore）
+      if (!dragSrc && e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+        await handleExternalDrop(e.dataTransfer, null);
+        return;
+      }
       if (!dragSrc) return;
       // 目标：根目录（root 自身的空白区）
       const newParent = '';
@@ -161,6 +164,12 @@
       const node = e.target.closest('.tree-file, .tree-folder');
       e.preventDefault();
       root.classList.remove('drop-root-active');
+      // 外部文件拖入目录/文件节点：在目标目录新增笔记（知识库读写一层：走 noteStore）
+      if (!dragSrc && e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+        await handleExternalDrop(e.dataTransfer, node || null);
+        if (node) node.classList.remove('is-drop-target');
+        return;
+      }
       if (!dragSrc || !node) return;
       // 不能拖到自己或自己的子目录里
       if (node === dragSrc) { clearDragVisual(); return; }
@@ -188,6 +197,61 @@
       root.classList.remove('drop-root-active');
       root.querySelectorAll('.is-drop-target').forEach(el => el.classList.remove('is-drop-target'));
     }
+  }
+
+  /* 目录区拖入外部文件 → 在对应目录新增一篇文件并落盘。
+   * dt：拖拽 dataTransfer；targetNode：放置目标节点，null=根空白区。
+   * 目标目录：folder → 该目录；note(文件) → 其父目录；null → 根目录。
+   * 读写分流（两套互不混用）：
+   *   - 项目模式：相对路径直连 project:save（mkdir 递归 + 写文件）——非知识库读写；
+   *   - 知识库模式：noteStore.create/save——知识库统一读写层（预留后期加密落盘）。
+   * 读取外部文件原文（非知识库第二套读写 readFileExternal）。作者: 火 冰 */
+  async function handleExternalDrop(dt, targetNode) {
+    const files = dt && dt.files ? dt.files : null;
+    if (!files || !files.length) return;
+    const isProject = !!(window.sbProject && window.sbProject.isProjectMode());
+    let targetDir = '';
+    if (targetNode) {
+      if (targetNode.dataset.type === 'folder') targetDir = targetNode.dataset.folder || '';
+      else targetDir = (targetNode.dataset.path || '').includes('/') ? (targetNode.dataset.path || '').slice(0, (targetNode.dataset.path || '').lastIndexOf('/')) : '';
+    }
+    const nd = window.noteDesktop || {};
+    let count = 0;
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      let abs = '';
+      if (nd.getPathForFile) abs = nd.getPathForFile(f);
+      if (!abs && f && typeof f.path === 'string') abs = f.path;
+      if (!abs) { showToast('无法获取拖入文件的路径'); continue; }
+      const ext = (abs.split('.').pop() || '').toLowerCase();
+      if (ext !== 'md' && ext !== 'markdown' && ext !== 'txt') { showToast('仅支持拖入 .md / .markdown / .txt 文件'); continue; }
+      let content = '';
+      if (nd.readFileExternal) {
+        try { const r = await nd.readFileExternal(abs); content = (r && r.content) || ''; } catch (_) {}
+      }
+      const name = (abs.split(/[\\/]/).pop() || '').replace(/\.markdown$/i, '.md');
+      try {
+        if (isProject) {
+          // 非知识库：相对路径直连项目根写文件（mkdir 递归 + 写盘），不建索引/元数据
+          const rel = targetDir ? targetDir.replace(/[\\/]+$/, '') + '/' + name : name;
+          await window.sbProject.saveRel(rel, content);
+        } else {
+          // 知识库：统一 noteStore 读写层（预留后期加密落盘）
+          const rel = await noteStore.create(name, targetDir);
+          await noteStore.save(rel, content);
+        }
+        count++;
+      } catch (err) { showToast('新增文件失败：' + (err && err.message || err)); }
+    }
+    // 刷新文件树与数据（按各自读写层）
+    if (isProject) {
+      if (window.sbProject && window.sbProject.refresh) await window.sbProject.refresh();
+    } else {
+      const meta = await noteStore.list();
+      edNotes = meta.sort((a, b) => a.path.localeCompare(b.path, 'zh'));
+      renderFileTree(edNotes);
+    }
+    if (count) showToast('已在目录新增 ' + count + ' 篇' + (isProject ? '文件' : '笔记'));
   }
 
   /* 执行一次拖拽移动/排序：note → noteStore.move；folder → noteStore.moveDir。

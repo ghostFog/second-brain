@@ -266,12 +266,11 @@
     if (edSaveTimers[p]) clearTimeout(edSaveTimers[p]);
     edSaveTimers[p] = setTimeout(async function () {
       delete edSaveTimers[p];
-      // 临时文件只读：不落盘；项目文件/知识库按路径路由保存
-      if (sbIsPseudoPath(p)) { const s = $('ed-saved'); if (s) s.textContent = '只读'; return; }
+      // 保存路由：临时文件（非知识库第二套）走 sbSave 写回原绝对路径，项目文件/知识库按路径路由保存
       const handled = (typeof sbSave === 'function') ? await sbSave(p, mdText) : false;
       try {
         if (!handled) await noteStore.save(p, mdText);
-        edDirty.delete(p); const s = $('ed-saved'); if (s) s.textContent = handled ? '已保存到项目' : '已自动保存';
+        edDirty.delete(p); const s = $('ed-saved'); if (s) s.textContent = handled ? (sbIsPseudoPath(p) ? '已保存到临时文件' : '已保存到项目') : '已自动保存';
       } catch (err) { const s = $('ed-saved'); if (s) s.textContent = '保存失败'; }
     }, 800);
   }

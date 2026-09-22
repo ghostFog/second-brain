@@ -99,11 +99,12 @@
           + '<i data-lucide="briefcase" class="w-4 h-4"></i><span class="vault-h-name">' + esc(pn) + '</span></div>';
       });
     }
-    // 最近打开：全局跨知识库临时文件（最多 10 条）；选项作为二次菜单由悬浮 head 展开
+    // 最近打开：全局跨知识库临时文件（最多 10 条）；选项作为二次菜单由悬浮 head 展开。
+    // 「最近打开」是可展开入口，颜色与「打开项目…」等动作项一致，不特意置灰。
     if (tempRec.length) {
       html += '<div class="vault-dropdown-sep"></div>'
-        + '<div class="vault-dropdown-head vault-temp-head" data-vault-hist-head><i data-lucide="clock-3" class="w-4 h-4" style="color:var(--note-ink-3)"></i>'
-        + '<span style="color:var(--note-ink-3)">最近打开</span></div>';
+        + '<div class="vault-dropdown-head vault-temp-head" data-vault-hist-head><i data-lucide="clock-3" class="w-4 h-4"></i>'
+        + '<span>最近打开</span></div>';
     }
     /* 动作项：打开项目 / 打开知识库 */
     html += '<div class="vault-dropdown-sep"></div>'

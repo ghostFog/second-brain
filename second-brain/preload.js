@@ -151,6 +151,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   },
   /** 读取外部临时文件内容：{absPath} → {ok, path, name, content, binary, error}（≤5MB） */
   readFileExternal: (absPath) => ipcRenderer.invoke('notes:readFileExternal', { absPath: absPath }),
+  /** 写回外部临时文件内容：{absPath, content} → {ok, path, error}（仅允许已登记的临时文件） */
+  writeFileExternal: (absPath, content) => ipcRenderer.invoke('notes:writeFileExternal', { absPath: absPath, content: content }),
   /** 在系统文件管理器中显示外部临时文件 */
   revealExternal: (absPath) => ipcRenderer.invoke('notes:revealExternal', absPath),
 

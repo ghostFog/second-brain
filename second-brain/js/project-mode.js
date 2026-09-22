@@ -35,14 +35,25 @@ function sbIsPseudoPath(p) {
   return typeof p === 'string' && p.indexOf('temp://') === 0;
 }
 
-/* 统一保存路由：项目文件走 project:save，临时文件忽略（只读），其余返回 false 交给知识库。
+/* 统一保存路由：临时文件写回原绝对路径，项目文件走 project:save，其余返回 false 交给知识库。
  * @param {string} path  当前编辑路径
  * @param {string} mdText 全文
- * @returns {boolean} true=已由项目/临时分支处理，false=应交由既有知识库保存
+ * @returns {Promise<boolean>} true=已由临时/项目分支处理，false=应交由既有知识库保存
  * 作者: 火 冰 */
 async function sbSave(path, mdText) {
   if (!path) return false;
-  if (sbIsPseudoPath(path)) return true;                 // 临时文件只读，忽略保存
+  if (sbIsPseudoPath(path)) {
+    // 临时文件：单独一套读写机制，写回拖入时的原始绝对路径（白名单见 notes:writeFileExternal）
+    const nd = window.noteDesktop || {};
+    if (nd && nd.writeFileExternal) {
+      const abs = path.slice('temp://'.length);
+      try {
+        const r = await nd.writeFileExternal(abs, mdText);
+        return !!(r && r.ok);
+      } catch (_) { return true; } // 失败交给存储在 onEdInput 侧提示，此处避免落入知识库保存
+    }
+    return true; // 无写回桥接（网页/演示）时忽略保存
+  }
   if (window.sbProject && window.sbProject.isProjectMode() && !path.startsWith('temp://')) {
     return await window.sbProject.saveRel(path, mdText); // 项目文件
   }
@@ -206,21 +217,13 @@ globalThis.sbTempFiles = (function () {
     return h;
   }
 
-  /* 把「临时文件」区渲染进文件树容器顶部（renderFileTree 之后调用）。
-   * @param {Element} tree #file-tree 容器
+  /* 目录区不再渲染「临时文件」区（外部拖入改由 tab 栏临时打开 / 目录区新增笔记）。
+   * 保留空实现以兼容既有调用点（openTemp/closeTemp/bindGlobalTreeClick），不往 #file-tree 插入区块。
+   * @param {Element} _tree 忽略（历史遗留参数）
    * 作者: 火 冰 */
   function renderInto(tree) {
-    if (!tree) return;
-    // 先移除已存在的「临时文件」区（仅直接子级），避免每次插入叠加新区块而在目录区出现多个「临时文件」。
-    // 注意：标记属性必须打在真正插入的元素上，若打在临时 wrapper 上（元素不会被插入）则去重永远定位不到旧块。
-    const old = tree.querySelector('[data-temp-area]');
-    if (old) old.remove();
-    const patch = document.createElement('div');
-    patch.innerHTML = areaHtml();
-    const areaEl = patch.firstElementChild;
-    if (!areaEl) { refreshIcons(); return; }
-    areaEl.dataset.tempArea = '1';
-    tree.insertBefore(areaEl, tree.firstChild);
+    // 仅清理可能残留的旧区块，避免叠加；不再重建。
+    if (tree) { const old = tree.querySelector('[data-temp-area]'); if (old) old.remove(); }
     refreshIcons();
   }
 
@@ -258,7 +261,7 @@ globalThis.sbTempFiles = (function () {
     edCurrent = 'temp://' + abs;
     if (typeof vdSyncValue === 'function') vdSyncValue(edOutdated[edCurrent] || '');
     const cnt = document.getElementById('ed-count'); if (cnt) cnt.textContent = countChars(edOutdated[edCurrent] || '') + ' 字';
-    const saved = document.getElementById('ed-saved'); if (saved) saved.textContent = '只读';
+    const saved = document.getElementById('ed-saved'); if (saved) saved.textContent = '已加载（临时文件）';
     // 渲染唯一临时页签：隐藏既有知识库页签 + 挂一个临时页签；打开知识库笔记时 renderTabs 会清掉它
     renderTempTab(item.name);
     await recordRecent(abs);
@@ -316,49 +319,41 @@ globalThis.sbTempFiles = (function () {
     });
   }
 
-  /* 全局外部文件拖拽：dragover + drop（capture），解析 File → abspath → 读取 → 临时打开。
+  /* 全局外围拖拽协调：capture 阶段放行「可拖入」并设置拖拽反馈。
+   * 按落点分流：
+   *   - tab 栏（#editor-tabs）→ 放行供临时打开，dropEffect='move'（不显示「复制」）；
+   *   - 文件树（#file-tree）→ 放行，由 bindFileTreeDrag 在 drop 时按目录新增笔记；
+   *   - 编辑区（#ed-vditor）→ 交给 vditor 自身的图片/附件拖拽；
+   *   - 其余区域不再拦截临时打开（临时打开仅限 tab 栏）。
    * 内部文件树/页签拖拽不携带 files，不会误触发。作者: 火 冰 */
   function bindGlobalDrag() {
     if (window.__sbTempDragBound) return;
     window.__sbTempDragBound = 1;
     window.addEventListener('dragover', function (e) {
-      // 编辑区：交给 vditor 自身拖拽逻辑（图片行内 / 附件卡片），不在此放行，避免干扰其 drop 指示
       const t = e.target;
-      if (t && t.closest && t.closest('#ed-vditor')) return;
-      // 外部文件拖入目录区/页签栏等：dragover 阶段 dataTransfer.files 为空（内容要到 drop 才可读），
-      // 不能依赖 files.length 判断（否则恒 0 → 不 preventDefault → 拖入显示禁止图标）。
-      // 只要 types 含 'Files' 即放行并设 copy，显示可拖入；是否 .md 在 drop 阶段再校验。
-      if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.indexOf('Files') !== -1) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-      }
+      if (t && t.closest && t.closest('#ed-vditor')) return;         // 编辑区交给 vditor
+      if (!e.dataTransfer) return;
+      const hasFiles = e.dataTransfer.types && e.dataTransfer.types.indexOf('Files') !== -1;
+      if (!hasFiles) return;
+      // tab 栏：外部文件可拖入（作为新临时页签打开）；不显示「复制」
+      if (t && t.closest && t.closest('#editor-tabs')) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; return; }
+      // 文件树：放行供按目录新增笔记（具体落点由 bindFileTreeDrag 在 drop 判定）
+      if (t && t.closest && t.closest('#file-tree')) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
     }, true);
-    window.addEventListener('drop', async function (e) {
+    // 全局兜底 drop 不再自行拦截临时打开：外部 md/txt 临时打开已收敛到 tab 栏，
+    // 目录区新增笔记由 bindFileTreeDrag 处理；其余区域不劫持为临时打开。
+    window.addEventListener('drop', function (e) {
+      const t = e.target;
+      if (!t || !t.closest) return;
+      // 编辑区交给 vditor 自身上传逻辑（图片/附件卡片），不劫持
+      if (t.closest('#ed-vditor')) return;
+      // tab 栏交由其自身 drop 处理（作为新临时页签打开）；文件树交由 bindFileTreeDrag 新增笔记
+      if (t.closest('#editor-tabs') || t.closest('#file-tree')) return;
       const dt = e.dataTransfer;
-      // 注意：dataTransfer.files 是 FileList 而非数组，不能用 Array.isArray 判断（否则恒 false，drop 静默失效）
       const files = (dt && dt.files && dt.files.length) ? dt.files : null;
       if (!files) return;
+      // 其余区域：不再临时打开，阻止浏览器默认把文件拖入页面
       e.preventDefault();
-      const t = e.target;
-      // 编辑区：让 vditor 自身上传逻辑处理（非图片 → `> [!attach]` 附件卡片，图片 → 行内预览），不劫持为临时打开
-      if (t && t.closest && t.closest('#ed-vditor')) return;
-      // 页签栏：由页签栏自身 drop 处理（作为新临时页签打开），避免与下方重复且防止落入编辑器
-      if (t && t.closest && t.closest('#editor-tabs')) return;
-      const nd = window.noteDesktop || {};
-      for (let i = 0; i < files.length; i++) {
-        const f = files[i];
-        let abs = '';
-        if (nd.getPathForFile) abs = nd.getPathForFile(f);     // 优先 webUtils（精确）
-        if (!abs && f && typeof f.path === 'string') abs = f.path;
-        if (!abs) { showToast('无法获取拖入文件的路径'); return; }
-        // 仅支持 .md / .markdown / .txt 临时打开，其它类型提示不支持
-        const ext = (abs.split('.').pop() || '').toLowerCase();
-        if (ext !== 'md' && ext !== 'markdown' && ext !== 'txt') {
-          showToast('仅支持拖拽 .md / .markdown / .txt 文件');
-          return;
-        }
-        await globalThis.sbTempFiles.openTemp(abs);
-      }
     }, true);
   }
 

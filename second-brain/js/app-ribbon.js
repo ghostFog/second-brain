@@ -27,7 +27,7 @@ globalThis.RibbonManager = (function () {
    * @type {Object[]}
    */
   var BUILTIN_BUTTONS = [
-    { id: 'editor',  icon: 'file-text', title: '知识库',     route: '#/editor',          kind: 'built-in' },
+    { id: 'editor',  icon: 'file-text', title: '编辑界面', route: '#/editor',          kind: 'built-in' },
     // { id: 'search',   icon: 'search',    title: '搜索',       action: 'open-command',     kind: 'built-in' },
     { id: 'graph',    icon: 'git-fork',  title: '图谱视图',   route: '#/graph',           kind: 'built-in' },
     { id: 'plugins', icon: 'puzzle',    title: '插件市场',   route: '#/plugins',         kind: 'built-in' },
