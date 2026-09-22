@@ -1152,8 +1152,11 @@
       toolbar: VDTOOLBAR.concat(window.__sbVdToolbarInjects || []),
       preview: {
         delay: 50, cdn: '', mode: (vdPreview === 'both') ? 'both' : 'editor', transform: transformPreviewHtml,
-        // 预览/阅读模式代码块行号（vditor 官方能力 preview.hljs.lineNumber；行号渲染结构与样式见 css/app.css。作者: 火 冰）
-        hljs: { lineNumber: true },
+        // 隐藏预览顶部的动作条（Desktop/Tablet/Mobile/Wechat/知乎 等预览动作按钮），置空 actions 即不渲染
+        actions: [],
+        // 预览/阅读模式代码块行号已移除：vditor 内置 .vditor-linenumber 为绝对定位，不参与 pre 高度、
+        // 超区溢出且不随滚动条同步（见开发进度 ED-57）。源码模式行号由宿主自绘，与此无关。
+        hljs: { lineNumber: false },
       },
       // 上传图片/附件：accept 覆盖图片与常用附件（pdf/office/脚本/压缩包等），
       // handler 由桌面端 IPC 落盘 .resources（UUID 重命名），笔记内链接使用真实名。
@@ -1427,12 +1430,42 @@
     if (t.contains(ta)) vdSvGutterOnScroll(t.scrollTop);
   }, true);
 
-  /** 画布测量文本像素宽度（与 textarea 相同字体/字号）。CJK 逐字换行取 ceil 精确，西文按词换行略偏高，可接受 */
-  function vdSvTextWidth(s, font) {
-    const c = vdSvTextWidth.canvas || (vdSvTextWidth.canvas = document.createElement('canvas'));
-    const ctx = c.getContext('2d');
-    ctx.font = font;
-    return ctx.measureText(s || ' ').width;
+  /** 测量单个逻辑行在 sv 源码 textarea 相同断行规则下的实际可视行数（换行后的行数 = 像素高 ÷ 行高）。
+   *  用隐藏测量元素复刻 textarea 的 white-space:pre-wrap + word-break:break-word 断行并实测高度，
+   *  取代早期「canvas 像素宽 ÷ 可用宽向上取整」的估算法——后者只在 CJK 逐字换行下精确，西文按词换行
+   *  会高估行数，在窄分屏/长西文行时行号逐行向下漂移（对不齐）。作者: 火 冰
+   * @param {string} line 单个逻辑行文本（不含换行符）
+   * @param {number} availW 可用文本宽度（px，= textarea 内容区宽）
+   * @param {number} lh 行高（px）
+   * @param {CSSStyleDeclaration} cs textarea 的计算样式（用于复刻断行/字距/字体）
+   * @returns {number} 该行换行后的可视行数（≥1）
+   * author huobing */
+  function vdSvLineRows(line, availW, lh, cs) {
+    let m = vdSvLineRows.hidden;
+    if (!m) {
+      m = document.createElement('div');
+      m.style.position = 'absolute'; m.style.left = '-99999px'; m.style.top = '0';
+      m.style.visibility = 'hidden';
+      m.style.whiteSpace = 'pre-wrap';
+      m.style.boxSizing = 'border-box'; m.style.padding = '0'; m.style.margin = '0'; m.style.border = '0';
+      vdSvLineRows.hidden = m;
+      document.body.appendChild(m);
+    }
+    // 逐项复刻 textarea 的换行/字距/字体相关属性，宽度 = 其内容区可用宽，使断行结果与 textarea 一致
+    m.style.fontFamily = cs.fontFamily || 'monospace';
+    m.style.fontSize = cs.fontSize || '16px';
+    m.style.fontStyle = (cs.fontStyle && cs.fontStyle !== 'normal') ? cs.fontStyle : 'normal';
+    m.style.lineHeight = lh + 'px';
+    m.style.width = availW + 'px';
+    m.style.wordBreak = cs.wordBreak || 'break-word';
+    m.style.wordWrap = cs.wordWrap || 'break-word';
+    m.style.overflowWrap = cs.overflowWrap || 'break-word';
+    m.style.letterSpacing = cs.letterSpacing || 'normal';
+    m.style.wordSpacing = cs.wordSpacing || 'normal';
+    m.style.tabSize = cs.tabSize || '8';
+    m.style.fontVariantLigatures = cs.fontVariantLigatures || 'no-common-ligatures';
+    m.textContent = line;
+    return Math.max(1, Math.round((m.scrollHeight || lh) / lh));
   }
 
   /** 重建 sv 源码行号列：仅 vdMode==='sv' 且实例就绪时生效，否则移除 gutter 并还原内边距。
@@ -1441,7 +1474,11 @@
   function vdSvGutterRefresh() {
     const ta = vdSvTextarea();
     let g = document.getElementById(SB_SV_GUTTER_ID);
-    if (!ta || vdMode !== 'sv' || !document.getElementById('ed-vditor')) {
+    // 隐藏条件：sv 源码 textarea 不可见（如纯预览 vdPreview='preview' 下 sv 被 display:none）或
+    // 非 sv 模式 / 实例未就绪时，一律移除 gutter 并还原内边距，避免行号列残留渲染到预览布局。
+    const svHidden = !ta || !document.getElementById('ed-vditor') || vdMode !== 'sv' ||
+      window.getComputedStyle(ta).display === 'none';
+    if (svHidden) {
       if (g && g.parentNode) g.parentNode.removeChild(g);
       if (ta) ta.style.paddingLeft = '';
       return;
@@ -1463,7 +1500,6 @@
     const pt = parseFloat(cs.paddingTop) || 0;                                       // 对齐首行文本
     // 文本换行可用宽度 = textarea 内容区（clientWidth 为 padding-box 宽，扣除左右内边距）
     const availW = Math.max(0, ta.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0));
-    const font = (cs.fontStyle && cs.fontStyle !== 'normal' ? cs.fontStyle + ' ' : '') + cs.fontSize + ' ' + cs.fontFamily;
     const lines = (ta.value || '').split('\n');
     const key = lh.toFixed(2) + '|' + pt.toFixed(1) + '|' + availW.toFixed(1) + '|' + lines.length;
     if (g.__key === key) { vdSvGutterOnScroll(ta.scrollTop); return; }   // 行数/宽度/行高未变则仅对齐，避免每键重建
@@ -1474,8 +1510,7 @@
     for (let i = 0; i < lines.length; i++) {
       const d = document.createElement('div');
       d.textContent = String(i + 1);
-      const tw = vdSvTextWidth(lines[i], font);
-      const rows = availW > 0 ? Math.max(1, Math.ceil(tw / availW)) : 1;
+      const rows = vdSvLineRows(lines[i], availW, lh, cs);   // 按 textarea 真实断行测量该行换行后的行数（对不齐根因修复）
       d.style.height = (rows * lh).toFixed(2) + 'px';   // 换行后的真实行高，使各行号与文本逐行对齐、gutter 总高通栏到底
       frag.appendChild(d);
     }

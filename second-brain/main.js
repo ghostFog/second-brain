@@ -1009,6 +1009,7 @@ async function walkNotes(dir, base, out) {
   let count = 0;
   for (const it of items) {
     if (it.name === META_DIR || it.name === RESOURCE_DIR) continue; // 跳过内部元数据目录 .second-brain 与上传资源目录 .resources，不进入笔记列表
+    if (it.name.startsWith('.')) continue; // 跳过 .git/.obsidian/.github 等点开头隐藏项，避免目录被当笔记打开/进最近打开（见 Bug-065）
     const abs = path.join(dir, it.name);
     const rel = base ? base + '/' + it.name : it.name;
     if (it.isDirectory()) {
@@ -1622,7 +1623,12 @@ vaultHandle('notes:list', async () => {
 /* 读取单篇笔记原文 */
 vaultHandle('notes:read', async (_e, rel) => {
   await ensureVault();
-  return await fs.promises.readFile(resolveVaultPath(rel), 'utf8');
+  const abs = resolveVaultPath(rel);
+  const st = await fs.promises.lstat(abs).catch(() => null);   // 目录当作文件读会抛裸 EISDIR，先判定给清晰错误
+  if (st && st.isDirectory()) {
+    throw new Error('EISDIR: 目标是目录而非笔记文件，无法读取: ' + rel);
+  }
+  return await fs.promises.readFile(abs, 'utf8');
 });
 
 /* 保存单篇笔记（自动建父目录）；保存后增量更新该笔记的索引块 */

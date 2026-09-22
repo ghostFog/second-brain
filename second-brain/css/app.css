@@ -835,25 +835,12 @@ body.ed-fs-active #ed-vditor .vditor { height: 100% !important; }
 body.locked #lock-screen ~ #view-templates,
 body.locked .app-main { visibility: hidden; }
 
-/* ---------- vditor 预览/阅读代码块行号（preview.hljs.lineNumber:true 生成的 hljs-ln 结构） ----------
- * vditor 经 highlight.js 把代码块重排为 <table class="hljs-ln">，行号在 .hljs-ln-numbers 的 data-line-number。
- * 覆盖宿主 vditor 主题对代码块表格/单元格的默认样式，使其以两列（行号列+代码列）显示。
- * 作者: 火 冰 */
+/* ---------- 兜底：预览/阅读模式代码块一律不显示行号 ----------
+ * vditor 内置代码块行号 .vditor-linenumber（绝对定位、逐行 height 实测）在宽代码/软换行下间隙不规则、
+ * 超区溢出且不随滚动条同步（见 Bug-065）。虽然 preview.hljs.lineNumber 已置 false，此处再以 CSS 强制隐藏，
+ * 兼容旧构建/未重建 vditor 实例的残留节点，保证预览里绝不出现不规则行号。作者: 火 冰 */
+.vditor-reset .vditor-linenumber,
+.vditor-reset .vditor-linenumber__rows,
 .vditor-reset pre code.hljs-line-numbers,
-.vditor-reset pre.hljs-line-numbers { padding-left: 0; }
-.vditor-reset pre code.hljs-line-numbers > table.hljs-ln,
-.vditor-reset pre.hljs-line-numbers > table.hljs-ln {
-  margin: 0; border-collapse: collapse; width: 100%;
-}
-.vditor-reset pre code.hljs-line-numbers .hljs-ln td,
-.vditor-reset pre.hljs-line-numbers .hljs-ln td { border: none; padding: 0; vertical-align: top; }
-.vditor-reset pre code.hljs-line-numbers .hljs-ln-numbers,
-.vditor-reset pre.hljs-line-numbers .hljs-ln-numbers {
-  -webkit-user-select: none; user-select: none;
-  white-space: nowrap; text-align: right;
-  padding-right: 12px; padding-left: 8px;
-  font-size: 12px; opacity: 0.55;
-  color: var(--note-ink-3, #888);
-}
-.vditor-reset pre code.hljs-line-numbers .hljs-ln-numbers::before,
-.vditor-reset pre.hljs-line-numbers .hljs-ln-numbers::before { content: attr(data-line-number); }
+.vditor-reset pre.hljs-line-numbers,
+.vditor-reset pre table.hljs-ln td:first-child { display: none !important; }

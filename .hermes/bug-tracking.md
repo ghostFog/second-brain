@@ -90,6 +90,7 @@
 | CD-50 | 必须 | 插件/UI 声明的 **lucide 图标名必须存在于实际打包的 lucide 包内**：改动图标后以包 `icons`（`kebab-case` → PascalCase 键）核对命中，勿凭「看着像」取名；渲染端对缺失图标默认抛 `createIcons` 告警（NDEBUG 下仍进控制台/error 日志） | Bug-063 |
 | CD-51 | 必须 | 插件内容若经 `new Function(...)` 沙箱作用域执行，其顶层 `function` 声明**不会成为 `window` 全局**：宿主要调用插件能力（如 vditor 工具栏 bridge）时，插件必须**显式 `window.xxx = f` 导出**，宿主一律经 `typeof window.xxx === 'function'` 守卫后调用，禁止假定顶层函数全局可见 | Bug-064 |
 | CD-52 | 必须 | vditor 预览/阅读代码块行号 = **配置开启 + 样式补齐**双要素：`preview.hljs.lineNumber:true` 启用生成 `.hljs-ln` table 行号结构，且必须自定义 `.hljs-ln*` CSS（vditor 自带 `dist/index.css` 不含行号样式）以两列显示行号——二者缺一即行号不显示 | Bug-064 |
+| CD-53 | 必须 | 凡 IPC（及同类异步）**读文件**的边界必须先做**目录判定**（`lstat()` 后 `isDirectory()`），用清晰错误取代 Node 裸 `EISDIR`；且渲染端 `await` 可能失败的读（IPC/引擎）必须 `try/catch`，失败时回滚到安全状态（如撤销刚压入的页签再返回）再退出，禁止让拒绝上抛成「未处理 Promise 异常」或留打不开的幽灵条目 | Bug-065 |
 
 ## 维护要求
 

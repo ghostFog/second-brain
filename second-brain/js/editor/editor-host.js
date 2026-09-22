@@ -139,12 +139,26 @@
       ? pluginManager.getEditorProviders(edExt) : [];
     edProvider = provs[0] || null;
     edTextFallback = !!(edProvider && edProvider.isFallback);
-    // 内容装载：缓存命中则不重复读；项目模式走项目读桥接（相对项目根的 rel 路径）
+    // 内容装载：缓存命中则不重复读；项目模式走项目读桥接（相对项目根的 rel 路径）。
+    // 读取失败（误传目录路径触发 EISDIR、文件被删等）时撤销刚压入的页签并返回，
+    // 既避免「未处理 Promise 异常」，也不留打不开的幽灵页签。作者: 火 冰
     if (!(path in edOutdated)) {
-      const c = (window.sbProject && window.sbProject.isProjectMode() && !sbIsPseudoPath(path))
-        ? (await window.sbProject.read(path)).content
-        : await noteStore.read(path);
-      edOutdated[path] = c;
+      try {
+        const c = (window.sbProject && window.sbProject.isProjectMode() && !sbIsPseudoPath(path))
+          ? (await window.sbProject.read(path)).content
+          : await noteStore.read(path);
+        edOutdated[path] = c;
+      } catch (err) {
+        const i = edOpenTabs.indexOf(path);
+        if (i !== -1) edOpenTabs.splice(i, 1);
+        renderTabs();
+        console.error('[openNote] 读取笔记失败，已跳过打开:', path, err && (err.message || err));
+        // 兜底：当前无任何笔记打开（如启动恢复的目录 tab 失败）时不静默留白，回退打开首个真实笔记；
+        // 回退目标与失败路径相同时不再递归（避免无限重开同一失败项）。作者: 火 冰
+        const fb = edNotes.length ? edNotes[0].path : null;
+        if (!edCurrent && fb && fb !== path) { openNote(fb); }
+        return;
+      }
     }
     /* 关键时序：edCurrent 必须在「内容真正装载进编辑器」之前设置，而不是 openNote 开头。
      * read 是异步的（await），若在开头就设 edCurrent=path，则从「点击新文件」到「新内容渲染进
