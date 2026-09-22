@@ -63,9 +63,10 @@
  * 作者: 火 冰 */
 #ed-vditor .vditor-sv { position: relative; }
 #ed-vditor .sb-sv-gutter {
-  position: absolute; top: 0; left: 0; width: 46px; box-sizing: border-box;
+  position: absolute; top: 0; left: 0; width: 36px; box-sizing: border-box;
+  min-height: 100%;   /* 短文档时背景列通栏到编辑区底部（行号 div 已按内容增高，长文档自然超过 100%） */
   font-family: var(--note-font-mono); font-size: 12px; line-height: var(--gutter-lh, 21px);
-  color: var(--note-ink-3); background: var(--note-gutter-bg);
+  color: var(--note-ink-3); background: var(--note-gutter-bg, #f2f3f5);
   border-right: 1px solid var(--note-border); text-align: right; padding: 0 8px 0 0;
   overflow: hidden; user-select: none; pointer-events: none; z-index: 6; white-space: nowrap;
 }

@@ -1383,26 +1383,61 @@
   /* ============================================================
    * sv 分屏源码行号 gutter（自绘，复用宿主旧 .ed-gutter 手法）。
    * vditor 的 options.lineNumber 只服务代码块（vditor-linenumber，见 preview.hljs.lineNumber）
-   * 与 IR 高亮，并不在 sv 源码 <textarea> 侧渲染行号——故 sv 分屏的源码行号由宿主自绘：
-   * 在 sv 源码 textarea 外层定位一列行号，随 ta.scrollTop 平移、随内容行数同步重绘，
-   * 并给 textarea 让出左侧内边距以免文字被行号列遮挡。样式见 css/app.css .sb-sv-gutter。
-   * 非 sv 视图时自动清理。作者: 火 冰
+   * 与 IR 高亮，并不在 sv 源码 <textarea> 侧渲染行号——故 sv 分屏的源码行号由宿主自绘。
+   * 结构要点：sv 源码 textarea（v.sv.element）自身不滚动（vditor 用 paddingBottom 增高、
+   * 由父滚动容器滚动，见 index.js 7102/12778），故行号列必须锚定在「滚动父容器」上并按
+   * sc.scrollTop 平移（不能按 ta.scrollTop，其恒为 0）；同时用 textarea 的 paddingTop 让
+   * 行号与首行文本对齐、paddingLeft 让出左缘。样式见 css/app.css .sb-sv-gutter。作者: 火 冰
    * ============================================================ */
   const SB_SV_GUTTER_ID = 'sb-sv-gutter';
 
-  /** 取 sv 源码 textarea（vditor.sv.element 即可滚源 textarea） */
+  /** 取 sv 源码 textarea（vditor.sv.element） */
   function vdSvTextarea() {
     return (vdInst && vdInst.vditor && vdInst.vditor.sv && vdInst.vditor.sv.element) || null;
   }
 
-  /** 滚动/变更时平移行号列（换算成 translateY 避免回流） */
-  function vdSvGutterOnScroll() {
-    const ta = vdSvTextarea();
-    const g = document.getElementById(SB_SV_GUTTER_ID);
-    if (ta && g) g.style.transform = 'translateY(' + (-ta.scrollTop) + 'px)';
+  /** 向上找最近的可渲染滚动父容器（overflowY auto/scroll 且确有滚动条），无则返回 null */
+  function vdSvScroller(ta) {
+    let n = ta && ta.parentElement;
+    while (n) {
+      const s = window.getComputedStyle(n);
+      if ((/auto|scroll/.test(s.overflowY)) && n.scrollHeight > n.clientHeight) return n;
+      n = n.parentElement;
+    }
+    return null;
   }
 
-  /** 重建 sv 源码行号列：仅 vdMode==='sv' 且实例就绪时生效，否则移除 gutter 并还原内边距 */
+  /** 滚动/变更时按真实滚动偏移 translateY 平移行号列（避免重排）。
+   *  说明：sv 源码 <textarea> 自身 overflow:auto（vditor index.css .vditor-sv），它是真实滚动器；
+   *  行号列在外层绝对定位、无法放进 textarea 内，故需按实际 scrollTop 反向平移来贴合滚动后的行。
+   *  只接受滚动偏移量，不再依赖某个具体容器，避免取到非滚动父容器的恒 0 值把位移重置。 */
+  function vdSvGutterOnScroll(st) {
+    const g = document.getElementById(SB_SV_GUTTER_ID);
+    if (g && typeof st === 'number') g.style.transform = 'translateY(' + (-st) + 'px)';
+  }
+
+  /* 捕获式监听任意滚动：直接取实际滚动元素 e.target.scrollTop（textarea 或套在其上的滚动容器），
+   * 仅当目标含 sv 源码 textarea 时才平移行号列（预览/大纲滚动不影响）。 */
+  document.addEventListener('scroll', function (e) {
+    const t = e.target;
+    if (!t || t.nodeType !== 1) return;
+    const g = document.getElementById(SB_SV_GUTTER_ID);
+    const ta = vdSvTextarea();
+    if (!g || !ta) return;
+    if (t.contains(ta)) vdSvGutterOnScroll(t.scrollTop);
+  }, true);
+
+  /** 画布测量文本像素宽度（与 textarea 相同字体/字号）。CJK 逐字换行取 ceil 精确，西文按词换行略偏高，可接受 */
+  function vdSvTextWidth(s, font) {
+    const c = vdSvTextWidth.canvas || (vdSvTextWidth.canvas = document.createElement('canvas'));
+    const ctx = c.getContext('2d');
+    ctx.font = font;
+    return ctx.measureText(s || ' ').width;
+  }
+
+  /** 重建 sv 源码行号列：仅 vdMode==='sv' 且实例就绪时生效，否则移除 gutter 并还原内边距。
+   *  每个数字 div 高度 = 该逻辑行换行后的实际像素高度，gutter 总高随内容增高（通栏到底），
+   *  配合 translateY 平移即与文本逐行对齐、滚动到哪显示到哪。 */
   function vdSvGutterRefresh() {
     const ta = vdSvTextarea();
     let g = document.getElementById(SB_SV_GUTTER_ID);
@@ -1411,30 +1446,43 @@
       if (ta) ta.style.paddingLeft = '';
       return;
     }
-    const wrap = ta.parentElement;
-    if (!wrap) return;
-    const lh = parseFloat(window.getComputedStyle(ta).lineHeight) || 21;
-    const n = (ta.value || '').split('\n').length;
     if (!g) {
+      const sc = vdSvScroller(ta) || ta.parentElement;
+      if (!sc) return;
+      if (sc.style.position !== 'relative' && sc.style.position !== 'absolute' && sc.style.position !== 'fixed') {
+        sc.style.position = 'relative';   // 行号列 absolute 锚到含 textarea 的定位容器
+      }
       g = document.createElement('div');
       g.id = SB_SV_GUTTER_ID;
-      wrap.appendChild(g);
-      ta.addEventListener('scroll', vdSvGutterOnScroll);
-      window.addEventListener('resize', vdSvGutterOnScroll);
+      g.className = 'sb-sv-gutter';   // 命中 css/app.css 的 #ed-vditor .sb-sv-gutter（仅设 id 匹配不到 class 选择器，样式全丢：无背景/无宽度/未绝对定位而落到文档流顶，行号跑到 textarea 外面）
+      sc.insertBefore(g, sc.firstChild);
+      window.addEventListener('resize', function () { vdSvGutterRefresh(); });   // 宽度变化影响换行，重建行高
     }
-    if ((g.lastChild && +g.lastChild.textContent) !== n) {
-      g.innerHTML = '';
-      const frag = document.createDocumentFragment();
-      for (let i = 1; i <= n; i++) {
-        const d = document.createElement('div');
-        d.textContent = String(i);
-        frag.appendChild(d);
-      }
-      g.appendChild(frag);
-    }
+    const cs = window.getComputedStyle(ta);
+    const lh = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) || 16) * 1.4;   // 行高（px）
+    const pt = parseFloat(cs.paddingTop) || 0;                                       // 对齐首行文本
+    // 文本换行可用宽度 = textarea 内容区（clientWidth 为 padding-box 宽，扣除左右内边距）
+    const availW = Math.max(0, ta.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0));
+    const font = (cs.fontStyle && cs.fontStyle !== 'normal' ? cs.fontStyle + ' ' : '') + cs.fontSize + ' ' + cs.fontFamily;
+    const lines = (ta.value || '').split('\n');
+    const key = lh.toFixed(2) + '|' + pt.toFixed(1) + '|' + availW.toFixed(1) + '|' + lines.length;
+    if (g.__key === key) { vdSvGutterOnScroll(ta.scrollTop); return; }   // 行数/宽度/行高未变则仅对齐，避免每键重建
+    g.__key = key;
     g.style.setProperty('--gutter-lh', lh.toFixed(2) + 'px');
-    vdSvGutterOnScroll();
-    ta.style.paddingLeft = '54px';   // 给行号列让位（与 .sb-sv-gutter 宽度配套）
+    g.style.paddingTop = pt + 'px';
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < lines.length; i++) {
+      const d = document.createElement('div');
+      d.textContent = String(i + 1);
+      const tw = vdSvTextWidth(lines[i], font);
+      const rows = availW > 0 ? Math.max(1, Math.ceil(tw / availW)) : 1;
+      d.style.height = (rows * lh).toFixed(2) + 'px';   // 换行后的真实行高，使各行号与文本逐行对齐、gutter 总高通栏到底
+      frag.appendChild(d);
+    }
+    g.innerHTML = '';
+    g.appendChild(frag);
+    vdSvGutterOnScroll(ta.scrollTop);
+    ta.style.paddingLeft = '40px';   // 给行号列让位（约 4 位数字宽 + 间隙，与 .sb-sv-gutter 宽度配套）
   }
   window.vdSvGutterRefresh = vdSvGutterRefresh;
 
