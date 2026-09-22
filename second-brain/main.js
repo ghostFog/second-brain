@@ -43,9 +43,11 @@ if (!gotTheLock) {
   app.quit(); // 已有实例在运行：本实例直接退出
 }
 else {
-  // 已有实例收到用户再次启动的请求（用户双击图标/托盘恢复等）：
-  // 恢复并聚焦主窗口，让用户看到既有的应用而非另起一个慢实例
-  app.on('second-instance', function () {
+  // 已有实例收到用户再次启动的请求（双击图标/托盘恢复/系统「打开方式」传入文件等）：
+  // 恢复并聚焦主窗口；若 commandLine 携带外部文件，则作为临时文件打开
+  app.on('second-instance', function (_e, commandLine) {
+    const abs = pickOpenWithArg(commandLine);
+    if (abs) { openWithFile(abs); return; }
     showMainWindow();
   });
 }
@@ -467,6 +469,47 @@ function showMainWindow() {
   const wins = BrowserWindow.getAllWindows().filter(function (w) { return !w.isDestroyed(); });
   if (wins.length === 0) { createWindow(); return; }
   wins.forEach(showWindow);
+}
+
+/* ==================== 系统「打开方式」传入文件 → 临时文件 ==================== */
+
+/* 系统「打开方式」（OS 右键→打开方式→第二脑）可承载的临时文件扩展名 */
+const OPEN_WITH_EXTS = ['.md', '.markdown', '.txt'];
+
+/* 从命令行参数 argv 中检出第一个存在的可临时打开文件路径（.md/.markdown/.txt），无则返回 null。
+ * argv 形如 [exePath, filePath, ...]（Windows 首次启动）或 second-instance 的 commandLine。作者: 火 冰 */
+function pickOpenWithArg(argv) {
+  if (!argv) return null;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (!a || typeof a !== 'string' || a.charAt(0) === '-') continue;
+    if (OPEN_WITH_EXTS.indexOf(path.extname(a).toLowerCase()) === -1) continue;
+    const abs = path.resolve(a);
+    try { if (fs.existsSync(abs)) return abs; } catch (_) { /* 忽略 */ }
+  }
+  return null;
+}
+
+/* 待窗口就绪后把外部文件绝对路径推给渲染端（经 'open-file' 事件 → sbTempFiles.openTemp 以 temp:// 临时打开）。
+ * 窗口仍在加载时挂 did-finish-load，避免先到的事件丢失。作者: 火 冰 */
+function forwardOpenFile(win, abs) {
+  if (!win || win.isDestroyed() || !abs) return;
+  const wc = win.webContents;
+  const send = function () { try { wc.send('open-file', abs); } catch (_) { /* 窗口已销毁等忽略 */ } };
+  if (win.isLoading()) wc.once('did-finish-load', send);
+  else send();
+}
+
+/* 处理系统「打开方式」传入的文件：聚焦一个窗口（无则新建默认库窗口）并按临时文件打开。作者: 火 冰 */
+function openWithFile(abs) {
+  if (!abs) return;
+  let w = null;
+  const wins = BrowserWindow.getAllWindows().filter(function (x) { return !x.isDestroyed(); });
+  w = wins[wins.length - 1] || null; // 最近一个可见窗口
+  if (!w) { try { w = createWindow(); } catch (_) { w = null; } }
+  if (!w) return;
+  showWindow(w);
+  forwardOpenFile(w, abs);
 }
 
 /** 创建系统托盘图标与菜单：菜单动态刷新（refreshTrayMenu），含全部知识库列表 */
@@ -2389,6 +2432,12 @@ vaultHandle('temp:recentRemove', async (_e, absPath) => {
   persistRecentTemp();
   return recentTemp.slice(0, TEMP_RECENT_MAX);
 });
+/* 清空「最近打开」临时文件列表 */
+vaultHandle('temp:recentClear', async () => {
+  recentTemp = [];
+  persistRecentTemp();
+  return recentTemp;
+});
 
 /* 把默认知识库内容迁移到新目录（移动语义：复制成功后清空原默认库）。
  * 迁移成功后 defaultVaultPath 指向新目录，即新默认库；从历史中移除已失效的旧默认库路径。
@@ -2947,6 +2996,9 @@ app.whenReady().then(async () => {
   await session.defaultSession.clearCache();
   _slog('after_clearCache');
   createWindow();
+  // Windows 首次「打开方式」启动：process.argv 在 exe 后可能带外部文件路径 → 按临时文件打开（渲染端 sbTempFiles.openTemp）
+  const startFile = pickOpenWithArg(process.argv);
+  if (startFile) openWithFile(startFile);
   createTray(); // 创建系统托盘图标与菜单（G-12）
 
   // macOS：点击 Dock 图标时若无窗口则重建

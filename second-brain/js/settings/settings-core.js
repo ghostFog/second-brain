@@ -56,7 +56,6 @@
   /* 设置项副作用映射：返回已应用文案，无副作用返回 null */
   function settingsSideEffect(key, val) {
     const on = val === true || val === 'true' || val === 1 || val === '1';
-    if (key === 'lineNumbers') { setLineNumbers(on); return on ? '行号已开启' : '行号已关闭'; }
     if (key === 'edMode') { const v = (val === '预览' || val === 'preview') ? 'preview' : 'edit'; setEditorMode(v); return '默认编辑模式：' + val; }
     if (key === 'edAutoSave') return on ? '自动保存已开启' : '自动保存已关闭';
     if (key === 'smartList') return on ? '智能列表延续已开启' : '智能列表延续已关闭';

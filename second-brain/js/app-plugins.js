@@ -7,6 +7,27 @@
 
 'use strict';
 
+/* ============================================
+ * 编辑工具栏注入桥（vditor）：供宿主/插件把自定义工具按钮注入编辑工具栏。
+ * 之所以放在最早加载的 app-plugins.js：插件 main.js 经 new Function 沙箱执行，
+ * 可能在 editor-vditor.js 构建工具栏之前、也可能在其之后，故必须提供一个「注入队列」
+ * + 幂等 API，保证任何时序注入都进队，最后由 editor-vditor.js 构建工具栏时并入 VDTOOLBAR。
+ * 「宽屏 / 表格列宽 / 大纲」三个能力属 markdown-editor 插件，由其经本桥注入对应按钮；
+ * 「全屏」为宿主自接管，宿主用同一 API 注册自身按钮。作者: 火 冰
+ * ============================================ */
+window.__sbVdToolbarInjects = window.__sbVdToolbarInjects || [];
+/**
+ * 注册一个 vditor 编辑工具栏自定义按钮（幂等：同名按钮只入队一次）。
+ * @param {{name:string, tip:string, icon:string, click:Function}} item 按钮项
+ *   name  按钮 name（构建后亦用于 window.vdSetToolbarCurrent 同步高亮）
+ *   icon  内联 SVG 字符串
+ */
+window.sbVdToolbarAdd = function (item) {
+  if (!item || !item.name) return;
+  const injects = window.__sbVdToolbarInjects;
+  if (!injects.some(function (x) { return x.name === item.name; })) injects.push(item);
+};
+
 /* ============================
  * PluginManager — 插件注册中心
  * 负责维护已安装插件列表，对外暴露三个扩展点：

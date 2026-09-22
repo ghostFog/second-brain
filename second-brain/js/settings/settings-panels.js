@@ -155,7 +155,6 @@
         '<section class="settings-group"><h3 class="text-body font-semibold mb-4" style="color:var(--note-ink);">编辑基础</h3>'
         + '<div class="flex items-center justify-between py-3"><div class="flex-1 pr-4"><div class="text-[14px]" style="color:var(--note-ink);">默认编辑模式</div><div class="text-caption" style="color:var(--note-ink-3);">打开笔记时的初始模式</div></div><div class="relative"><select class="select-box" data-skey="edMode"><option>编辑</option><option>预览</option></select></div></div>'
         + tgRow('自动保存', '编辑后自动写入磁盘', true, 'edAutoSave')
-        + tgRow('显示行号', '编辑区左侧显示行号', true, 'lineNumbers')
         + tgRow('智能列表延续', '回车自动延续列表缩进', true, 'smartList')
         + '</section>'
         + '<section class="settings-group"><h3 class="text-body font-semibold mb-4" style="color:var(--note-ink);">文件类型</h3>'

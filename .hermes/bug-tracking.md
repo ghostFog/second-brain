@@ -88,6 +88,8 @@
 | CD-48 | 必须 | 凡写入/更新 vault 文件的路径，其**进入向量索引的入口（增量 `updateNote`、全量扫描）必须使用同一套隐藏路径判定**（任一路径段以 `.` 开头即隐藏路径，覆盖 `.gitignore`/`.obsidian`/`.second-brain` 等）；且对历史已误入的脏 chunk 要在**索引加载（`_loadIndexFrom`）与检索（`retrieve`）时兜底过滤**，防止过滤文件/配置类文件污染检索来源 | Bug-061 |
 | CD-49 | 必须 | ① 面向同一仓库目录的 git 写命令（status/add/commit/push/checkout/reset 等）必须经**按 cwd 的串行队列**执行并防重入，观测到 `.lock ... File exists / cannot lock ref` 时先清除 `.git` 下残留 `*.lock` 再重试一次，不得直接失败；② 纯探测类 git 命令（`remote get-url`、分支名等）失败属预期状态，**不得**记入错误日志（调用侧对探测命令传 `logFailure:false`）。**补充**：清理残留锁的正则必须匹配真实文件名样例（`master.lock`/`HEAD.lock` 单点 `.lock` 结构，用 `/\.lock$/`，勿用「点段.lock」式正则） | Bug-062·063 |
 | CD-50 | 必须 | 插件/UI 声明的 **lucide 图标名必须存在于实际打包的 lucide 包内**：改动图标后以包 `icons`（`kebab-case` → PascalCase 键）核对命中，勿凭「看着像」取名；渲染端对缺失图标默认抛 `createIcons` 告警（NDEBUG 下仍进控制台/error 日志） | Bug-063 |
+| CD-51 | 必须 | 插件内容若经 `new Function(...)` 沙箱作用域执行，其顶层 `function` 声明**不会成为 `window` 全局**：宿主要调用插件能力（如 vditor 工具栏 bridge）时，插件必须**显式 `window.xxx = f` 导出**，宿主一律经 `typeof window.xxx === 'function'` 守卫后调用，禁止假定顶层函数全局可见 | Bug-064 |
+| CD-52 | 必须 | vditor 预览/阅读代码块行号 = **配置开启 + 样式补齐**双要素：`preview.hljs.lineNumber:true` 启用生成 `.hljs-ln` table 行号结构，且必须自定义 `.hljs-ln*` CSS（vditor 自带 `dist/index.css` 不含行号样式）以两列显示行号——二者缺一即行号不显示 | Bug-064 |
 
 ## 维护要求
 

@@ -127,6 +127,10 @@
           th += '<div class="vault-dropdown-item vault-temp-item" data-vault-act="open-temp" data-temp-path="' + esc(t.path) + '" title="' + esc(t.path) + '">'
             + '<i data-lucide="file-clock" class="w-4 h-4"></i><span class="vault-h-name">' + esc(t.name || t.path) + '</span></div>';
         });
+        // 「清除最近打开」置于二级菜单最末；清空后该组消失（列表为空时不再显示二级菜单）。作者: 火 冰
+        th += '<div class="vault-dropdown-sep"></div>'
+          + '<div class="vault-dropdown-item vault-temp-item vault-temp-clear" data-vault-act="clear-temp">'
+          + '<i data-lucide="trash-2" class="w-4 h-4"></i><span style="color:var(--note-ink-2)">清除最近打开</span></div>';
         tm.innerHTML = th;
         const r = tempHead.getBoundingClientRect();
         tm.style.top = r.top + 'px';
@@ -213,6 +217,8 @@
       if (act) {
         closeSubmenu();
         const a = act.dataset.vaultAct;
+        // 清除「最近打开」列表：清空后该组消失
+        if (a === 'clear-temp') { clearTempRecent(); return; }
         // 项目/临时文件动作单独分流（需要元素上的路径属性），其余走知识库动作
         if (a === 'open-project' || a === 'open-project-path' || a === 'open-temp') openProjectAction(a, act);
         else onVaultAction.call(act, e);
@@ -228,6 +234,14 @@
     document.body.appendChild(overlay);
     document.body.appendChild(dd);
     refreshIcons();
+  }
+
+  /* 清空「最近打开」临时文件列表：调主进程置空并关闭下拉（该分组随即消失，列表为空时不再显示二级菜单）。
+   * 作者: 火 冰 */
+  async function clearTempRecent() {
+    try { if (window.noteDesktop && window.noteDesktop.tempRecent) await window.noteDesktop.tempRecent.clear(); } catch (_) { /* 忽略 */ }
+    showToast('已清除最近打开');
+    closeVaultDropdown();
   }
 
   /* 处理知识库条目二级菜单操作：对指定库路径执行

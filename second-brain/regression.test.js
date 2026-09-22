@@ -913,12 +913,14 @@ function testIrTableBarHelpers() {
   assert(hdrDel.querySelectorAll('thead tr').length === 1, 'IR表: 表头行不可删除');
 }
 
-/* ---- MD-07 大纲浮层：点标题跳转 + 父级折叠/展开（自研面板 sb-outline-*） ----
- * 跳转基于标题在同类 DOM 中的顺序下标（data-idx），折叠靠父级箭头收放子级列表，
- * 两者都由 editor-vditor.js 的 __sbOutline 树构建/文本清洗承担。
- * 断言：文本清洗去掉 IR「#」标记与零宽字符；树按标题层级嵌套，父标题带折叠箭头、
- *       子级套 .sb-outline-list、项 data-idx 指向标题下标。
- * 作者: 火 冰 */
+/* ---- MD-07 大纲浮层：能力已迁入 markdown-editor 插件，宿主仅保留最小桥 ----
+ * 迁入后 editor-vditor.js 不再实现大纲 UI（树/定位/折叠/切换归插件 main.js），
+ * 只暴露两个宿主桥供插件取源：
+ *   - window.sbOutlineSource()  取当前可跳转的编辑内容源 DOM（依赖宿主闭包 vdMode/vdInst）
+ *   - window.sbOutlineNotify()  派生 sbOutlineChange 事件，通知插件刷新/重定位
+ * 断言：二者存在；jsdom 无 vditor 实例时源为 null（宿主不崩）、通知派发不抛错。
+ * 工具栏「大纲/宽屏/列宽」按钮由插件经 window.sbVdToolbarAdd 注入（见 app-plugins.js）、
+ * 高亮经 window.vdSetToolbarCurrent 同步。作者: 火 冰 */
 function testOutline() {
   const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
     { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
@@ -926,32 +928,20 @@ function testOutline() {
   const s = W.document.createElement('script');
   s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
   W.document.head.appendChild(s);
-  assert(W.__sbOutline && typeof W.__sbOutline.tree === 'function', '大纲: editor-vditor.js 暴露 __sbOutline 树构建助手');
-
-  // 文本清洗：去掉 IR「#」标记与零宽字符
-  const h = W.document.createElement('h2');
-  h.textContent = '## 即时渲染 标题\u200b';
-  assert(W.__sbOutline.text(h) === '即时渲染 标题', '大纲: 标题文本清洗去掉 # 标记与零宽字符');
-
-  // 树构建：h1(#A) → h2(#A1)、h1(#B)；仅 #A 有子级 → 带折叠箭头
-  const mk = function (tag, t) { const el = W.document.createElement(tag); el.textContent = t; return el; };
-  const heads = [mk('h1', '# A'), mk('h2', '## A1'), mk('h1', '# B')];
-  const tree = W.__sbOutline.tree(heads);
-  const rows = tree.querySelectorAll('.sb-outline-row');
-  const items = tree.querySelectorAll('.sb-outline-item');
-  assert(tree.querySelectorAll('.sb-outline-list').length === 1, '大纲: 树含(嵌套)子级列表');
-  assert(tree.querySelectorAll('.sb-outline-caret').length === 1, '大纲: 仅 #A 带折叠箭头，#B(叶子)无');
-  assert(rows[0].nextElementSibling && rows[0].nextElementSibling.classList.contains('sb-outline-list'), '大纲: h1#A 下方套子级列表');
-  assert(items.length === 3, '大纲: 3 个标题项');
-  assert(items[1].dataset.idx === '1', '大纲: 子标题 data-idx=1 指向 heads[1]');
-  assert(rows.length === 3, '大纲: 3 行走');
-  // 定位：__sbOutline.position 存在且可调用（窗口 resize 重定位由它承担，关闭/打开再重算）
-  assert(typeof W.__sbOutline.position === 'function', '大纲: 暴露 position 供 resize 重定位');
-  // 冒烟：无编辑区容器时静默返回，不抛错
-  const sp = W.__sbOutline.position;
+  assert(typeof W.sbOutlineSource === 'function', '大纲桥: editor-vditor.js 暴露 sbOutlineSource 供插件取源');
+  // 冒烟：jsdom 无 vditor 实例（vdInst=null）时源为 null，宿主不崩
+  assert(W.sbOutlineSource() === null, '大纲桥: jsdom 无 vditor 实例时源为 null');
+  assert(typeof W.sbOutlineNotify === 'function', '大纲桥: editor-vditor.js 暴露 sbOutlineNotify');
+  // 派发 sbOutlineChange 事件（无监听）不抛错
   let ok = true;
-  try { sp(); } catch (_) { ok = false; }
-  assert(ok, '大纲: 无编辑区时 resize 重定位静默返回不抛错');
+  try { W.sbOutlineNotify(); } catch (_) { ok = false; }
+  assert(ok, '大纲桥: 无监听时派发 sbOutlineChange 不抛错');
+
+  // sv 分屏源码行号：宿主暴露 vdSvGutterRefresh 且无 vditor 实例时调用不抛错（自绘 gutter）
+  assert(typeof W.vdSvGutterRefresh === 'function', 'sv 行号: editor-vditor.js 暴露 vdSvGutterRefresh');
+  ok = true;
+  try { W.vdSvGutterRefresh(); } catch (_) { ok = false; }
+  assert(ok, 'sv 行号: 无实例时 vdSvGutterRefresh 静默返回不抛错');
 }
 
 /* ---- MD-07 工具栏悬浮：每个图标悬浮显示名称(+快捷键) ----
@@ -1885,6 +1875,44 @@ function testFindbar() {
   W.vdFindbar.close();
   assert(bar.hidden === true, '查找: close 隐藏 findbar');
 }
+
+/* ---- Bug: 打开项目报错 n.folder.split is not a function ----
+ * project:list 返回的目录条目 folder 为布尔 true（walkProject 里作 isFolder 标记），
+ * 与 renderFileTree 期望的「父目录路径字符串」语义冲突，导致 folder=true 时 .split 崩溃。
+ * 注入 editor-filetree.js，用含目录条目(folder=true)+子目录文件的项目列表调用真实 renderFileTree，
+ * 断言不抛错、渲染出子目录节点与文件行、目录条目不作为文件行重复渲染。
+ * 作者: 火 冰 */
+async function testProjectFileTreeNoCrash() {
+  const dom = new JSDOM('<!DOCTYPE html><html><body><div id="file-tree"></div></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-filetree.js'), 'utf8');
+  W.document.head.appendChild(s);
+  W.edCurrent = '';
+  W.collapsedFolders = new Map();
+  W.restoreS = function () { return false; };
+  W.esc = function (v) { return String(v).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); };
+  W.relDate = function () { return '今天'; };
+  W.refreshIcons = function () {};
+  W.__gsColoring = {};
+  W.noteStore = { isMock: function () { return false; } };
+  W.$ = function (id) { return W.document.getElementById(id); };
+  // 项目列表：目录条目(folder=true，正是原崩溃数据) + 子目录文件 + 根文件
+  const list = [
+    { path: 'src', name: 'src', folder: true, size: 0, mtime: 0 },
+    { path: 'src/a.js', name: 'a.js', folder: 'src', size: 10, mtime: 1 },
+    { path: 'root.md', name: 'root.md', folder: '', size: 5, mtime: 1 },
+  ];
+  let threw = false;
+  try { W.renderFileTree(list); } catch (e) { threw = true; console.log('   err: ' + (e && e.message)); }
+  assert(!threw, '打开项目: 含目录条目(folder=true)的列表 renderFileTree 不再抛错');
+  assert(!!W.document.querySelector('.tree-folder[data-folder="src"]'), '打开项目: 渲染出子目录 src 节点');
+  assert(!!W.document.querySelector('.tree-file[data-path="src/a.js"]'), '打开项目: 渲染出子目录内文件 a.js');
+  assert(W.document.querySelectorAll('.tree-file').length === 2,
+    '打开项目: 目录条目不作为文件行重复渲染（实际 ' + W.document.querySelectorAll('.tree-file').length + '）');
+}
+
 Promise.all([
   testCodeHighlightCopyBtn(),
   testRenameNoteFile(),
@@ -1892,6 +1920,7 @@ Promise.all([
   testEdAutosaveBinding(),
   testEdOpenRace(),
   testFindbar(),
+  testProjectFileTreeNoCrash(),
 ]).then(function () {
   console.log(`\n回归结果: ${pass} 通过, ${fail} 失败`);
   if (fail) process.exitCode = 1;

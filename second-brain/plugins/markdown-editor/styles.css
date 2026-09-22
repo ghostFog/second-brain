@@ -233,3 +233,49 @@ html.fe-table-auto #ed-vditor .vditor-reset table {
   min-width: 0;
   max-width: 100%;
 }
+
+/* ============================================
+ * 大纲浮层样式（MD-07 自研面板，迁入自宿主 app.css）。
+ * 功能: 编辑工具栏「大纲」按钮打开的浮层面板外观（标题栏 + 标题树 + 空态提示），
+ *       父级标题可折叠/展开，点击标题跳转到正文对应滚动容器。
+ * 作者: 火 冰
+ * ============================================ */
+#sb-outline-panel {
+  background: var(--note-surface);
+  border: 1px solid var(--note-border);
+  color: var(--note-ink);
+  font-size: 12px;
+}
+#sb-outline-panel .sb-outline-title {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--note-border);
+  background: var(--note-surface-2);
+  color: var(--note-ink);
+  flex-shrink: 0;
+}
+#sb-outline-panel .sb-outline-body { overflow-y: auto; padding: 6px 8px; min-height: 0; }
+#sb-outline-panel .sb-outline-empty { padding: 16px 12px; text-align: center; color: var(--note-ink-3); font-size: 12px; }
+#sb-outline-panel ul.sb-outline-list { list-style: none; margin: 0; padding: 0; }
+#sb-outline-panel ul.sb-outline-list ul.sb-outline-list {
+  margin-left: 14px;
+  border-left: 1px solid var(--note-border);
+  padding-left: 6px;
+}
+#sb-outline-panel .sb-outline-li { margin: 0; }
+#sb-outline-panel .sb-outline-row { display: flex; align-items: center; gap: 2px; padding: 2px 0; }
+#sb-outline-panel .sb-outline-caret {
+  flex-shrink: 0; width: 14px; height: 14px;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; color: var(--note-ink-3); opacity: 0.85;
+}
+#sb-outline-panel .sb-outline-caret::before { content: "\25BC"; }   /* 展开(子级可见)：向下，表示可收起 */
+#sb-outline-panel .sb-outline-row.sb-outline-collapsed .sb-outline-caret::before { content: "\25B6"; }
+#sb-outline-panel .sb-outline-item {
+  flex: 1; min-width: 0; text-align: left;
+  background: transparent; border: none; padding: 2px 4px; border-radius: 4px;
+  font-size: 12px; line-height: 1.5; color: var(--note-ink); cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#sb-outline-panel .sb-outline-item:hover { background: var(--note-surface-2); color: var(--note-brand-400); }

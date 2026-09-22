@@ -153,6 +153,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   readFileExternal: (absPath) => ipcRenderer.invoke('notes:readFileExternal', { absPath: absPath }),
   /** 写回外部临时文件内容：{absPath, content} → {ok, path, error}（仅允许已登记的临时文件） */
   writeFileExternal: (absPath, content) => ipcRenderer.invoke('notes:writeFileExternal', { absPath: absPath, content: content }),
+  /** 订阅：系统「打开方式」传入的外部文件（OS 右键→打开方式→第二脑）→ 回调绝对路径，作为临时文件打开 */
+  onOpenFile: (cb) => ipcRenderer.on('open-file', (_e, abs) => { if (typeof cb === 'function') cb(abs); }),
   /** 在系统文件管理器中显示外部临时文件 */
   revealExternal: (absPath) => ipcRenderer.invoke('notes:revealExternal', absPath),
 
@@ -164,6 +166,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     record: (absPath) => ipcRenderer.invoke('temp:recentRecord', absPath),
     /** 从最近列表移除，返回最新列表 */
     remove: (absPath) => ipcRenderer.invoke('temp:recentRemove', absPath),
+    /** 清空最近打开列表，返回最新（空）列表 */
+    clear: () => ipcRenderer.invoke('temp:recentClear'),
   },
 
   /* ---------- 插件目录桥接 ---------- */

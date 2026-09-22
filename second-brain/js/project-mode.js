@@ -123,10 +123,17 @@ globalThis.sbProject = (function () {
     try { list = (await window.noteDesktop.project.list()) || []; }
     catch (_) { list = []; }
     const files = list.map(function (it) {
+      // walkProject 返回的 folder 字段是布尔「是否目录」标记（目录=true/文件=false），
+      // 与 renderFileTree 期望的「父目录路径字符串」语义不同。这里转成父目录路径 + isFolder 标记，
+      // 避免 folder=true 时 renderFileTree 对 n.folder.split('/') 触发崩溃。
+      const isFolder = it.folder === true;
+      const rel = String(it.rel || '');
+      const slash = rel.lastIndexOf('/');
       return {
-        path: it.rel,
+        path: rel,
         name: it.name,
-        folder: it.folder || '',
+        folder: slash > 0 ? rel.slice(0, slash) : '',
+        isFolder: isFolder,
         size: it.size || 0,
         mtime: it.mtime || Date.now(),
       };
@@ -407,6 +414,10 @@ globalThis.sbTempFiles = (function () {
   async function init() {
     bindGlobalDrag();
     bindGlobalTreeClick();
+    // 系统「打开方式」传入的文件（OS 右键→打开方式→第二脑）→ 作为临时文件打开
+    if (window.noteDesktop && window.noteDesktop.onOpenFile) {
+      window.noteDesktop.onOpenFile(function (abs) { if (abs) openTemp(abs); });
+    }
     if (window.noteDesktop && window.noteDesktop.tempRecent) {
       try {
         const rec = await window.noteDesktop.tempRecent.load();

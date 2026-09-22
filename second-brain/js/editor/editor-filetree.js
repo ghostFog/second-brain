@@ -22,7 +22,11 @@
     }
     const folders = new Map();
     notes.forEach(n => {
-      const parts = n.folder ? n.folder.split('/') : [];
+      // folder 可为空串（根层文件）或布尔（项目模式的旧 isFolder 标记）。
+      // 统一转字符串并过滤空串：否则 '' 会进 folder 构建，''.split('/') 得 ['']，造出 key=''、parent='' 的
+      // 自引用目录节点，导致 renderFolder 对 key='' 无限递归申请栈溢出。作者: 火 冰
+      const folderStr = (typeof n.folder === 'string') ? n.folder : '';
+      const parts = folderStr ? folderStr.split('/') : [];
       let key = '';
       parts.forEach((p, i) => {
         const parentKey = key;

@@ -75,6 +75,7 @@
 | Bug-061 | 已修复（测试完成） | AI 问答「来源」出现 `.gitignore`：增量索引 `updateNote` 无隐藏路径过滤（与 `_scanMd` 跳过点文件口径不一致），git-sync 写 `.gitignore` 触发 `updateNote` 把过滤文件索引进向量库被检索召回。修复：新增 `_isDotPath` 统一判定，`updateNote` 跳过+清除、`_loadIndexFrom` 加载过滤、`retrieve` 兜底过滤。 | [查看](bugs/Bug-061.md) |
 | Bug-062 | 已修复（测试完成） | Git 提交偶发锁冲突 `cannot lock ref 'HEAD' ... .lock File exists`（残留锁/并发占锁）+ 无远程知识库总写「git 操作失败: git remote get-url origin」错误日志。修复：同仓库 git 命令走按 cwd 的串行队列（GIT_QUEUES），锁冲突自动清 `.git/*.lock` 并重试一次；探测类命令传 `logFailure:false` 不再记错误日志。 | [查看](bugs/Bug-062.md) |
 | Bug-063 | 已修复（测试完成） | Bug-062 锁自愈未真正生效：`removeStaleGitLocks` 正则 `/\.[0-9a-zA-Z-]+\.lock$/` 不匹配单点结构 `master.lock`/`HEAD.lock`，清理跳过。修复为 `/\.lock$/`。另修 `compare` 图标缺失（真实键为 `GitCompareArrows`）。 | [查看](bugs/Bug-063.md) |
+| Bug-064 | 已修复（测试完成） | 工具栏「宽屏/表格列宽」点击无效（插件 new Function 沙箱顶层 function 不落 window）+ 预览代码块无行号（未配 `preview.hljs.lineNumber` 且缺 `.hljs-ln` CSS）。修复：插件 `window.mdeToggleWide/TableAuto` 显式导出；开启 vditor 行号并补行号 CSS。 | [查看](bugs/Bug-064.md) |
 
 > 说明（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——代码块语言选择器(chip)显隐保留为 Bug-011，编辑器链接弹框 `docButton` 那条纠正为 Bug-042。
 
