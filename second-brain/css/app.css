@@ -835,6 +835,16 @@ body.ed-fs-active #ed-vditor .vditor { height: 100% !important; }
 body.locked #lock-screen ~ #view-templates,
 body.locked .app-main { visibility: hidden; }
 
+/* ---------- 笔记库加密解锁遮罩（ENC-03）：层级低于应用锁屏，语义/密码体系独立 ----------
+ * 显示时同样借 body.locked 隐藏主视图防内容泄露（.app-main 规则见上）。作者: 火 冰 */
+#enc-unlock-screen { position: fixed; inset: 0; z-index: 99998; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(3px); }
+#enc-unlock-screen .enc-unlock-card { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 320px; padding: 28px 24px; border-radius: var(--note-radius-lg, 12px); text-align: center; }
+#enc-unlock-screen .enc-unlock-card input:focus { border-color: var(--note-brand-500); }
+#enc-unlock-screen .enc-unlock-card button { cursor: pointer; transition: opacity 0.15s; }
+#enc-unlock-screen .enc-unlock-card button:hover { opacity: 0.9; }
+/* 加密解锁遮罩用独立 body.enc-locked 隐藏主视图，与应用锁屏的 body.locked 解耦（避免解锁应用密码时误暴露内容） */
+body.enc-locked .app-main { visibility: hidden; }
+
 /* ---------- 兜底：预览/阅读模式代码块一律不显示行号 ----------
  * vditor 内置代码块行号 .vditor-linenumber（绝对定位、逐行 height 实测）在宽代码/软换行下间隙不规则、
  * 超区溢出且不随滚动条同步（见 Bug-065）。虽然 preview.hljs.lineNumber 已置 false，此处再以 CSS 强制隐藏，

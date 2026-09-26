@@ -69,6 +69,8 @@
 | [Bug-063](Bug-063.md) | 已修复（测试完成） | Bug-062 锁自愈未生效：`removeStaleGitLocks` 正则 `/\.[0-9a-zA-Z-]+\.lock$/` 不匹配单点结构 `master.lock`/`HEAD.lock`，清理跳过；修复为 `/\.lock$/`。另修 git-sync 右键「对比」图标 `compare` 缺失（lucide 真实键为 `GitCompareArrows`）。 |
 | [Bug-064](Bug-064.md) | 已修复（测试完成） | 迁移后「宽屏/表格列宽」工具栏按钮点击无效（插件经 `new Function` 沙箱执行，顶层 function 不落 window，`window.mdeToggleWide` 恒 undefined）+ 预览代码块无行号（未开 `preview.hljs.lineNumber` 且 vditor CSS 缺 `.hljs-ln` 样式）。修复：插件 `window.mdeToggleWide/TableAuto` 显式导出；开启 `preview.hljs.lineNumber:true` 并补行号 CSS。 |
 | [Bug-065](Bug-065.md) | 已修复（待真机验证） | 打开笔记报未处理 Promise 异常 `notes:read ... EISDIR`（目录被当笔记读），且 `.git` 等点目录曾是最近打开 → 启动恢复失败致编辑器留白。修复：`notes:read` 判目录；`openNote` 失败撤销页签并在无笔记打开时回退 `edNotes[0]`；`walkNotes` 跳过点开头隐藏项。 |
+| [Bug-066](Bug-066.md) | 已修复（待真机验证） | 输入锁屏密码后仍提示输入笔记密码：启动阶段锁屏未解锁、盐未定，`encGetState` 用固定盐解 M3 失败误判 locked 弹遮罩，解锁后不重检。修复：锁屏未解锁时 locked 返回 false + 解锁成功后 `SBEncUnlock.recheck` 重检。 |
+| [Bug-067](Bug-067.md) | 已修复（待真机验证） | 单篇笔记显示密文、切换其他笔记正常：该文件用旧密码 key 加密而当前 keyring 只有新 key（列表条目 key 不一致），`decryptNoteTextAny` 全失败返回密文原文且无修复入口。修复：新增 `encRepairNote` + `app:encRepairNote` IPC + 渲染端密文检测弹「输入旧密码修复」遮罩，解密成功用当前主密钥重加密落盘 + 并入 keyring + 更新列表条目 keyId。 |
 
 > 注（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——语言选择器(chip)显隐保留为 Bug-011，链接弹框 `docButton` 那条纠正为 Bug-042。
 

@@ -175,6 +175,40 @@
     </div>
   </div>
 
+  <!-- ===== 笔记库加密解锁遮罩（ENC-03：已加密且本地无缓存密钥时输入密码验证后进入） ===== -->
+  <div id="enc-unlock-screen" style="display:none;">
+    <div class="enc-unlock-card" style="position:relative;border:1px solid var(--note-border); background:var(--note-popover); box-shadow: var(--note-shadow-3);">
+      <button id="enc-unlock-close" title="关闭窗口（不输入密码也可退出）"
+              style="position:absolute; top:6px; right:10px; border:none; background:transparent; color:var(--note-ink-3); cursor:pointer; font-size:20px; line-height:1;">×</button>
+      <i data-lucide="lock" class="lock-icon w-8 h-8" style="color:var(--note-brand-600);"></i>
+      <div class="lock-title text-h4 font-semibold" style="color:var(--note-ink);">笔记库已加密</div>
+      <div class="lock-sub text-caption" style="color:var(--note-ink-3);">该知识库启用了笔记加密，输入笔记加密密码以解锁</div>
+      <input id="enc-unlock-pwd" type="password" placeholder="请输入笔记加密密码" autocomplete="off"
+             class="w-full rounded-md px-3 py-2 text-[14px] outline-none"
+             style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);" />
+      <div id="enc-unlock-err" class="text-caption" style="color:var(--state-danger, #dc2626); min-height:16px;"></div>
+      <button id="enc-unlock-btn" class="w-full py-2.5 rounded-md text-[13px] font-medium"
+              style="background:var(--note-brand-600); color:#FFFFFF;">解锁</button>
+    </div>
+  </div>
+
+  <!-- ===== 单篇密文笔记修复遮罩（ENC-04 异常处理：笔记用旧密码加密、当前密钥解不开显示密文时，输入旧密码重新加密修复） ===== -->
+  <div id="enc-repair-screen" style="display:none;position:fixed;inset:0;z-index:99998;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);backdrop-filter:blur(3px);">
+    <div class="enc-unlock-card" style="position:relative;border:1px solid var(--note-border); background:var(--note-popover); box-shadow: var(--note-shadow-3);">
+      <button id="enc-repair-close" title="关闭（保持现状）"
+              style="position:absolute; top:6px; right:10px; border:none; background:transparent; color:var(--note-ink-3); cursor:pointer; font-size:20px; line-height:1;">×</button>
+      <i data-lucide="lock" class="lock-icon w-8 h-8" style="color:var(--note-brand-600);"></i>
+      <div class="lock-title text-h4 font-semibold" style="color:var(--note-ink);">笔记仍为密文</div>
+      <div id="enc-repair-sub" class="lock-sub text-caption" style="color:var(--note-ink-3);">该笔记可能用旧密码加密，请输入它的加密密码以修复（修复后将用当前密码重新加密）</div>
+      <input id="enc-repair-pwd" type="password" placeholder="请输入该笔记的加密密码" autocomplete="off"
+             class="w-full rounded-md px-3 py-2 text-[14px] outline-none"
+             style="background:var(--note-surface-2); border:1px solid var(--note-border); color:var(--note-ink);" />
+      <div id="enc-repair-err" class="text-caption" style="color:var(--state-danger, #dc2626); min-height:16px;"></div>
+      <button id="enc-repair-btn" class="w-full py-2.5 rounded-md text-[13px] font-medium"
+              style="background:var(--note-brand-600); color:#FFFFFF;">修复</button>
+    </div>
+  </div>
+
   <!-- 视图模板注入 -->
   <div id="view-templates" style="display:none;"></div>
   <script>

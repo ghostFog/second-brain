@@ -8,7 +8,7 @@ const { app, BrowserWindow, protocol, ipcMain, dialog, shell, Menu, session, Tra
 const { AsyncLocalStorage } = require('node:async_hooks'); // 多窗口：IPC 请求链内按窗口解析知识库根
 const path = require('path');
 const fs = require('fs');
-const { randomUUID, scrypt, randomBytes, timingSafeEqual } = require('crypto'); // randomUUID: 上传资源重命名；scrypt/randomBytes/timingSafeEqual: 应用安全（SEC-01/02）密码哈希与校验
+const { randomUUID, scrypt, randomBytes, timingSafeEqual, createHash, createCipheriv, createDecipheriv } = require('crypto'); // randomUUID: 上传资源重命名；scrypt/randomBytes/timingSafeEqual: 应用安全（SEC-01/02）密码哈希与校验；createHash/createCipheriv/createDecipheriv: 笔记加密（ENC-02）组合算法与 AES-GCM
 const { execFile } = require('child_process'); // Git 同步插件：以非 shell 方式执行 git 命令，避免注入
 const grayMatter = require('gray-matter'); // 解析笔记 frontmatter（获取 id / tags 元数据）
 const { default: SnowflakeId } = require('snowflake-id'); // 雪花算法：生成全局唯一文档 id，方便索引/元数据稳定定位
@@ -1278,10 +1278,14 @@ async function walkDirMeta(dirRel, records) {
         let st = null;
         try { st = await fs.promises.stat(childAbs); } catch (e) { continue; }
         let text = '';
-        try { text = await fs.promises.readFile(childAbs, 'utf8'); } catch (e) { /* 读失败仅记录元信息 */ }
+        try { text = await vaultReadTextByRoot(root, childRel); } catch (e) { /* 读失败仅记录元信息 */ }
         const noteId = ensureNoteId(text, snowflake, prevNoteIds[it.name]);
         const clean = stripMetaId(text);
-        if (clean.removed) { try { await fs.promises.writeFile(childAbs, clean.text, 'utf8'); } catch (e) { /* 清理失败不阻断 */ } text = clean.text; }
+        if (clean.removed) {
+          // 加密库：密文不可原地改写（写回会破坏加密内容），仅在内存中剔除残留 id 行供元数据解析
+          if (!noteEncEnabled(root)) { try { await fs.promises.writeFile(childAbs, clean.text, 'utf8'); } catch (e) { /* 清理失败不阻断 */ } }
+          text = clean.text;
+        }
         const pm = parseNoteMeta(text, it.name, childRel);
         rec.notes.push({ name: it.name, path: childRel, noteId: noteId, wordCount: pm.wordCount, tags: pm.tags, size: st.size, created: st.birthtimeMs, mtime: st.mtimeMs, chunk: prevOverrides[it.name] || undefined, indexTime: prevIndexTimes[it.name] || Date.now(), attachments: pm.attachments || [], outlinks: pm.outlinks || [] });
         rec.noteCount++;
@@ -1607,7 +1611,7 @@ vaultHandle('ai:previewChunk', async (_e, rel, size, overlap, offsets, maxChunkS
   await ensureVault();
   const abs = path.join(vaultRoot(), String(rel || '').replace(/^\/+/, ''));
   let text = '';
-  try { text = await fs.promises.readFile(abs, 'utf8'); } catch (e) { return { ok: false }; }
+  try { text = await vaultReadText(rel); } catch (e) { return { ok: false }; }
   const blocks = chunkConfigured(text, size, overlap, (Array.isArray(offsets) && offsets.length) ? offsets.map(Number) : null, maxChunkSize, strategy, fileName || path.basename(rel || ''));
   return { ok: true, textLen: text.replace(/\r\n/g, '\n').length, blocks };
 });
@@ -1628,14 +1632,12 @@ vaultHandle('notes:read', async (_e, rel) => {
   if (st && st.isDirectory()) {
     throw new Error('EISDIR: 目标是目录而非笔记文件，无法读取: ' + rel);
   }
-  return await fs.promises.readFile(abs, 'utf8');
+  return await vaultReadText(rel);
 });
 
 /* 保存单篇笔记（自动建父目录）；保存后增量更新该笔记的索引块 */
 vaultHandle('notes:save', async (_e, rel, content) => {
-  const abs = resolveVaultPath(rel);
-  await fs.promises.mkdir(path.dirname(abs), { recursive: true });
-  await fs.promises.writeFile(abs, content || '', 'utf8');
+  await vaultWriteText(rel, content);
   aiEngine.updateNote(rel).catch(function () { /* 单篇增量索引更新失败不阻塞保存 */ });
   scheduleMetaRefresh();
   return true;
@@ -1654,7 +1656,7 @@ vaultHandle('notes:create', async (_e, name, dir) => {
     // 新建笔记不写入任何内容（md 保持干净，不预置标题）。标题由编辑器顶部标题区
     // 显示（默认取文件名），双击可改并同步文件名与正文。雪花 id 由 .second-brain/_meta.json
     // 的 noteId 追踪：首次扫描时生成一次、之后复用，重命名不变更 id。已有文件不覆写。
-    await fs.promises.writeFile(abs, '', 'utf8');
+    await vaultWriteText(rel, '');
   }
   aiEngine.updateNote(rel).catch(function () { /* 新建笔记后续索引更新失败不阻塞 */ });
   scheduleMetaRefresh();
@@ -1681,7 +1683,7 @@ vaultHandle('notes:delete', async (_e, rel) => {
   /* 删除前先清理笔记内引用的资源文件 */
   try {
     if (fs.existsSync(abs)) {
-      const text = await fs.promises.readFile(abs, 'utf8');
+      const text = await vaultReadText(rel);
       const attachments = extractAttachments(text);
       const resDir = path.join(vaultRoot(), RESOURCE_DIR);
       for (var i = 0; i < attachments.length; i++) {
@@ -1694,6 +1696,7 @@ vaultHandle('notes:delete', async (_e, rel) => {
     }
   } catch (e) { /* 读取/解析失败不阻断删除 */ }
   if (fs.existsSync(abs)) { await fs.promises.unlink(abs); }
+  encListRemove(vaultRoot(), rel); // 删除笔记时同步从已加密文件列表移除（笔记加密）
   aiEngine.removeNote(rel).catch(function () { /* 移除索引失败不阻塞删除 */ });
   scheduleMetaRefresh();
   return true;
@@ -1811,6 +1814,7 @@ vaultHandle('notes:moveDir', async (_e, oldDir, newParent) => {
     aiEngine.removeNote(oldRel).catch(function () {});
     aiEngine.updateNote(n.path).catch(function () {});
   }
+  encRebuildList(vaultRoot()).catch(function () {}); // 目录移动/重命名后重建已加密文件列表（笔记加密）
   scheduleMetaRefresh();
   return { dir: dstRel, moved: files.length };
 });
@@ -1856,6 +1860,7 @@ vaultHandle('notes:renameDir', async (_e, oldDir, newName) => {
     aiEngine.removeNote(oldRel).catch(function () {});
     aiEngine.updateNote(n.path).catch(function () {});
   }
+  encRebuildList(vaultRoot()).catch(function () {}); // 目录移动/重命名后重建已加密文件列表（笔记加密）
   scheduleMetaRefresh();
   return { dir: dstRel, moved: files.length };
 });
@@ -1873,6 +1878,7 @@ vaultHandle('notes:removeDir', async (_e, dir) => {
   const files = out.filter(function (n) { return !n.isFolder; });
   for (const n of files) aiEngine.removeNote(n.path).catch(function () {});
   await fs.promises.rm(abs, { recursive: true, force: true });
+  encRebuildList(vaultRoot()).catch(function () {}); // 删除目录后重建已加密文件列表（笔记加密）
   scheduleMetaRefresh();
   return files.length;
 });
@@ -2580,6 +2586,8 @@ app.on('will-quit', () => aiEngine.stopModelPolling());
 
 /* 初始化 AI 引擎：绑定 vault 根目录与配置/索引持久化路径（索引按知识库分文件存于 ai-index/） */
 function initAiEngine() {
+  // 笔记加密联动：AI 引擎读笔记原文时经解密（加密库自动解密后再分块/向量化，索引不落密文）
+  aiEngine._vaultReadSync = function (root, rel) { return vaultReadTextSync(root, rel); };
   aiEngine.init({
     getVaultRoot: vaultRoot,
     configFile: path.join(app.getPath('userData'), 'ai-config.json'),
@@ -2814,6 +2822,7 @@ let secPwdHash = null;    // scrypt 派生的密码哈希（hex）
 let secSalt = null;       // 随机盐（hex）
 let secLockEnabled = false; // 超时自动锁定开关
 let secLockMinutes = 10;    // 空闲锁定阈值（分钟）
+let secTempPwd = null;      // 临时用户密码 M1_1：修改/取消 M1 时先落盘（security.json tempPwd 字段），M3 重算 + M1 落盘成功后才清除
 let appUnlocked = true;     // 应用整体解锁标记（未设密码时恒为 true，超时锁定用）。窗口级解锁见 secWinUnlocked
 /* 按窗口记录的解锁状态（winId -> boolean）：保证从托盘新建的窗口也需各自通过启动密码后才可见 */
 let secWinUnlocked = new Map();
@@ -2836,23 +2845,40 @@ function secRequireLock(win) {
 }
 
 /* 读取 security.json 恢复安全状态；无文件（未设过密码）时保持全默认。
+ * 若存在临时用户密码 M1_1（tempPwd），说明上次修改/取消 M1 未完成（两个文件未同步则无法解锁），
+ * 按 M1_1 继续完成事务：用其作盐尽力重算各库 M3 → 落盘 M1（或取消）→ 清除 M1_1。
  * @author 火 冰 */
-function loadSecurity() {
+async function loadSecurity() {
   try {
     const j = JSON.parse(fs.readFileSync(securityFile(), 'utf8'));
     secPwdHash = (j && typeof j.hash === 'string' && j.hash) ? j.hash : null;
     secSalt = (j && typeof j.salt === 'string' && j.salt) ? j.salt : null;
     secLockEnabled = !!(j && j.lockEnabled);
     secLockMinutes = (j && typeof j.lockMinutes === 'number' && j.lockMinutes >= 1 && j.lockMinutes <= 120) ? Math.round(j.lockMinutes) : 10;
+    secTempPwd = (typeof j.tempPwd === 'string' && j.tempPwd) ? j.tempPwd : null;
   } catch (e) { /* 无文件/损坏：全默认 */ }
+  // 上次修改/取消用户密码 M1 未完成：按临时 M1_1 继续（M3 重算已先落盘，此处完成 M1 落盘 + 清 M1_1）
+  if (secTempPwd) {
+    const cancelled = secTempPwd === ENC_TEMP_NO_PWD;
+    const salt = cancelled ? ENC_FIXED_SALT : secTempPwd;
+    reEncryptAllVaults(encAppPwdPlain || ENC_FIXED_SALT, salt); // 尽力用 M1_1 作盐重算各库 M3（旧盐解不开保持原样不破坏）
+    if (cancelled) { secPwdHash = null; secSalt = null; encAppPwdPlain = null; }
+    else {
+      secSalt = randomBytes(16).toString('hex');
+      secPwdHash = (await secDerive(secTempPwd, secSalt)).toString('hex');
+      encAppPwdPlain = secTempPwd;
+    }
+    secTempPwd = null;
+    saveSecurity();
+  }
   appUnlocked = !secPwdHash; // 未设密码视为已解锁
 }
 
-/* 持久化安全状态到 security.json（写失败静默，不影响主流程）。
+/* 持久化安全状态到 security.json（含临时用户密码 M1_1；写失败静默，不影响主流程）。
  * @author 火 冰 */
 function saveSecurity() {
   try {
-    fs.writeFileSync(securityFile(), JSON.stringify({ hash: secPwdHash, salt: secSalt, lockEnabled: secLockEnabled, lockMinutes: secLockMinutes }, null, 2));
+    fs.writeFileSync(securityFile(), JSON.stringify({ hash: secPwdHash, salt: secSalt, lockEnabled: secLockEnabled, lockMinutes: secLockMinutes, tempPwd: secTempPwd }, null, 2));
   } catch (e) { /* 忽略 */ }
 }
 
@@ -2909,8 +2935,10 @@ function startSecIdleMonitor() {
   }, SEC_POLL_MS);
 }
 
-/* 设置/修改/移除密码。data={old?, next?}：
+/* 设置/修改/移除用户密码 M1。data={old?, next?}：
  * next 非空 → 设置或修改（已有密码时须先通过 old 校验）；next 空 → 移除密码（须提供 old）。
+ * 修改/移除采用「M1_1 临时事务」：① 先落盘临时 M1_1（tempPwd）→ ② 用 M1_1（移除=固定盐）重算各库 M3 落盘 →
+ * ③ M3 落盘成功后修改/删除 M1 并落盘 → ④ 清除 M1_1。中途崩溃由 loadSecurity 按 M1_1 继续完成，避免两文件不同步。
  * 返回 { ok, reason? }。
  * @author 火 冰 */
 ipcMain.handle('app:setPassword', async (_e, data) => {
@@ -2921,18 +2949,26 @@ ipcMain.handle('app:setPassword', async (_e, data) => {
     if (!next) {
       // 移除密码：未设过则直接成功；已设则须先校验旧密码
       if (hasPwd && !(await secVerify(d.old))) return { ok: false, reason: 'wrong_old' };
-      secPwdHash = null; secSalt = null;
+      secTempPwd = ENC_TEMP_NO_PWD; saveSecurity();                                     // ① 记录临时 M1_1（取消标记）
+      reEncryptAllVaults(encAppPwdPlain || ENC_FIXED_SALT, ENC_FIXED_SALT);              // ② "shr25.com" 重算各库 M3 落盘
+      secPwdHash = null; secSalt = null; encAppPwdPlain = null;                         // ③ 删除 M1
       secWinUnlocked.clear(); // 无密码后所有窗口不再锁定
       saveSecurity(); appUnlocked = true;
+      secTempPwd = null; saveSecurity();                                                // ④ M1 落盘成功后删除 M1_1
       return { ok: true };
     }
     // 设置/修改：已有密码须先校验旧密码
     if (hasPwd && !(await secVerify(d.old))) return { ok: false, reason: 'wrong_old' };
     if (next.length < 4) return { ok: false, reason: 'too_short' };
+    const oldSalt = encAppPwdPlain; // 盐切换联动：旧盐（null=固定盐）
+    secTempPwd = next; saveSecurity();                                                  // ① 记录临时 M1_1（新密码暂存落盘）
+    if (oldSalt !== next) reEncryptAllVaults(oldSalt || ENC_FIXED_SALT, next);           // ② 用 M1_1 重算各库 M3 落盘
     secSalt = randomBytes(16).toString('hex');
     secPwdHash = (await secDerive(next, secSalt)).toString('hex');
     if (_e && _e.sender) secWinUnlocked.set(_e.sender.id, true); // 当前窗口已通过密码，标记解锁
+    encAppPwdPlain = next;                                                              // ③ 修改 M1
     saveSecurity(); appUnlocked = true;
+    secTempPwd = null; saveSecurity();                                                  // ④ M1 落盘成功后删除 M1_1
     return { ok: true };
   } catch (e) { return { ok: false, reason: 'error' }; }
 });
@@ -2944,6 +2980,7 @@ ipcMain.handle('app:unlock', async (event, pwd) => {
   const ok = await secVerify(pwd);
   if (ok) {
     appUnlocked = true;
+    encAppPwdPlain = pwd; // 解锁后应用密码明文进内存作为盐（笔记加密密码组合解密的盐）；启动后未解锁时盐=固定盐，符合「不第一时间解密」
     if (event && event.sender) secWinUnlocked.set(event.sender.id, true); // 窗口级解锁
   }
   return ok;
@@ -2977,6 +3014,850 @@ ipcMain.handle('app:setLockConfig', (_e, data) => {
   return { ok: true, lockEnabled: secLockEnabled, lockMinutes: secLockMinutes };
 });
 
+/* ============================================
+ * 笔记加密（ENC-02 笔记落盘加密）
+ * 功能: ① 按库设置「笔记加密密码」，笔记内容以 AES-256-GCM 加密落盘、读取时解密；
+ *       ② 笔记加密密码本身以「组合算法」（SHA-256 链式迭代 + 字节置换 + AES-CTR + XOR 掩码）加密存
+ *          到 <库根>/.second-brain/vault-enc.json（.second-brain/ 已被 gitignore 忽略，不进 git）；
+ *       ③ 组合算法的盐：未设置应用密码用固定盐 "shr25.com"，设置了应用密码用其明文作为盐，
+ *          取消应用密码时还原为固定盐（reEncryptAllVaults 对已加密库重加密）；
+ *       ④ 解密后的笔记加密密码/派生密钥只缓存在内存（encKeyCache），应用启动后不第一时间解密，
+ *          首次读写笔记需要时才懒加载解密。
+ * 作者: 火 冰
+ * ============================================ */
+const ENC_FIXED_SALT = 'shr25.com'; // 固定盐（未设置用户密码 M1 时使用）
+const ENC_TEMP_NO_PWD = '-----notPwd------'; // 临时用户密码 M1_1 的「取消密码」标记（表示无用户密码，M3 用固定盐重算）
+const ENC_KDF_ROUNDS = 32;           // 组合密钥派生迭代轮数
+let encAppPwdPlain = null;           // 内存中的用户密码 M1 明文（作为盐；仅内存、不落盘）
+const encKeyCache = new Map();       // 库根(小写) -> Map<keyId, 32B 真正笔记密钥 M2>（keyring：支持多密码多 key；仅内存、懒加载）
+const encMainKeyCache = new Map();   // 库根(小写) -> keyId 主密钥标识（能解开已加密列表的那个 key；加密写/列表加密用主 key）
+const encEnabledCache = new Map();   // 库根(小写) -> boolean 该库是否已启用笔记加密
+const encListCache = new Map();      // 库根(小写) -> Map<已加密文件相对路径(小写), keyId> 已加密文件列表缓存（v:3 每条记录加密所用密钥标识）
+
+/* 字节置换：按固定伪随机 pattern 重排字节（pattern 由数据自身派生，确定且不可预测）。
+ * @param {Buffer} buf 输入缓冲
+ * @returns {Buffer} 置换后的缓冲
+ * @author 火 冰 */
+function permuteBytes(buf) {
+  const n = buf.length;
+  const idx = new Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  let seed = 0;
+  for (let i = 0; i < n; i++) seed = (seed * 31 + buf[i]) >>> 0;
+  for (let i = n - 1; i > 0; i--) {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const j = seed % (i + 1);
+    const t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+  }
+  const out = Buffer.alloc(n);
+  for (let i = 0; i < n; i++) out[i] = buf[idx[i]];
+  return out;
+}
+
+/* 组合式密钥派生：SHA-256 链式迭代（每轮混入盐与轮次）+ 字节置换，输出 32 字节密钥。
+ * 非单一公开算法（迭代哈希 + 位置换组合），用于本地存储笔记加密密码的密钥派生。
+ * @param {string} secret 秘密输入（盐）
+ * @param {string} saltStr 附加盐串
+ * @param {number} rounds 迭代轮数
+ * @returns {Buffer} 32 字节派生密钥
+ * @author 火 冰 */
+function comboKdf(secret, saltStr, rounds) {
+  let h = createHash('sha256').update(String(saltStr)).update('|').update(String(secret)).digest();
+  for (let i = 1; i <= rounds; i++) {
+    h = createHash('sha256').update(h).update(Buffer.from(String(i))).update(String(saltStr)).digest();
+  }
+  return permuteBytes(h);
+}
+
+/* 由派生密钥 + iv 生成与密文等长的 XOR 掩码流（SHA-256 级联扩展）。
+ * @param {Buffer} key 派生密钥
+ * @param {Buffer} iv 随机向量
+ * @param {number} len 掩码长度
+ * @returns {Buffer} 掩码流
+ * @author 火 冰 */
+function comboMask(key, iv, len) {
+  let h = createHash('sha256').update(key).update(iv).digest();
+  const out = Buffer.alloc(len);
+  for (let off = 0; off < len; off += h.length) {
+    const take = Math.min(h.length, len - off);
+    h.copy(out, off, 0, take);
+    h = createHash('sha256').update(h).digest();
+  }
+  return out;
+}
+
+/* AES-256-CTR 加解密（对称操作）。
+ * @param {Buffer} key 32 字节密钥
+ * @param {Buffer} iv 16 字节向量
+ * @param {Buffer} data 数据
+ * @returns {Buffer} 结果
+ * @author 火 冰 */
+function aesCtr(key, iv, data) {
+  const c = createCipheriv('aes-256-ctr', key, iv);
+  return Buffer.concat([c.update(data), c.final()]);
+}
+
+/* 组合式加密（用于加密存储「笔记加密密码」）：AES-256-CTR + XOR 掩码 + 组合密钥派生。
+ * @param {string} plain 明文（笔记加密密码）
+ * @param {string} saltStr 盐（固定盐或应用密码明文）
+ * @returns {{v:number, iv:string, ct:string}} 密文载荷（iv/ct 为 base64）
+ * @author 火 冰 */
+function comboEncrypt(plain, saltStr) {
+  const iv = randomBytes(16);
+  const key = comboKdf(saltStr, saltStr, ENC_KDF_ROUNDS);
+  const c1 = aesCtr(key, iv, Buffer.from(String(plain), 'utf8'));
+  const mask = comboMask(key, iv, c1.length);
+  const ct = Buffer.alloc(c1.length);
+  for (let i = 0; i < c1.length; i++) ct[i] = c1[i] ^ mask[i];
+  return { v: 1, iv: iv.toString('base64'), ct: ct.toString('base64') };
+}
+
+/* 组合式解密（还原「笔记加密密码」明文）。
+ * @param {object} payload comboEncrypt 的产物
+ * @param {string} saltStr 盐（固定盐或应用密码明文）
+ * @returns {string} 明文
+ * @author 火 冰 */
+function comboDecrypt(payload, saltStr) {
+  const p = (payload && typeof payload === 'object') ? payload : {};
+  const iv = Buffer.from(String(p.iv || ''), 'base64');
+  const ct = Buffer.from(String(p.ct || ''), 'base64');
+  const key = comboKdf(saltStr, saltStr, ENC_KDF_ROUNDS);
+  const mask = comboMask(key, iv, ct.length);
+  const c1 = Buffer.alloc(ct.length);
+  for (let i = 0; i < ct.length; i++) c1[i] = ct[i] ^ mask[i];
+  return aesCtr(key, iv, c1).toString('utf8');
+}
+
+/* 当前盐：设置了应用密码（明文在内存）用其明文，否则固定盐。
+ * @returns {string} 盐字符串
+ * @author 火 冰 */
+function encSaltStr() { return encAppPwdPlain ? encAppPwdPlain : ENC_FIXED_SALT; }
+
+/* 由用户输入的笔记密码 I1 派生真正的笔记密钥 M2（固定 32 字节；同输入同结果）。
+ * 用户输入任意长度，经组合密钥派生算法（迭代哈希+字节置换）转成 AES 所需的固定长度密钥；
+ * 输入不直接作为密钥、也不落盘明文。M2 用于：加解密笔记文件内容、加解密 .vault-enc.json 的已加密文件列表。
+ * @param {string} input 用户输入的笔记密码 I1
+ * @returns {Buffer} 32 字节内容密钥 M2
+ * @author 火 冰 */
+function deriveNoteKey(input) {
+  return comboKdf(String(input), ENC_FIXED_SALT, ENC_KDF_ROUNDS);
+}
+
+/* 归一化笔记相对路径：统一反斜杠为正斜杠、去开头斜杠、小写化（列表匹配用）。
+ * @param {string} rel 笔记相对路径
+ * @returns {string} 归一化路径（小写）
+ * @author 火 冰 */
+function normRel(rel) {
+  return String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+}
+
+/* 读取库根 .vault-enc.json 中的「已加密文件列表」密文（该库是否已加密的唯一判定依据；未加密返回 null）。
+ * 文件存在 = 已启用笔记加密；内容用 M2（AES-256-GCM）加密，可验证笔记密码正确性并支持「部分加密」状态。
+ * @param {string} root 库根绝对路径
+ * @returns {string|null} 列表密文（'ENC1:' 格式）
+ * @author 火 冰 */
+function encListCipher(root) {
+  try {
+    const j = JSON.parse(fs.readFileSync(encConfigFile(root), 'utf8'));
+    return (j && typeof j.list === 'string' && j.list) ? j.list : null;
+  } catch (e) { return null; }
+}
+
+/* 用候选密钥 M2 解密列表密文；解密成功（能还原出 JSON 文件数组）即证明 M2 正确。
+ * v:3 条目 {rel, key}（key=该文件加密时所用 keyId）；兼容 v:2 纯路径数组（key 记空串）。
+ * @param {string} listC 'ENC1:' 列表密文
+ * @param {Buffer} key 候选内容密钥
+ * @returns {Map<string, string>|null} 已加密文件相对路径(小写) -> keyId 映射；解密失败返回 null
+ * @author 火 冰 */
+function encListDecrypt(listC, key) {
+  try {
+    const json = decryptNoteText(listC, key);
+    const obj = JSON.parse(json);
+    if (!obj || !Array.isArray(obj.files)) return null;
+    const m = new Map();
+    obj.files.forEach(function (f) {
+      const rel = (typeof f === 'string') ? f : (f && typeof f.rel === 'string' ? f.rel : '');
+      if (!rel) return;
+      m.set(normRel(rel), (typeof f === 'object' && f && typeof f.key === 'string') ? f.key : '');
+    });
+    return m;
+  } catch (e) { return null; }
+}
+
+/* 把「已加密文件列表」用主密钥 M2 加密落盘到库根 .vault-enc.json（v:3 结构，进 git 随仓库同步）。
+ * 列表整体用主 key 加密；条目 {rel, key} 记录每个文件加密时所用的密钥标识（解决修改密码中间态：解密按条目 key 优先）。
+ * @param {string} root 库根绝对路径
+ * @param {Buffer} key 32 字节内容密钥 M2（主 key）
+ * @param {Map<string, string>} list 已加密文件相对路径(小写) -> keyId
+ * @author 火 冰 */
+function encWriteListCipherSync(root, key, list) {
+  const files = [];
+  (list || new Map()).forEach(function (kid, rel) { files.push({ rel: String(rel).replace(/\\/g, '/'), key: kid }); });
+  fs.writeFileSync(encConfigFile(root), JSON.stringify({ v: 3, list: encryptNoteText(JSON.stringify({ files: files }), key) }, null, 2), 'utf8');
+}
+
+/* 加载某库已加密文件列表（内存缓存；无 key 时不缓存，解锁后重新解密）。
+ * @param {string} root 库根绝对路径
+ * @param {Buffer} key 32 字节内容密钥 M2（主 key）
+ * @returns {Map<string, string>} 已加密文件相对路径(小写) -> keyId
+ * @author 火 冰 */
+function encLoadList(root, key) {
+  const k = String(root || '').toLowerCase();
+  if (encListCache.has(k)) return encListCache.get(k);
+  let list = new Map();
+  const listC = encListCipher(root);
+  if (listC && key) list = encListDecrypt(listC, key) || new Map();
+  if (key) encListCache.set(k, list);
+  return list;
+}
+
+/* 判断某笔记文件是否已加密（在已加密文件列表中）。库未加密/文件不在列表 → false（按明文读写）。
+ * @param {string} root 库根绝对路径
+ * @param {string} rel 笔记相对路径
+ * @returns {boolean}
+ * @author 火 冰 */
+function encIsFileEncrypted(root, rel) {
+  if (!noteEncEnabled(root)) return false;
+  const key = ensureNoteKey(root);
+  if (!key) return false;
+  return encLoadList(root, key).has(normRel(rel));
+}
+
+/* 把某文件加入已加密列表并落盘（新笔记/加密写回时调用；已在列表则跳过）。
+ * 条目记录 {rel, key}：key = 加密该文件用的主密钥 keyId。
+ * @param {string} root 库根绝对路径
+ * @param {string} rel 笔记相对路径
+ * @author 火 冰 */
+function encListAdd(root, rel) {
+  const key = ensureNoteKey(root);
+  if (!key) return;
+  const list = encLoadList(root, key);
+  const rn = normRel(rel);
+  if (!list.has(rn)) { list.set(rn, encKeyId(key)); encWriteListCipherSync(root, key, list); }
+}
+
+/* 把某文件从已加密列表移除并落盘（删除笔记时调用；不在列表则跳过）。
+ * @param {string} root 库根绝对路径
+ * @param {string} rel 笔记相对路径
+ * @author 火 冰 */
+function encListRemove(root, rel) {
+  const key = ensureNoteKey(root);
+  if (!key) return;
+  const list = encLoadList(root, key);
+  if (list.delete(normRel(rel))) encWriteListCipherSync(root, key, list);
+}
+
+/* 收集库内全部 .md 文件的相对路径（跳过隐藏目录/文件，与 walkDirMeta 一致）。
+ * @param {string} root 库根绝对路径
+ * @returns {Promise<string[]>} 相对路径数组
+ * @author 火 冰 */
+async function encAllNotePaths(root) {
+  const out = [];
+  const walk = async (dirRel) => {
+    const abs = dirRel ? path.join(root, dirRel) : root;
+    let items = [];
+    try { items = await fs.promises.readdir(abs, { withFileTypes: true }); } catch (e) { return; }
+    for (const it of items) {
+      if (it.name.startsWith('.')) continue;
+      const childRel = (dirRel ? dirRel + '/' : '') + it.name;
+      if (it.isDirectory()) await walk(childRel);
+      else if (it.isFile() && it.name.toLowerCase().endsWith('.md')) out.push(childRel);
+    }
+  };
+  await walk('');
+  return out;
+}
+
+/* 全库加密（首次设置笔记密码）：库内明文 .md 逐个用 M2 加密写回，收集已加密列表，
+ * 每 50 个文件落盘一次 .vault-enc.json —— 支持「加密未完成只有部分加密」时中途退出仍有进度。
+ * 已带 'ENC1:' 头的文件跳过（不属于本库当前明文状态，异常残留不破坏）。
+ * @param {string} root 库根绝对路径
+ * @param {Buffer} key 32 字节内容密钥 M2
+ * @returns {Promise<Set<string>>} 已加密文件列表
+ * @author 火 冰 */
+async function encEncryptAll(root, key) {
+  const files = await encAllNotePaths(root);
+  const list = new Map();
+  for (let i = 0; i < files.length; i++) {
+    const rel = files[i];
+    const abs = path.join(root, rel);
+    try {
+      const raw = await fs.promises.readFile(abs, 'utf8');
+      if (!String(raw).startsWith('ENC1:')) {
+        await fs.promises.writeFile(abs, encryptNoteText(raw, key), 'utf8');
+      }
+      list.set(normRel(rel), encKeyId(key));
+      if ((i + 1) % 50 === 0) encWriteListCipherSync(root, key, list);
+    } catch (e) { /* 单文件加密失败不阻断 */ }
+  }
+  encWriteListCipherSync(root, key, list);
+  return list;
+}
+
+/* 全库重加密（修改笔记密码）：库内全部 .md 用旧 keyring 解密（优先条目 key，失败降级尝试其余 key）
+ * → 用新密钥 M2_new 加密写回，条目 key 更新为新 keyId（解决修改密码中间态：中途崩溃后按条目 key 仍可解）。
+ * 并同步更新已加密列表（含此前未加密的明文文件，一并纳入加密）。
+ * @param {string} root 库根绝对路径
+ * @param {Map<string, Buffer>} oldRing 旧 keyring（keyId -> M2）
+ * @param {Buffer} newKey 新内容密钥
+ * @returns {Promise<Map<string, string>>} 新已加密文件列表（rel -> keyId）
+ * @author 火 冰 */
+async function encReencryptAll(root, oldRing, newKey) {
+  const files = await encAllNotePaths(root);
+  const newKid = encKeyId(newKey);
+  // 用旧 keyring 解出当前磁盘列表（含每文件 key），用于解密时优先条目 key
+  const listC = encListCipher(root);
+  let oldList = new Map();
+  for (const key of (oldRing || new Map()).values()) {
+    const l = encListDecrypt(listC, key);
+    if (l) { oldList = l; break; }
+  }
+  const list = new Map();
+  for (let i = 0; i < files.length; i++) {
+    const rel = files[i];
+    const abs = path.join(root, rel);
+    try {
+      const raw = await fs.promises.readFile(abs, 'utf8');
+      const plain = decryptNoteTextAny(raw, oldRing, oldList.get(normRel(rel))); // 非 ENC1 直接返回原文
+      await fs.promises.writeFile(abs, encryptNoteText(plain, newKey), 'utf8');
+      list.set(normRel(rel), newKid);
+      if ((i + 1) % 50 === 0) encWriteListCipherSync(root, newKey, list);
+    } catch (e) { /* 单文件重加密失败不阻断 */ }
+  }
+  encWriteListCipherSync(root, newKey, list);
+  return list;
+}
+
+/* 全库解密回明文（取消笔记密码）：把已加密列表中每个文件用 keyring 解密写回明文
+ * （条目 key 优先，失败降级尝试其余 key —— 多密码中间态仍可全部解开）。
+ * @param {string} root 库根绝对路径
+ * @param {Map<string, Buffer>} ring keyring（keyId -> M2）
+ * @returns {Promise<void>}
+ * @author 火 冰 */
+async function encDecryptAll(root, ring) {
+  // 用 keyring 解出当前磁盘列表（含每文件 key），无法解出（异常）则退化为不处理
+  const listC = encListCipher(root);
+  let list = new Map();
+  for (const key of (ring || new Map()).values()) {
+    const l = encListDecrypt(listC, key);
+    if (l) { list = l; break; }
+  }
+  for (const rel of list.keys()) {
+    const abs = path.join(root, rel);
+    try {
+      const raw = await fs.promises.readFile(abs, 'utf8');
+      if (String(raw).startsWith('ENC1:')) {
+        await fs.promises.writeFile(abs, decryptNoteTextAny(raw, ring, list.get(rel)), 'utf8');
+      }
+    } catch (e) { /* 文件已不存在忽略 */ }
+  }
+}
+
+/* 重建已加密列表（目录移动/重命名后调用）：按磁盘实际状态重建——文件带 'ENC1:' 头视为已加密，
+ * 并尝试用 keyring 逐 key 解开文件确定其 keyId（解不开记主 key）。
+ * @param {string} root 库根绝对路径
+ * @returns {Promise<void>}
+ * @author 火 冰 */
+async function encRebuildList(root) {
+  const key = ensureNoteKey(root);
+  if (!key) return;
+  const files = await encAllNotePaths(root);
+  const ring = encKeyCache.get(String(root).toLowerCase()) || new Map();
+  const list = new Map();
+  for (const rel of files) {
+    try {
+      const raw = await fs.promises.readFile(path.join(root, rel), 'utf8');
+      if (String(raw).startsWith('ENC1:')) {
+        let kid = encKeyId(key);
+        for (const [kid2, k2] of ring) {
+          try {
+            const buf = Buffer.from(raw.slice(5), 'base64');
+            const iv = buf.subarray(0, 12), tag = buf.subarray(12, 28), data = buf.subarray(28);
+            const d = createDecipheriv('aes-256-gcm', k2, iv);
+            d.setAuthTag(tag);
+            Buffer.concat([d.update(data), d.final()]); // 能解出 → 该文件用的是这个 key
+            kid = kid2; break;
+          } catch (e) { /* 该 key 解不开尝试下一个 */ }
+        }
+        list.set(normRel(rel), kid);
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+  encWriteListCipherSync(root, key, list);
+  encListCache.set(String(root).toLowerCase(), list);
+}
+
+/* 32 字节密钥 → base64 字符串（作为组合加密的明文存储到 .second-brain）。
+ * @param {Buffer} key 32 字节
+ * @returns {string}
+ * @author 火 冰 */
+function encKeyToB64(key) { return Buffer.from(key).toString('base64'); }
+
+/* base64 字符串 → 32 字节密钥。
+ * @param {string} b64
+ * @returns {Buffer}
+ * @author 火 冰 */
+function encB64ToKey(b64) { return Buffer.from(String(b64 || ''), 'base64'); }
+
+/* 密钥的确定性指纹（keyId）：SHA-256(base64(M2)) 前 16 位 hex。
+ * keyId 是「密码的指纹」——同 I1 派生出的 M2 在任何设备/任何时候指纹一致，换设备重建 M3 后列表 key 依然对应得上。
+ * @param {Buffer} key 32 字节内容密钥 M2
+ * @returns {string} 16 位 hex 指纹
+ * @author 火 冰 */
+function encKeyId(key) {
+  return createHash('sha256').update(encKeyToB64(key)).digest('hex').slice(0, 16);
+}
+
+/* 该库的加密校验文件路径：库根隐藏文件 .vault-enc.json（记录本库是否已启动加密，纳入 git 管理随仓库同步）。
+ * 只存「校验 proof」（用真正笔记密钥 K 加密固定哨兵的确定性密文），用于验证笔记密码，不存任何密钥/密码明文。
+ * 根目录点文件不被 walkDirMeta/AI 索引扫描，也不被 GIT-19 默认 .gitignore 忽略。
+ * @param {string} root 库根绝对路径
+ * @returns {string} 校验文件路径
+ * @author 火 冰 */
+function encConfigFile(root) { return path.join(root, '.vault-enc.json'); }
+
+/* 该库「真正笔记密钥 K」的密文存储路径（<库根>/.second-brain/vault-enc.json）。
+ * 已被默认 .gitignore 忽略、不进 git；每个库独立。内容 = 用盐（应用密码/固定盐）组合加密后的 K。
+ * @param {string} root 库根绝对路径
+ * @returns {string} 密文文件路径
+ * @author 火 冰 */
+function encKeyFile(root) { return path.join(root, META_DIR, 'vault-enc.json'); }
+
+/* 读取该库「笔记密钥 M3」的盐加密密文载荷（.second-brain/vault-enc.json，M3）。
+ * v:2 多 key 结构：keys 为 {keyId: cipher}；兼容 v:1 单 cipher（keyId 由解出的 M2 指纹确定）。
+ * 用当前盐（用户密码 M1/固定盐）逐个解出全部密钥 → keyring Map<keyId, M2>。
+ * @param {string} root 库根绝对路径
+ * @returns {Map<string, Buffer>} keyring（keyId -> M2）；无文件/全部解不开返回空 Map
+ * @author 火 冰 */
+function encReadKeyring(root) {
+  const ring = new Map();
+  let j = null;
+  try { j = JSON.parse(fs.readFileSync(encKeyFile(root), 'utf8')); } catch (e) { return ring; }
+  const keys = (j && j.v === 2 && j.keys && typeof j.keys === 'object') ? j.keys : null;
+  const ciphers = keys || (j && j.cipher ? { '_': j.cipher } : null); // v:1 单 cipher 兼容
+  if (!ciphers) return ring;
+  for (const cipher of Object.values(ciphers)) {
+    try {
+      const key = encB64ToKey(comboDecrypt(cipher, encSaltStr()));
+      if (key && key.length === 32) ring.set(encKeyId(key), key);
+    } catch (e) { /* 单 key 盐不符等解不开跳过 */ }
+  }
+  return ring;
+}
+
+/* 把 keyring（keyId -> M2）用当前盐（用户密码 M1/固定盐）整体组合加密落盘到 .second-brain/vault-enc.json
+ * （M3 v:2 多 key，每库独立，不进 git）。支持多密码多 key：修改密码后旧 key 保留，旧密码仍可解锁残留旧密文。
+ * @param {string} root 库根绝对路径
+ * @param {Map<string, Buffer>} ring keyring
+ * @author 火 冰 */
+function encWriteKeyCipher(root, ring) {
+  const keys = {};
+  (ring || new Map()).forEach(function (key, kid) { keys[kid] = comboEncrypt(encKeyToB64(key), encSaltStr()); });
+  fs.writeFileSync(encKeyFile(root), JSON.stringify({ v: 2, keys: keys }, null, 2), 'utf8');
+}
+
+/* 删除该库两个加密文件（取消笔记加密时清理）。
+ * @param {string} root 库根绝对路径
+ * @author 火 冰 */
+function encRemoveFiles(root) {
+  try { fs.unlinkSync(encConfigFile(root)); } catch (e) { /* 无文件忽略 */ }
+  try { fs.unlinkSync(encKeyFile(root)); } catch (e) { /* 无文件忽略 */ }
+}
+
+/* 该库是否已开启笔记加密（结果缓存，设置/取消时失效；判定依据=库根 .vault-enc.json 存在）。
+ * @param {string} root 库根绝对路径
+ * @returns {boolean}
+ * @author 火 冰 */
+function noteEncEnabled(root) {
+  const k = String(root || '').toLowerCase();
+  if (encEnabledCache.has(k)) return encEnabledCache.get(k);
+  const on = !!encListCipher(root);
+  encEnabledCache.set(k, on);
+  return on;
+}
+
+/* 失效某库的加密缓存（设置/取消密码、盐切换后调用）。
+ * @param {string} root 库根绝对路径
+ * @author 火 冰 */
+function encInvalidate(root) {
+  const k = String(root || '').toLowerCase();
+  encEnabledCache.delete(k);
+  encKeyCache.delete(k);
+  encMainKeyCache.delete(k);
+  encListCache.delete(k);
+}
+
+/* 该库是否「需要用户输入解锁」：已启用笔记加密（库根 .vault-enc.json 存在）但本地内存无 keyring 且
+ * 无法自动从 .second-brain 的 M3 解出有效 M2（盐不符/M3 缺失/损坏）——此时打开库需用户输入一次笔记密码 I1。
+ * 能自动解锁（M3 可用当前盐解开任一 key 并校验列表成功）则直接缓存并返回 false，不弹输入框。
+ * @param {string} root 库根绝对路径
+ * @returns {boolean}
+ * @author 火 冰 */
+function encNeedsUnlock(root) {
+  const k = String(root || '').toLowerCase();
+  const listC = encListCipher(root);
+  if (!listC) return false;
+  if (encKeyCache.has(k)) return false;
+  const key = tryAutoNoteKey(root);
+  if (key) return false;
+  return true;
+}
+
+/* 尝试自动解锁：用当前盐（用户密码 M1 明文/固定盐）解密 .second-brain 的 M3 得到 keyring（多密码多 key），
+ * 逐个用 M2 校验解密库根 .vault-enc.json 的已加密列表（能还原列表=密码正确），确定主密钥并缓存全部 keyring。
+ * @param {string} root 库根绝对路径
+ * @returns {Buffer|null} 主密钥 M2（自动解锁失败返回 null）
+ * @author 火 冰 */
+function tryAutoNoteKey(root) {
+  const k = String(root || '').toLowerCase();
+  const listC = encListCipher(root);
+  if (!listC) return null;
+  const ring = encReadKeyring(root);
+  if (!ring || ring.size === 0) return null;
+  let mainKid = null;
+  for (const [kid, key] of ring) {
+    const list = encListDecrypt(listC, key);
+    if (list) { mainKid = kid; encListCache.set(k, list); break; }
+  }
+  if (!mainKid) return null;
+  encKeyCache.set(k, ring);
+  encMainKeyCache.set(k, mainKid);
+  encEnabledCache.set(k, true);
+  return ring.get(mainKid);
+}
+
+/* 从已缓存 keyring 中取「主密钥」（能解开已加密列表的那个 M2；加密写/列表加密用主 key）。
+ * 主 keyId 缓存于 encMainKeyCache；未缓存时遍历 keyring 尝试解列表，无列表密文时取首个。
+ * @param {string} root 库根绝对路径
+ * @returns {Buffer|null}
+ * @author 火 冰 */
+function encMainKey(root) {
+  const k = String(root || '').toLowerCase();
+  const ring = encKeyCache.get(k);
+  if (!ring || ring.size === 0) return null;
+  const cached = encMainKeyCache.get(k);
+  if (cached && ring.has(cached)) return ring.get(cached);
+  const listC = encListCipher(root);
+  for (const [kid, key] of ring) {
+    if (!listC || encListDecrypt(listC, key)) { encMainKeyCache.set(k, kid); return key; }
+  }
+  return null;
+}
+
+/* 懒加载：用当前盐解密 .second-brain 里的 M3 获取 keyring 与主密钥 M2（仅内存缓存；
+ * 应用启动后不第一时间执行，首次读写才解密）。
+ * @param {string} root 库根绝对路径
+ * @returns {Buffer|null} 主密钥 M2（未设密码/无法解锁返回 null）
+ * @author 火 冰 */
+function ensureNoteKey(root) {
+  const k = String(root || '').toLowerCase();
+  if (encKeyCache.has(k)) return encMainKey(root);
+  const ring = encReadKeyring(root);
+  if (!ring || ring.size === 0) return null;
+  encKeyCache.set(k, ring);
+  encEnabledCache.set(k, true);
+  return encMainKey(root);
+}
+
+/* 笔记内容加密：AES-256-GCM → 'ENC1:' + base64(iv|tag|密文)。
+ * @param {string} plain 笔记明文
+ * @param {Buffer} key 32 字节内容密钥
+ * @returns {string} 密文文本
+ * @author 火 冰 */
+function encryptNoteText(plain, key) {
+  const iv = randomBytes(12);
+  const c = createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([c.update(Buffer.from(String(plain), 'utf8')), c.final()]);
+  const tag = c.getAuthTag();
+  return 'ENC1:' + Buffer.concat([iv, tag, enc]).toString('base64');
+}
+
+/* 笔记内容解密：识别 'ENC1:' 前缀则解密，否则原样返回（兼容未加密旧笔记；密钥不符返回密文原文避免崩溃）。
+ * @param {string} raw 磁盘文本
+ * @param {Buffer|null} key 32 字节内容密钥
+ * @returns {string} 明文
+ * @author 火 冰 */
+function decryptNoteText(raw, key) {
+  const s = String(raw || '');
+  if (!s.startsWith('ENC1:') || !key) return s;
+  try {
+    const buf = Buffer.from(s.slice(5), 'base64');
+    const iv = buf.subarray(0, 12), tag = buf.subarray(12, 28), data = buf.subarray(28);
+    const d = createDecipheriv('aes-256-gcm', key, iv);
+    d.setAuthTag(tag);
+    return Buffer.concat([d.update(data), d.final()]).toString('utf8');
+  } catch (e) { return s; }
+}
+
+/* 用 keyring（多密钥）解密：优先用 preferKeyId 对应的 M2，GCM 校验失败则遍历 keyring 其余 key 逐个尝试；
+ * 全部失败返回密文原文（现有兜底，不崩溃）。支持「修改密码中间态」残留旧密文与「多密码」并存场景。
+ * @param {string} raw 磁盘文本
+ * @param {Map<string, Buffer>|null} ring keyring（keyId -> M2）
+ * @param {string} preferKeyId 首选 keyId（列表条目记录的该文件加密所用 key；可空）
+ * @returns {string} 明文
+ * @author 火 冰 */
+function decryptNoteTextAny(raw, ring, preferKeyId) {
+  const s = String(raw || '');
+  if (!s.startsWith('ENC1:') || !ring || ring.size === 0) return s;
+  const tryOne = function (key) {
+    try {
+      const buf = Buffer.from(s.slice(5), 'base64');
+      const iv = buf.subarray(0, 12), tag = buf.subarray(12, 28), data = buf.subarray(28);
+      const d = createDecipheriv('aes-256-gcm', key, iv);
+      d.setAuthTag(tag);
+      return Buffer.concat([d.update(data), d.final()]).toString('utf8');
+    } catch (e) { return null; }
+  };
+  if (preferKeyId && ring.has(preferKeyId)) {
+    const r = tryOne(ring.get(preferKeyId));
+    if (r !== null) return r;
+  }
+  for (const key of ring.values()) {
+    const r = tryOne(key);
+    if (r !== null) return r;
+  }
+  return s;
+}
+
+/* 按库根读取笔记原文：该文件在已加密列表中则用 keyring 解密（条目 key 优先，失败降级尝试其余 key）；
+ * 未加密文件/未加密库原样返回（支持部分加密状态）。
+ * @param {string} root 库根绝对路径
+ * @param {string} rel 笔记相对路径
+ * @returns {Promise<string>}
+ * @author 火 冰 */
+async function vaultReadTextByRoot(root, rel) {
+  const relN = normRel(rel);
+  const abs = path.join(root, relN);
+  const raw = await fs.promises.readFile(abs, 'utf8');
+  if (noteEncEnabled(root) && encIsFileEncrypted(root, relN)) {
+    const ring = encKeyCache.get(String(root).toLowerCase());
+    const kid = encLoadList(root, ensureNoteKey(root)).get(relN) || '';
+    return decryptNoteTextAny(raw, ring, kid);
+  }
+  return raw;
+}
+
+/* 同步版 vaultReadTextByRoot（供 AI 引擎索引等同步场景）。
+ * @param {string} root 库根绝对路径
+ * @param {string} rel 笔记相对路径
+ * @returns {string}
+ * @author 火 冰 */
+function vaultReadTextSync(root, rel) {
+  const relN = normRel(rel);
+  const abs = path.join(root, relN);
+  const raw = fs.readFileSync(abs, 'utf8');
+  if (noteEncEnabled(root) && encIsFileEncrypted(root, relN)) {
+    const ring = encKeyCache.get(String(root).toLowerCase());
+    const kid = encLoadList(root, ensureNoteKey(root)).get(relN) || '';
+    return decryptNoteTextAny(raw, ring, kid);
+  }
+  return raw;
+}
+
+/* 读取当前上下文库的笔记原文（该文件在已加密列表中则解密；未加密文件原样返回）。
+ * @param {string} rel 笔记相对路径
+ * @returns {Promise<string>}
+ * @author 火 冰 */
+async function vaultReadText(rel) {
+  const relN = normRel(rel);
+  const raw = await fs.promises.readFile(resolveVaultPath(relN), 'utf8');
+  if (noteEncEnabled(vaultRoot()) && encIsFileEncrypted(vaultRoot(), relN)) {
+    const ring = encKeyCache.get(String(vaultRoot()).toLowerCase());
+    const kid = encLoadList(vaultRoot(), ensureNoteKey(vaultRoot())).get(relN) || '';
+    return decryptNoteTextAny(raw, ring, kid);
+  }
+  return raw;
+}
+
+/* 写入当前上下文库的笔记：库已加密则用 M2 加密落盘并把文件登记进已加密列表；未加密库原样写入。
+ * @param {string} rel 笔记相对路径
+ * @param {string} content 笔记明文
+ * @returns {Promise<void>}
+ * @author 火 冰 */
+async function vaultWriteText(rel, content) {
+  const relN = normRel(rel);
+  const abs = resolveVaultPath(relN);
+  await fs.promises.mkdir(path.dirname(abs), { recursive: true }); // 自动建父目录（新建/保存到新目录时）
+  if (noteEncEnabled(vaultRoot())) {
+    const key = ensureNoteKey(vaultRoot());
+    if (key) {
+      await fs.promises.writeFile(abs, encryptNoteText(content || '', key), 'utf8');
+      encListAdd(vaultRoot(), relN); // 新笔记/保存自动补登加密列表
+      return;
+    }
+    // 库已标记加密但 M2 暂不可用（异常态）：按明文写入，避免写入失败导致数据丢失
+  }
+  await fs.promises.writeFile(abs, content || '', 'utf8');
+}
+
+/* 修复单篇密文笔记（用户手动输入旧密码的异常处理）：当某文件用旧密钥加密、当前 keyring 解不开显示密文时，
+ * 用用户单独输入的密码 I1 派生 M2_test 尝试解密该文件；解密成功 → 用当前主密钥 M2 重新加密落盘、
+ * 把 M2_test 并入 keyring（.second-brain M3 v:2 落盘）、并更新已加密列表条目 keyId 为当前主密钥，
+ * 使该笔记恢复「当前密码可解、列表一致」的正常状态（此后读取/保存/全库重加密均可正常处理）。
+ * @param {string} root 库根绝对路径
+ * @param {string} rel 笔记相对路径
+ * @param {string} pwd 用户输入的（旧）密码
+ * @returns {Promise<{ok:boolean, reason?:string, content?:string, already?:boolean}>}
+ *   reason: 'missing' 文件不存在 / 'need_input' 未输入密码 / 'wrong' 密码错误解不开
+ * @author 火 冰 */
+async function encRepairNote(root, rel, pwd) {
+  const relN = normRel(rel);
+  const abs = path.join(root, relN);
+  let raw = null;
+  try { raw = await fs.promises.readFile(abs, 'utf8'); } catch (e) { return { ok: false, reason: 'missing' }; }
+  if (!String(raw).startsWith('ENC1:')) return { ok: true, already: true, content: String(raw) }; // 本就非密文
+  const input = String(pwd || '');
+  if (!input) return { ok: false, reason: 'need_input' };
+  const testKey = deriveNoteKey(input);
+  const plain = decryptNoteText(raw, testKey);
+  if (plain === raw) return { ok: false, reason: 'wrong' }; // GCM 校验失败=密码不对（decryptNoteText 失败返回密文原文）
+  const mainKey = ensureNoteKey(root);
+  const k = String(root).toLowerCase();
+  if (mainKey) {
+    await fs.promises.writeFile(abs, encryptNoteText(plain, mainKey), 'utf8'); // 用当前主密钥重新加密落盘
+    // 并入 keyring：该旧 key 进 M3，后续读取/取消加密/全库重加密都可解（不再依赖再次输入）
+    const ring = encKeyCache.get(k) || encReadKeyring(root);
+    const kid = encKeyId(testKey);
+    if (!ring.has(kid)) {
+      ring.set(kid, testKey);
+      encKeyCache.set(k, ring);
+      try { encWriteKeyCipher(root, ring); } catch (e) { /* M3 写盘失败不阻断修复 */ }
+    }
+    // 更新列表条目 keyId 为当前主密钥（强制覆盖条目；encListAdd 对已在列表条目会跳过，故直接 set）
+    const list = encLoadList(root, mainKey);
+    list.set(relN, encKeyId(mainKey));
+    encListCache.set(k, list);
+    try { encWriteListCipherSync(root, mainKey, list); } catch (e) { /* 列表落盘失败不阻断修复 */ }
+  }
+  return { ok: true, content: plain };
+}
+
+/* 用户密码 M1 盐切换时，对所有已加密库的 M3（盐加密的 M2 密文）用新盐重加密（取消 M1=还原固定盐）。
+ * v:2 多 key：逐个用旧盐解出 M2（keyId 由 M2 指纹确定），再用新盐整体重写；单 key 旧盐不匹配保持原样不破坏。
+ * @param {string} oldSaltStr 旧盐
+ * @param {string} newSaltStr 新盐
+ * @author 火 冰 */
+function reEncryptAllVaults(oldSaltStr, newSaltStr) {
+  const roots = new Set();
+  if (currentVault) roots.add(path.resolve(currentVault));
+  if (defaultVaultPath) roots.add(path.resolve(defaultVaultPath));
+  (vaultHistory || []).forEach(function (h) { if (h && h.path) roots.add(path.resolve(h.path)); });
+  roots.forEach(function (root) {
+    let j = null;
+    try { j = JSON.parse(fs.readFileSync(encKeyFile(root), 'utf8')); } catch (e) { return; }
+    if (!j) return;
+    const keys = (j.v === 2 && j.keys && typeof j.keys === 'object') ? j.keys : (j.cipher ? { '_': j.cipher } : null);
+    if (!keys) return;
+    try {
+      const out = {};
+      for (const cipher of Object.values(keys)) {
+        try {
+          const b64 = comboDecrypt(cipher, oldSaltStr);          // 旧盐解出密钥的 base64（M2 不变，只重加密其密文 M3）
+          const key = encB64ToKey(b64);
+          if (!key || key.length !== 32) continue;
+          out[encKeyId(key)] = comboEncrypt(b64, newSaltStr);    // keyId 换为确定性指纹（v:1 迁移）
+        } catch (e) { /* 单 key 旧盐不匹配保持原样不阻断 */ }
+      }
+      if (Object.keys(out).length) fs.writeFileSync(encKeyFile(root), JSON.stringify({ v: 2, keys: out }, null, 2));
+    } catch (e) { /* 单库重加密失败保持原样，不阻断 */ }
+    encInvalidate(root);
+  });
+}
+
+/* 读取当前库笔记加密状态：{enabled, saltMode, locked}。
+ * locked：已启用笔记加密（库根 .vault-enc.json 存在）且本地内存无 keyring、自动解锁失败时需要输入笔记密码。
+ * 时序约束：锁屏密码存在但应用尚未解锁（appUnlocked=false）时盐未定（encAppPwdPlain=null，此时用固定盐
+ * 尝试解 M3 必然失败并误报 locked），故此时一律返回 locked=false，不弹笔记密码遮罩；
+ * 锁屏解锁成功后渲染端经 SBEncUnlock.recheck 重新调用本接口（盐=应用密码明文）再判定。作者: 火 冰 */
+vaultHandle('app:encGetState', () => {
+  const root = vaultRoot();
+  const locked = (secPwdHash && !appUnlocked) ? false : encNeedsUnlock(root);
+  return { enabled: noteEncEnabled(root), saltMode: encAppPwdPlain ? 'app' : 'fixed', locked: locked };
+});
+
+/* 修复单篇密文笔记（异常处理）：渲染端检测到某笔记显示密文（当前 keyring 解不开，可能用旧密码加密）时，
+ * 用户单独输入密码 → 解密成功用当前主密钥重新加密落盘并更新列表/并入 keyring；返回 {ok, reason?, content?}。
+ * data={rel, pwd}。reason: 'missing'/'need_input'/'wrong'。作者: 火 冰 */
+vaultHandle('app:encRepairNote', async (_e, data) => {
+  const d = (data && typeof data === 'object') ? data : {};
+  return await encRepairNote(vaultRoot(), String(d.rel || ''), String(d.pwd || ''));
+});
+
+/* 打开库解锁：先尝试自动解锁（M3 可用当前盐解密并校验列表成功 → 直接缓存进入）；自动失败时用户输入笔记密码 I1
+ * → deriveNoteKey 派生 M2 → 用 M2 解密库根 .vault-enc.json 的已加密列表校验（解密正确=密码正确）→
+ * 通过才缓存 M2（仅内存）并把 M3 落盘到 .second-brain（keyring 并入正确 key），此后本会话不再要求输入。
+ * data={pwd} → {ok, auto?, reason?}（reason: 'no_config' 未加密 / 'need_input' 需输入密码 / 'wrong' 密码错误）。作者: 火 冰 */
+vaultHandle('app:encVerify', async (_e, data) => {
+  const root = vaultRoot();
+  const listC = encListCipher(root);
+  if (!listC) return { ok: false, reason: 'no_config' };
+  const k = String(root).toLowerCase();
+  const autoKey = tryAutoNoteKey(root);
+  if (autoKey) { encEnabledCache.set(k, true); return { ok: true, auto: true }; }
+  const input = String((data && data.pwd) || '');
+  if (!input) return { ok: false, reason: 'need_input' };
+  const key = deriveNoteKey(input);                       // 输入笔记密码 I1 → 真正的笔记密钥 M2
+  const list = encListDecrypt(listC, key);
+  if (!list) return { ok: false, reason: 'wrong' };
+  const ring = encReadKeyring(root);                      // 读取已有 keyring（可能含其他密码遗留 key）
+  const kid = encKeyId(key);
+  if (!ring.has(kid)) ring.set(kid, key);                 // 并入正确 key
+  encWriteKeyCipher(root, ring);                          // 多 key 整体落盘到 .second-brain（M3 v:2）
+  encKeyCache.set(k, ring);                               // 验证通过：缓存 keyring（仅内存）
+  encMainKeyCache.set(k, kid);
+  encEnabledCache.set(k, true);
+  encListCache.set(k, list);
+  return { ok: true };
+});
+
+/* 设置/修改/取消笔记加密密码。data={old?, next?}：
+ * next 非空 → 设置或修改（已有密码时须先通过 old 校验）；next 空 → 取消（须提供 old）。
+ * 设置：全库明文逐个用 M2 加密写回并生成已加密列表（.vault-enc.json，进 git）；
+ * 修改：全库旧 keyring 解、新 key 加密并更新列表，M3 保留旧 key（修改中间态旧密码仍可解残留旧密文）；
+ * 取消：全库用 keyring 解密回明文后清理配置。返回 { ok, reason? }。作者: 火 冰 */
+vaultHandle('app:encSetPassword', async (_e, data) => {
+  const d = (data && typeof data === 'object') ? data : {};
+  const root = vaultRoot();
+  const next = String(d.next || '');
+  const old = String(d.old || '');
+  try {
+    const listC = encListCipher(root);
+    const has = !!listC;
+    const oldKey = has ? deriveNoteKey(old) : null;
+    if (!next) {
+      // 取消：校验当前密码后，全库用 keyring 解密回明文（多密码遗留 key 一并可解）并清理配置
+      if (has) {
+        if (!oldKey || !encListDecrypt(listC, oldKey)) return { ok: false, reason: 'wrong_old' };
+        const ring = encReadKeyring(root);
+        ring.set(encKeyId(oldKey), oldKey);
+        await encDecryptAll(root, ring);
+      }
+      encRemoveFiles(root);
+      encInvalidate(root);
+      return { ok: true };
+    }
+    if (next.length < 4) return { ok: false, reason: 'too_short' };
+    if (has && (!oldKey || !encListDecrypt(listC, oldKey))) return { ok: false, reason: 'wrong_old' };
+    const key = deriveNoteKey(next);                   // 输入笔记密码 I1 → 真正的笔记密钥 M2
+    await fs.promises.mkdir(path.dirname(encConfigFile(root)), { recursive: true });
+    await fs.promises.mkdir(path.dirname(encKeyFile(root)), { recursive: true });
+    let oldRing = null;
+    if (has && oldKey) {
+      oldRing = encReadKeyring(root);                  // 已有 keyring（可能含修改前遗留 key，修改中间态可解旧密文）
+      oldRing.set(encKeyId(oldKey), oldKey);
+      await encReencryptAll(root, oldRing, key);       // 修改：全库旧 keyring 解、新 key 加密，列表同步更新
+    } else {
+      await encEncryptAll(root, key);                  // 设置：全库明文加密，生成已加密列表（.vault-enc.json）
+    }
+    const newRing = oldRing ? new Map(oldRing) : new Map();
+    newRing.set(encKeyId(key), key);                   // 新 key 并入（设置=单 key；修改=旧 key 保留 + 新 key）
+    encWriteKeyCipher(root, newRing);                  // .second-brain：多 key 盐加密密文 M3（不进 git，每库独立）
+    encInvalidate(root);
+    ensureNoteKey(root);                               // 设置成功立即缓存 keyring
+    return { ok: true };
+  } catch (e) { return { ok: false, reason: 'error' }; }
+});
+
 /* ---------- 应用生命周期 ---------- */
 /* 启动耗时打点：记录 whenReady 各阶段与窗口加载完成耗时，便于排查「启动慢/界面空白」类问题。
  * 作者: 火 冰 */
@@ -2993,7 +3874,7 @@ app.whenReady().then(async () => {
   // Ctrl+R（Reload）会与编辑器的「替换」快捷键冲突，需禁用默认加速器
   Menu.setApplicationMenu(null);
   loadConfig(); // 恢复上次选择的笔记库目录
-  loadSecurity(); // 恢复应用安全状态（启动密码/超时锁定，SEC-01/02）
+  await loadSecurity(); // 恢复应用安全状态（启动密码/超时锁定，SEC-01/02；含 M1_1 临时事务恢复）
   startSecIdleMonitor(); // 启动系统空闲锁定轮询（桌面端 powerMonitor）
   initAiEngine(); // 初始化 AI 引擎（配置/索引持久化路径）
   registerNoteProtocol();

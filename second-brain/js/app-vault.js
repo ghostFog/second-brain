@@ -349,6 +349,102 @@
     }
   }
 
+  /* 笔记库加密解锁（ENC-03）：当前库已启用笔记加密且本地无缓存密钥（locked）时，
+   * 显示 #enc-unlock-screen 遮罩要求输入笔记加密密码；验证通过（能正常解密库根隐藏文件密文）
+   * 才进入，失败提示密码错误。网页版无桌面桥接静默跳过。
+   * 时序：锁屏未解锁时主进程 enc.getState 返回 locked=false（盐未定），此处只隐藏遮罩；
+   * 锁屏解锁成功后由 app-security 调 window.SBEncUnlock.recheck() 重新判定（盐=应用密码明文）。
+   * 作者: 火 冰 */
+  function initVaultEncUnlock() {
+    const nd = window.noteDesktop;
+    if (!nd || !nd.enc || !nd.enc.getState) return;
+    const screen = document.getElementById('enc-unlock-screen');
+    if (!screen) return;
+    const pwd = document.getElementById('enc-unlock-pwd');
+    const err = document.getElementById('enc-unlock-err');
+    const btn = document.getElementById('enc-unlock-btn');
+    const close = document.getElementById('enc-unlock-close');
+    const show = function () {
+      screen.style.display = 'flex';
+      document.body.classList.add('enc-locked'); // 隐藏主视图防内容泄露（CSS body.enc-locked .app-main）
+      if (pwd) { pwd.value = ''; pwd.focus(); }
+      if (err) err.textContent = '';
+    };
+    const hide = function () {
+      screen.style.display = 'none';
+      document.body.classList.remove('enc-locked');
+    };
+    const doUnlock = function () {
+      const v = pwd ? pwd.value : '';
+      if (!v) { if (err) err.textContent = '请输入笔记加密密码'; return; }
+      nd.enc.verify(v).then(function (r) {
+        if (r && r.ok) { hide(); return; }
+        if (err) err.textContent = (r && r.reason === 'no_config') ? '该笔记库未启用加密' : '密码错误，无法解密笔记';
+        if (pwd) { pwd.value = ''; pwd.focus(); }
+      }).catch(function () { if (err) err.textContent = '解锁失败'; });
+    };
+    // 检测（可重入）：已加密且本地无缓存密钥 → 显示遮罩；否则隐藏。锁屏解锁后经 SBEncUnlock.recheck 重新判定
+    const check = function () {
+      nd.enc.getState().then(function (cfg) {
+        if (cfg && cfg.locked) show(); else hide();
+      }).catch(function () { /* 主进程不可用忽略 */ });
+    };
+    check();
+    if (btn) btn.addEventListener('click', doUnlock);
+    if (pwd) pwd.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') doUnlock(); });
+    if (close) close.addEventListener('click', function () { if (nd && nd.close) nd.close(); });
+    // 暴露重检接口：锁屏解锁成功后（应用密码明文已进主进程内存作为盐）重新判定是否需输入笔记密码
+    if (typeof window !== 'undefined') window.SBEncUnlock = { recheck: check };
+  }
+
+  /* 单篇密文笔记修复（ENC-04 异常处理）：编辑器打开笔记发现内容为密文（当前 keyring 解不开，可能用旧密码加密）时，
+   * 显示 #enc-repair-screen 遮罩，用户输入该笔记的（旧）加密密码 → 主进程解密成功用当前主密钥重新加密落盘并更新列表
+   * → 清内容缓存后重新装载该笔记（磁盘已是当前主密钥加密，重新读取即明文）；密码错误提示重输。
+   * 事件只绑定一次（loadView 反复调用 initVaultEncUnlock），SBEncRepair.tryRepair 供 editor-host 检测密文后调用。
+   * 作者: 火 冰 */
+  let encRepairBound = false;
+  function initEncRepair() {
+    const nd = window.noteDesktop;
+    if (!nd || !nd.enc || !nd.enc.repairNote || encRepairBound) return;
+    const screen = document.getElementById('enc-repair-screen');
+    if (!screen) return;
+    encRepairBound = true;
+    const pwd = document.getElementById('enc-repair-pwd');
+    const err = document.getElementById('enc-repair-err');
+    const btn = document.getElementById('enc-repair-btn');
+    const close = document.getElementById('enc-repair-close');
+    let pendingPath = '';
+    const show = function (rel) {
+      pendingPath = rel;
+      screen.style.display = 'flex';
+      if (pwd) { pwd.value = ''; pwd.focus(); }
+      if (err) err.textContent = '';
+    };
+    const hide = function () { screen.style.display = 'none'; pendingPath = ''; };
+    const doRepair = function () {
+      const v = pwd ? pwd.value : '';
+      if (!v) { if (err) err.textContent = '请输入密码'; return; }
+      if (!pendingPath) { hide(); return; }
+      nd.enc.repairNote(pendingPath, v).then(function (r) {
+        if (r && r.ok) {
+          hide();
+          // 修复成功：清内容缓存并重新装载该笔记（磁盘已是当前主密钥加密，重新读取即明文）
+          if (typeof edOutdated !== 'undefined' && edOutdated && pendingPath in edOutdated) delete edOutdated[pendingPath];
+          if (typeof openNote === 'function') openNote(pendingPath);
+          else if (typeof reloadNote === 'function') reloadNote(pendingPath);
+          return;
+        }
+        if (err) err.textContent = (r && r.reason === 'missing') ? '笔记文件不存在' : '密码错误，无法解密该笔记';
+        if (pwd) { pwd.value = ''; pwd.focus(); }
+      }).catch(function () { if (err) err.textContent = '修复失败'; });
+    };
+    if (btn) btn.addEventListener('click', doRepair);
+    if (pwd) pwd.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') doRepair(); });
+    if (close) close.addEventListener('click', hide);
+    // 暴露给编辑器宿主：打开笔记发现密文时调用（传相对路径）
+    if (typeof window !== 'undefined') window.SBEncRepair = { tryRepair: show };
+  }
+
   /* 关闭笔记右键菜单 */
   function closeNoteContextMenu() {
     const m = document.getElementById('note-ctx-menu');

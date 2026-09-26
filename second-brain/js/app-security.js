@@ -91,6 +91,22 @@
         needLock = false; // 解锁成功：本窗口不再需要锁定
         resetIdle(); // 解锁成功重置网页版空闲计时
         hideLock();
+        // 锁屏解锁成功（应用密码明文已进主进程内存作为笔记加密组合解密的盐）：
+        // 触发笔记加密解锁重检——锁屏前误判 locked 的库，此时盐已定，可自动解锁则不弹笔记密码遮罩
+        if (typeof window !== 'undefined' && window.SBEncUnlock && typeof window.SBEncUnlock.recheck === 'function') {
+          try { window.SBEncUnlock.recheck(); } catch (e) { /* 忽略重检异常 */ }
+        }
+        // 锁屏解锁成功（盐=应用密码明文已定）：当前打开的笔记若因「盐未定」显示密文，重载它以自动解密
+        // （能解开则显示明文；仍解不开=旧密码加密，由 openNote 密文检测在已解锁状态下弹修复框）。作者: 火 冰
+        try {
+          const cur = (typeof edCurrent !== 'undefined') ? edCurrent : null;
+          const cache = (typeof edOutdated !== 'undefined') ? edOutdated : null;
+          const curRaw = (cur && cache && cur in cache) ? cache[cur] : null;
+          if (cur && typeof curRaw === 'string' && curRaw.indexOf('ENC1:') === 0) {
+            if (typeof reloadNote === 'function') reloadNote(cur);
+            else if (typeof openNote === 'function') openNote(cur);
+          }
+        } catch (e) { /* 重载失败不影响解锁流程 */ }
       } else if (e.err) {
         e.err.textContent = '密码错误，请重试';
         if (e.pwd) { e.pwd.value = ''; try { e.pwd.focus(); } catch (_) {} }

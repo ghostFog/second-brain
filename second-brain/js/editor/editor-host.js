@@ -148,6 +148,23 @@
           ? (await window.sbProject.read(path)).content
           : await noteStore.read(path);
         edOutdated[path] = c;
+        // 单篇密文笔记修复（ENC-04 异常处理）：读取结果仍为密文（当前 keyring 解不开，可能用旧密码加密）
+        // → 弹「输入旧密码修复」遮罩（桌面笔记库才可能加密；项目模式不加密跳过）。
+        // 时序豁免：锁屏尚未解锁（盐未定，固定盐解不开 M3 会把密文误判为「旧密码密文」）时不弹修复框，
+        // 待锁屏解锁后（盐=应用密码明文）由 app-security 重载当前笔记自动解密，仍解不开才弹。作者: 火 冰
+        if (typeof c === 'string' && c.indexOf('ENC1:') === 0 && !(window.sbProject && window.sbProject.isProjectMode())) {
+          const nd = window.noteDesktop;
+          if (nd && nd.security && typeof nd.security.getState === 'function') {
+            nd.security.getState().then(function (sec) {
+              if (sec && sec.hasPwd && !sec.unlocked) return; // 锁屏未解锁：等解锁后重载，本轮不弹
+              if (window.SBEncRepair && typeof window.SBEncRepair.tryRepair === 'function') window.SBEncRepair.tryRepair(path);
+            }).catch(function () {
+              if (window.SBEncRepair && typeof window.SBEncRepair.tryRepair === 'function') window.SBEncRepair.tryRepair(path);
+            });
+          } else if (window.SBEncRepair && typeof window.SBEncRepair.tryRepair === 'function') {
+            window.SBEncRepair.tryRepair(path);
+          }
+        }
       } catch (err) {
         const i = edOpenTabs.indexOf(path);
         if (i !== -1) edOpenTabs.splice(i, 1);

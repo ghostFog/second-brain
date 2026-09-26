@@ -142,6 +142,18 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     },
   },
 
+  /* ---------- 笔记加密桥接（ENC-02/03/04：库根 .vault-enc.json 存 M2 加密的已加密文件列表(含每文件 keyId) + .second-brain 存多密码 M3 keyring） ---------- */
+  enc: {
+    /** 读取当前库笔记加密状态：{enabled, saltMode, locked}（locked=已加密且无法自动解锁，需输入笔记密码） */
+    getState: () => ipcRenderer.invoke('app:encGetState'),
+    /** 设置/修改/取消笔记加密密码：data={old?, next?}（设置=全库加密、修改=全库重加密并保留旧 key、取消=全库解密还原明文），返回 {ok, reason?} */
+    setPassword: (data) => ipcRenderer.invoke('app:encSetPassword', data),
+    /** 打开库解锁：输入笔记密码 I1 校验已加密文件列表，验证通过才缓存 keyring 并落盘 M3（并入正确 key），返回 {ok, reason?} */
+    verify: (pwd) => ipcRenderer.invoke('app:encVerify', { pwd: pwd }),
+    /** 修复单篇密文笔记：输入（旧）密码，解密成功用当前主密钥重新加密落盘并更新列表/并入 keyring，返回 {ok, reason?, content?} */
+    repairNote: (rel, pwd) => ipcRenderer.invoke('app:encRepairNote', { rel: rel, pwd: pwd }),
+  },
+
   /* ---------- 文件拖拽临时打开（只读；不写库、不建索引） ---------- */
   /** 从拖拽入窗口的 File 对象解析真实绝对路径（Electron webUtils）。参数为 renderer 侧 File。
       返回值是绝对路径字符串；解析失败返回空串。作者: 火 冰 */

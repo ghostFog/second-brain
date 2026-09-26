@@ -266,6 +266,11 @@
     // 标题栏笔记库选择器
     initVaultPicker();
 
+    // 笔记库加密解锁（ENC-03）：已加密且本地无缓存密钥时弹遮罩输入密码验证（打开库/启动后检测）
+    if (typeof initVaultEncUnlock === 'function') initVaultEncUnlock();
+    // 单篇密文笔记修复（ENC-04 异常处理）：编辑器检测到密文时弹遮罩输入旧密码重新加密修复
+    if (typeof initEncRepair === 'function') initEncRepair();
+
     // 插件系统：从 DEFAULT_PLUGIN_DATA 填充市场数据 + 注册已装插件的扩展点 + 加载本地目录插件。
     // 必须先于 RibbonManager.init，让插件 Ribbon/顶栏按钮在整体渲染前注册。作者: 火 冰
     if (typeof initPluginSystem === 'function') {

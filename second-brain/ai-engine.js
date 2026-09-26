@@ -833,6 +833,18 @@ class AiEngine {
     return this.getVaultRoot ? this.getVaultRoot() : '';
   }
 
+  /**
+   * 读取某篇 .md 原文：主进程注入 _vaultReadSync（加密库自动解密后再分块）时用之，否则回退原生 readFileSync。
+   * @param {string} root 库根绝对路径
+   * @param {string} rel 笔记相对路径
+   * @returns {string}
+   * @author 火 冰
+   */
+  _readMd(root, rel) {
+    if (typeof this._vaultReadSync === 'function') return this._vaultReadSync(root, rel);
+    return fs.readFileSync(path.join(root, rel), 'utf8');
+  }
+
   /** 按根目录计算索引文件 key（哈希）。 */
   _vaultKeyFor(root) {
     const p = path.resolve(String(root || '')).toLowerCase();
@@ -971,12 +983,12 @@ class AiEngine {
     let total = 0;
     for (const f of files) {
       const prm = await this._chunkParamsFor(f);
-      total += chunkConfigured(fs.readFileSync(path.join(root, f), 'utf8'), prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize, prm.strategy, path.basename(f)).length;
+      total += chunkConfigured(this._readMd(root, f), prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize, prm.strategy, path.basename(f)).length;
     }
     const noteIndexAt = {};   // 每篇笔记的索引生成时间（用于「索引时间 < 文件更新时间」的过期检测）
     for (const f of files) {
       let text = '';
-      try { text = fs.readFileSync(path.join(root, f), 'utf8'); } catch (e) { continue; }
+      try { text = this._readMd(root, f); } catch (e) { continue; }
       const noteId = await this._metaNoteIdFor(f, text);
       const prm = await this._chunkParamsFor(f);
       const cs = chunkConfigured(text, prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize, prm.strategy, path.basename(f));
@@ -1018,7 +1030,7 @@ class AiEngine {
         return;
       }
       let text = '';
-      try { text = fs.readFileSync(path.join(root, rel), 'utf8'); } catch (e) { return this._removeNoteWork(rel); }
+      try { text = this._readMd(root, rel); } catch (e) { return this._removeNoteWork(rel); }
       const noteId = await this._metaNoteIdFor(rel, text);
       const prm = await this._chunkParamsFor(rel);
       const cs = chunkConfigured(text, prm.blockSize, prm.overlap, prm.offsets, prm.maxChunkSize, prm.strategy, path.basename(rel));
@@ -1229,11 +1241,11 @@ class AiEngine {
     let done = 0;
     let total = 0;
     for (const f of files) {
-      try { total += chunkText(fs.readFileSync(path.join(root, f), 'utf8'), 200, 40).length; } catch (e) { /* 跳过坏文件 */ }
+      try { total += chunkText(this._readMd(root, f), 200, 40).length; } catch (e) { /* 跳过坏文件 */ }
     }
     for (const f of files) {
       let text = '';
-      try { text = fs.readFileSync(path.join(root, f), 'utf8'); } catch (e) { continue; }
+      try { text = this._readMd(root, f); } catch (e) { continue; }
       const noteId = await this._metaNoteIdFor(f, text);
       const cs = chunkText(text, 200, 40);
       for (let i = 0; i < cs.length; i++) {
