@@ -71,6 +71,7 @@
 | [Bug-065](Bug-065.md) | 已修复（待真机验证） | 打开笔记报未处理 Promise 异常 `notes:read ... EISDIR`（目录被当笔记读），且 `.git` 等点目录曾是最近打开 → 启动恢复失败致编辑器留白。修复：`notes:read` 判目录；`openNote` 失败撤销页签并在无笔记打开时回退 `edNotes[0]`；`walkNotes` 跳过点开头隐藏项。 |
 | [Bug-066](Bug-066.md) | 已修复（待真机验证） | 输入锁屏密码后仍提示输入笔记密码：启动阶段锁屏未解锁、盐未定，`encGetState` 用固定盐解 M3 失败误判 locked 弹遮罩，解锁后不重检。修复：锁屏未解锁时 locked 返回 false + 解锁成功后 `SBEncUnlock.recheck` 重检。 |
 | [Bug-067](Bug-067.md) | 已修复（待真机验证） | 单篇笔记显示密文、切换其他笔记正常：该文件用旧密码 key 加密而当前 keyring 只有新 key（列表条目 key 不一致），`decryptNoteTextAny` 全失败返回密文原文且无修复入口。修复：新增 `encRepairNote` + `app:encRepairNote` IPC + 渲染端密文检测弹「输入旧密码修复」遮罩，解密成功用当前主密钥重加密落盘 + 并入 keyring + 更新列表条目 keyId。 |
+| [Bug-068](Bug-068.md) | 已修复（待真机验证） | AI 索引库列表同一知识库重复（dfzx×2）：9/17 索引 key 算法升级时新旧两套各写一个 `.index.json`（6qb8ht=旧算法残留、dr30tz=当前），`listIndexes` 按文件名平铺不去重。修复：新增 `_pruneStaleIndexFor`，`rebuildIndex`/`rebuildIndexFor` 写盘前自动清理同库旧 key 文件，重建一次即收敛；立即清理可删 `6qb8ht.index.json`。 |
 
 > 注（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——语言选择器(chip)显隐保留为 Bug-011，链接弹框 `docButton` 那条纠正为 Bug-042。
 

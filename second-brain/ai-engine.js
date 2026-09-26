@@ -977,6 +977,8 @@ class AiEngine {
   async rebuildIndex(onProgress) {
     if (!this.getVaultRoot) throw new Error('笔记库未就绪');
     const root = this.getVaultRoot();
+    // 重建当前库索引前，同样清理该路径下旧版算法残留的同名索引文件，避免列表重复
+    this._pruneStaleIndexFor(root, this._vaultKeyFor(root));
     const files = await this._scanMd(root, '');
     const chunks = [];
     let done = 0;
@@ -1236,6 +1238,9 @@ class AiEngine {
   async rebuildIndexFor(vaultPath, onProgress) {
     if (!vaultPath || !fs.existsSync(vaultPath)) throw new Error('知识库目录不存在：' + (vaultPath || ''));
     const root = vaultPath;
+    // 重建前清理同路径下旧版索引算法产生的残留索引文件（如历史不同 hash 的同名库文件），
+    // 只保留本次将写入的 key，避免索引库列表出现重复条目
+    this._pruneStaleIndexFor(root, this._vaultKeyFor(root));
     const files = await this._scanMd(root, '');
     const chunks = [];
     let done = 0;
@@ -1294,6 +1299,36 @@ class AiEngine {
         const file = path.join(this.indexDir, f);
         if (fs.existsSync(file)) { fs.unlinkSync(file); removed = true; }
       } catch (e) { /* 损坏索引条目跳过，不阻塞删除 */ }
+    }
+    return removed;
+  }
+
+  /**
+   * 清理同一知识库路径下的旧版索引文件（不同 key 算法产生的残留文件），保留本次写入的 keepKey。
+   * 用于重建前自愈：同一库因历史算法差异产生多个 .index.json 时，只留当前算法文件，索引库列表不再重复。
+   * @param {string} root 知识库根目录
+   * @param {string} keepKey 本次将保留的索引文件 key（不含 .index.json 后缀）
+   * @returns {number} 删除的文件数
+   * @author 火 冰
+   */
+  _pruneStaleIndexFor(root, keepKey) {
+    if (!this.indexDir || !root) return 0;
+    const target = path.resolve(String(root)).toLowerCase();
+    const keep = String(keepKey || '');
+    let removed = 0;
+    let entries = [];
+    try { entries = fs.readdirSync(this.indexDir); } catch (e) { return 0; }
+    for (const f of entries) {
+      if (!/\.index\.json$/.test(f)) continue;
+      const key = f.replace(/\.index\.json$/, '');
+      if (key === keep) continue;
+      try {
+        const j = JSON.parse(fs.readFileSync(path.join(this.indexDir, f), 'utf8'));
+        if (!j || !j.vaultPath) continue;
+        if (path.resolve(String(j.vaultPath)).toLowerCase() !== target) continue;
+        const file = path.join(this.indexDir, f);
+        if (fs.existsSync(file)) { fs.unlinkSync(file); removed++; }
+      } catch (e) { /* 损坏索引条目跳过，不阻塞清理 */ }
     }
     return removed;
   }
