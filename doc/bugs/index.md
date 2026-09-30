@@ -72,6 +72,7 @@
 | [Bug-066](Bug-066.md) | 已修复（待真机验证） | 输入锁屏密码后仍提示输入笔记密码：启动阶段锁屏未解锁、盐未定，`encGetState` 用固定盐解 M3 失败误判 locked 弹遮罩，解锁后不重检。修复：锁屏未解锁时 locked 返回 false + 解锁成功后 `SBEncUnlock.recheck` 重检。 |
 | [Bug-067](Bug-067.md) | 已修复（待真机验证） | 单篇笔记显示密文、切换其他笔记正常：该文件用旧密码 key 加密而当前 keyring 只有新 key（列表条目 key 不一致），`decryptNoteTextAny` 全失败返回密文原文且无修复入口。修复：新增 `encRepairNote` + `app:encRepairNote` IPC + 渲染端密文检测弹「输入旧密码修复」遮罩，解密成功用当前主密钥重加密落盘 + 并入 keyring + 更新列表条目 keyId。 |
 | [Bug-068](Bug-068.md) | 已修复（待真机验证） | AI 索引库列表同一知识库重复（dfzx×2）：9/17 索引 key 算法升级时新旧两套各写一个 `.index.json`（6qb8ht=旧算法残留、dr30tz=当前），`listIndexes` 按文件名平铺不去重。修复：新增 `_pruneStaleIndexFor`，`rebuildIndex`/`rebuildIndexFor` 写盘前自动清理同库旧 key 文件，重建一次即收敛；立即清理可删 `6qb8ht.index.json`。 |
+| [Bug-069](Bug-069.md) | 已修复（待真机验证） | 开机后第一窗输入锁屏密码后编辑区空白：切换目录文件仍空白，切换知识库新开窗口才正常恢复。修复：`ensureVd` 检测 vditor 实例容器根节点脱离文档（`isConnected===false`）即销毁重建到当前容器，`vdSyncValue` 改经 `ensureVd` 懒创建；回归断言 2 条。 |
 
 > 注（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——语言选择器(chip)显隐保留为 Bug-011，链接弹框 `docButton` 那条纠正为 Bug-042。
 
