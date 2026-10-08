@@ -6,7 +6,7 @@ REM  Author: huobing
 REM  功能: 首次运行自动安装依赖，然后独立启动桌面程序
 REM        用 start 把 Electron 脱离本控制台启动，关闭 cmd 不影响程序
 REM ============================================
-setlocal
+
 cd /d "%~dp0"
 
 REM 检测 node_modules 是否存在，不存在则安装依赖
@@ -32,4 +32,3 @@ if not exist "%APP_DIR%node_modules\electron\dist\electron.exe" (
 
 REM 独立启动 Electron（GUI 进程，不依附控制台；本 cmd 随即退出）
 start "" /d "%APP_DIR%" "%APP_DIR%node_modules\electron\dist\electron.exe" .
-endlocal

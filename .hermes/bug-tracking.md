@@ -1,6 +1,11 @@
 # 历史 Bug 追踪规范
 
-> 与 `.hermes/design.md`、`.hermes/progress.md` 职责一致：本文件仅协定**规则与模板**，不承载实际记录；实际 Bug 记录落盘 `doc/历史Bug记录.md`（仅数据）。
+> 与 `.hermes/design.md`、`.hermes/progress.md` 职责一致：本文件仅协定**规则与模板**，不承载实际正文与数据；实际内容一律落地 `doc/`——Bug 完整记录在 `doc/bugs/Bug-NNN.md`、索引在 `doc/历史Bug记录.md`、防再犯清单在 `doc/bugs/防再犯清单.md`。`.hermes/` 可直接复制到其他项目复用，故不承载任何依赖本项目技术架构（vditor/Electron/WYSIWYG 等）的规则。
+
+## 规则与模板目录
+
+- **Bug 记录**：模板见下；完整记录落点 `doc/bugs/Bug-NNN.md`，索引 `doc/历史Bug记录.md`。
+- **防再犯清单（CD-*）**：实际清单在 **`doc/bugs/防再犯清单.md`**（依赖本项目架构，不入 `.hermes/`）；新条目直接写入该 doc 文件末尾。
 
 ## 触发条件
 
@@ -33,66 +38,11 @@
 | 状态   | 见状态枚举         | 是    |
 | 处理方法 | 修复方案与改动内容     | 是    |
 | 验证结果 | 测试与验证结论       | 处理完填 |
-| 防再犯要点 | 根因对应的通用编码约束（禁止/必须），回填到下方防再犯清单 | 处理完填 |
+| 防再犯要点 | 根因对应的通用编码约束（禁止/必须），回填到 `doc/bugs/防再犯清单.md` 末尾（CD-编号） | 处理完填 |
 
-## 防再犯清单（已沉淀的通用约束，编码时须规避）
+## 防再犯清单
 
-> 修复 bug 时把根因提炼成 Don't/Do，登记到此处；编码命中这些模式即规避，避免同类问题再犯。编号 CD-（checklist don't/do）。新条目追加到末尾。
-
-| 编号 | 类型 | 约束 | 来源 Bug |
-| --- | --- | --- | --- |
-| CD-01 | 禁止 | 不要用原生 `window.prompt` / `confirm` 弹窗（Electron 调用即抛错）——统一用 `window.inputModal` / `noteDesktop.confirm` | Bug-004 |
-| CD-02 | 必须 | 操作可能被摘除（detached、`parentNode`=null）的 DOM 节点前，先判 `parentNode`/`isConnected` 再 `insertBefore`/`appendChild` | Bug-005 |
-| CD-03 | 必须 | 视图重建（loadView 重入）+ 切回时，tab/编辑区需补渲染，不能只在首次分支渲染 | Bug-001 |
-| CD-04 | 必须 | 遍历/收集节点的循环（`while (node.firstChild)` 等）必须边取边移除（`removeChild`），否则 `firstChild` 恒存在会死循环/数组无限增长 | Bug-008 |
-| CD-05 | 必须 | 子菜单等浮动层依赖鼠标跨越空隙展开展收时，不能只靠 CSS `:hover`（空隙处会瞬间收起）——需 JS `mouseenter/mouseleave` + 延迟收起桥接空隙 | Bug-008 |
-| CD-06 | 必须 | 编辑器块级插入（WYSIWYG 的 `<pre>/<table>` 等）必须落到 `#ed-wysiwyg` 顶层（当前顶层块之后的兄弟），不能嵌进 `<p>` 等行内容器，否则 `domToMd` 只认顶层块会还原错乱 | Bug-009 |
-| CD-07 | 必须 | 代码块语言标签只保留一处承载：语言写入 `<pre data-lang>`（供序列化还原），不要在 `<pre>` 前再输出可见的 `.code-lang` 幽灵标签；同一信息不重复展示，渲染与 `applyCodeLang` 两端保持一致 | Bug-018 |
-| CD-08 | 必须 | Markdown 管道表格单元格序列化时须去掉 `\n`（含空占位 `<br>` 归一为空串）——Markdown 表格单元格不能含换行，否则 `domToMd` 会拼出 `| \n | \n |` 的多行空单元格 | Bug-019 |
-| CD-09 | 必须 | 凡是 `wys.innerHTML = rwRender(md)` 重建所见即所得内容的路径都必须紧跟 `appendWysTrailingP(wys)`（只在首次渲染/`renderArticle`不够）；渲染与插入的空表格单元格统一用 `<br>` 占位，且给 td 留最小高度，保证空行不塌缩 | Bug-020 |
-| CD-10 | 必须 | WYSIWYG「单击=整块选中锁编辑」只适用于代码块这类需按源码编辑的块；表格等需要逐格编辑的块不得在单击时整块锁定，否则光标被弹回块前无法输入（拖拽/删除另走 dragstart/右键） | Bug-021 |
-| CD-11 | 必须 | 特殊块(TABLE/PRE/BLOCKQUOTE/HR)由于「单击不整选中」，其后的空占位段按 Backspace 必须由编辑器接管为「一次删除前一块」，不能依赖原生 contenteditable（会变成移光标→选中→删三连） | Bug-022 |
-| CD-12 | 必须 | WYSIWYG 编辑区内各块（尤其表格）的可视样式（如格线）必须在宿主 CSS 里给 `#ed-wysiwyg` 一层兜底（用 `var(--note-*)` 变量），不能只依赖插入/渲染各自生成的行内样式，否则任一路径差异都导致整体"空白" | Bug-023 |
-| CD-13 | 必须 | 所有「复制到剪贴板」的实现都要走 Clipboard API + 失败回退 `document.execCommand('copy')` 并给用户反馈（成功对勾/失败 toast），不能只 `writeText().then()` 无 `.catch`——Electron / `note://` 下 Clipboard API 常被拒，否则静默复制失败（markdown-editor `wysCopyBlock` 与 code-highlight 复制按钮同策略） | Bug-024 |
-| CD-14 | 必须 | 右键菜单针对「焦点/光标所在元素」的操作，目标定位必须取自右键命中信息（如 `resolveWysHit` 的 `hit.cell`），不能依赖 `document.getSelection()`——右键不移动光标/选区，选区常停在别处，会退化成默认值（如表格行列增删固定到最左列/首行）；命中信息沿 右键委托 → 菜单 schema(action 闭包) → 操作函数参数 链路显式传递 | Bug-025 |
-| CD-15 | 必须 | vditor（及同类第三方编辑器）的 `after`/事件回调若需调用实例方法，必须用闭包捕获的实例引用（`inst || vdInst`）显式调用，不能依赖回调内 `this`——vditor 源码对触发类回调是平调用（`mergedOptions.after()`），`this` 指向 window，`this.setValue` 会抛 TypeError 导致补渲失败、编辑区空白 | Bug-026 |
-| CD-16 | 必须 | 视图重建（`loadView` 重入）时，若该视图承载拥有模块级实例/引用的第三方编辑器（vditor 等），切离该视图前必须显式销毁并清空模块级实例引用（如 `vdDestroy`），否则切回时 `ensureVd`（`if (!vdInst)`）不会在新 DOM 上重建而留白 | Bug-027 |
-| CD-17 | 必须 | 持久化与恢复必须共用同一数据源：凡 `window.__saved*` 启动快照（主题/强调色/字体等），任何设置变更写入 localStorage 时必须同步更新对应快照，否则视图重建（`bindSettings` 用 `window.__savedTheme || 'dark'` 恢复）会用旧值回退用户新选择 | Bug-028 |
-| CD-18 | 必须 | 第三方编辑器（vditor 等）的资源必须全部本地化（vendor 目录 + 与官方一致的 dist 结构），初始化 opts 显式传 `cdn` 指向本地；禁止依赖 unpkg.com 等外网 CDN，否则弱网下编辑区渲染被网络拖慢 | Bug-029 |
-| CD-19 | 必须 | 打开笔记等异步装载流程里，「当前文件」状态（如 `edCurrent`）必须在内容真正装载进编辑器之后、渲染之前才激活，不能同步前置；否则装载间隙内编辑器 blur/input 事件会把旧文件可见内容按新文件路径保存（串文件/丢失）。同时自动保存去抖 timer 必须按文件独立并捕获输入瞬间归属的文件 | Bug-030 |
-| CD-20 | 必须 | 配置第三方编辑器（vditor 等）的 `toolbar` 数组只能使用其**内置合法 key**；臆造/臆想的 key（如 `formula`、`find`）会被 vditor 原样保留并在 `Custom` 兜底渲染成 `data-type="undefined"` 的空白按钮，静默难察。新增 key 前先到 `node_modules/vditor/dist/index.js` 的 `genItem`/`mergeToolbar` 核对 | Bug-032 |
-| CD-21 | 必须 | Electron 桌面应用必须配置 `app.requestSingleInstanceLock()`：未获得锁的实例直接 `app.quit()`（不并发建窗），获得锁的实例监听 `second-instance` 恢复既有窗口；且 `whenReady` 开头用 `if (!gotTheLock) return;` 守卫。否则托盘常驻/残留后再次启动会与旧实例并发，渲染进程争用资源造成「再启动十几秒卡顿」 | Bug-033 |
-| CD-22 | 必须 | 第三方编辑器（vditor 等）资源优先用 **npm 运行时依赖 + `cdn` 直接指向 `node_modules/<pkg>`**（npm 包自带官方 `dist/` 结构、electron-builder 随分发），**禁止在仓库内手动 vendor 复制大体积 `dist`**：手工复制必然伴随「把仓库文件搬进 dist」这类迁移，git 会把它识别为删除旧路径 + 新增全新文件，历史无法 `--follow` 追溯、又造成新旧布局双重占库；静态 vendor 副本与 npm 包重复冗余易脱节。资源必须本地化，不得依赖 unpkg 等外网 CDN | Bug-031 |
-| CD-23 | 必须 | 注入 `<head>` 的自定义主题/覆盖 CSS，选择器特异度必须 ≥ 第三方编辑器（vditor 等）自带规则（如加 `html body` 前缀），或每次应用把注入 `<style>` 重挂到 `<head>` 末尾——否则会被引擎运行时**动态后加载**的同特异度样式覆盖，覆盖失效（编辑器落回默认纯白、主题不统一） | Bug-034 |
-| CD-24 | 必须 | 引入 Tailwind 等 preflight（全局重置样式）时，凡它重置掉的排版默认值（`ol/ul` 的 `list-style` 等），第三方编辑器（vditor 等）自带 CSS 未恢复的必须按容器作用域显式恢复（如 `#ed-vditor .vditor-reset ol{list-style-type:decimal}`），并补回归断言；对待办列表类渲染以 Lute 序列化往返 + 各编辑模式实机作门禁，防退化为普通 `[ ]` 文本 | Bug-035 / Bug-036 / Bug-037 |
-| CD-25 | 必须 | 自定义第三方编辑器（vditor 等）键盘行为（Backspace/Delete/Enter 等）时，用捕获阶段监听（`document.addEventListener('keydown', h, true)`）并在命中场景 `preventDefault`+`stopImmediatePropagation`，不与引擎自身 keydown/undo 冲突；对 ZWSP 空段落（`<p data-block="0">ZWSP<wbr></p>`）的删除须按「整行」语义处理（删段落并定位光标到相邻块），而非仅删文本节点 | Bug-038 |
-| CD-26 | 必须 | 使用 Tailwind v4 browser 版的方向性边界类 `border-b/t/l/r` 时，须确保 `--tw-border-style` 有全局默认值（如 `:root{--tw-border-style:solid}`）或同时上 `border-solid` 类，否则 `border-*-style` 解成 `var()` 未定义→回退 none 不显示边框 | Bug-039 |
-| CD-28 | 必须 | 首屏恢复持久化外观/主题须双层处理避免明暗闪烁：①HTML 层在 `<head>` 的 CSS 引用之前放首帧同步脚本，按 `localStorage` 预置 `<html>` class（light/dark，`auto` 用 `matchMedia`），且 `<html>` 不得硬编码与用户设置冲突的主题属性；②主进程 `BrowserWindow` 设了 `backgroundColor` 时，必须 `show:false` + 监听 `ready-to-show` 后再 `show()` 并留超时兜底（防渲染异常白窗），否则窗口背景会抢在页面浅色首帧前露出深色 | Bug-041 |
-| CD-29 | 必须 | 首屏「渲染前恢复主题」须覆盖所有主题维度（宿主明暗 + 插件配色），前置到 head 且挂在同一元素 `<html>`；任何配色的变量取值应落在宿主同步资源（如 `js/theme-palettes.js` 的 `window.SB_PALETTES`）并在 head 同步引用，不得依赖插件异步注入的样式（styles.css 常晚于插件 js 执行），否则「清 head 前置变量→样式未就绪→闪宿主默认色」再闪回 | Bug-043 |
-| CD-30 | 必须 | 依赖「异步加载的插件」才生效的解析结果（如 vditor 的 `extraCss`/主题），应用方须在「插件注册解析器后」主动补一次 sync（注册即同步，如 `registerEditorThemeResolver` 末尾调 `window.vdSyncTheme`），不能只依赖再次进入/点击重建触发；否则竞态下已构建的编辑器保持错误观感（如表格白色） | Bug-044 |
-| CD-31 | 必须 | 主题/外观类遵循「一次设置数据、一次渲染」：设置仅写入 `localStorage`，渲染统一由入口（`index.html` head 首帧读数据执行一次）负责；插件侧不得在**启动阶段**再次 `applyTheme` 二次设置，仅在用户主动切换时渲染一次；新增主题维度须只有一条「读数据→渲染」路径 | Bug-045 |
-| CD-32 | 必须 | 主题/配色方案映射到渲染面（如编辑器/vditor）时，不得另设与配色无关的「深浅」档位、也不得硬编码第三方固定色（如 `#202329`）；宿主明暗只影响应用外壳，不应让配色内容回退到固定深色 | Bug-046 |
-| CD-33 | 必须 | 「深色/浅色/跟随系统」等外观模式只是编辑器深浅的**打底**（套渲染库原生深/浅主题）；**编辑器的具体颜色必须做主题配色数值映射**——内容层（`.vditor-reset` 文字、表格、引用、代码等）一律取当前生效的主题 CSS 变量（`--note-*`），不得依赖渲染库自带的浅色默认文字（如 vditor `.vditor-reset{color:#24292e}`，深色下不可读），也不得回落固定色值 | Bug-046 |
-| CD-34 | 必须 | Ribbon/导航内置按钮的 id 必须与视图路由 key 保持一致（如「编辑器」用 `editor`、`init` 默认值与启动调用同步），不要另起别名（如 `file`）；「激活高亮」以路由 key 直接匹配 `data-ribbon-btn`，另起别名会让切回该视图时高亮失效 | Bug-047 |
-| CD-35 | 必须 | 判断右键/事件是否落在第三方编辑器（vditor 等）内容区内时，容器元素必须取自实例**真实暴露**的引用（如 `vdInst.vditor.element`）或视图锚点元素，绝不能臆想一个不存在的属性（如 `vdInst.element`）做 `contains` 判定——不存在的引用恒为 `undefined`，`contains` 判定恒假，事件入口静默失效 | Bug-048 |
-| CD-36 | 禁止 | 判断 vditor IR 编辑区内是否「代码块」时，不得用 `closest('pre')` 判定——IR 把整个编辑区包在一个 `<pre class="vditor-reset">` 里，普通文字也命中 `pre`；必须以代码块节点自带的 `data-type`（如 `closest('[data-type="code-block"]')`）区分，否则普通文字右键会被误判为代码块而短路通用逻辑（如通用右键菜单永不弹出） | Bug-049 |
-| CD-37 | 必须 | 多次构建第三方编辑器（vditor 等）实例、且其渲染完成回调**异步乱序触发**、回调要消费「模块级共享暂存状态」（如 `vdPending`/`vdReady`）控制首个/当前实例内容补渲时，必须用「构建序号」锁定回调只对**最新一次构建**生效（`if (seq !== vdBuildSeq) return;`）；否则旧实例回调抢先消费共享状态、把内容塞到已销毁实例，当前实际显示的实例补渲落空→空白 | Bug-050 |
-| CD-39 | 必须 | 第三方编辑器（vditor 等）实例**重建/初始化期间**（首帧异步渲染完成前，如 `vdReady=false`），失焦（blur）等事件回调**不得触发内容保存**——此时实例内部未就绪取不到真实值，且「暂存缓冲」若在构建期被清空，blur 会把空内容经自动保存链路覆盖磁盘（笔记被静默清空）；「暂存缓冲」在异步就绪窗口期必须保留最近一次同步内容作兜底，不得清空 | Bug-052 |
-| CD-40 | 必须 | BrowserWindow **销毁后**（`closed` 回调等）其 `webContents` 不可访问（访问抛「Object has been destroyed」）；任何事件回调/异步闭包要使用窗口属性前，须在**创建时缓存稳定标识**（如 `const wcId = win.webContents.id`）或先 `isDestroyed()` 校验，禁止在回调里直接访问 `win.webContents.*` | Bug-053 |
-| CD-41 | 必须 | 多窗口（窗口级生命周期）语义下，「关闭按钮(×)」必须**只作用于当前窗口**（`win.close()`），不得被全局「退出应用 / 缩小到托盘」的 closeAction 设置劫持；全局 closeAction 仅在**单窗口**场景生效——判断退出行为要以「存活窗口数」为准，而不是先看 closeAction | Bug-054 |
-| CD-42 | 必须 | 任何**外部改写知识库磁盘文件**的操作（Git 回滚 / 还原 / checkout 等）完成后，必须**主动失效编辑器缓存并重载**该笔记到磁盘最近内容（宿主提供 `editor.reloadNote`），不得让旧缓存继续充当权威；同时编辑器自动保存只允许在「内容相对已缓存且非脏」发生变化（即真实手动修改）时才写盘，禁止失焦 / 程序回灌 / 首帧渲染前把旧空内容覆盖回磁盘 | Bug-055、Bug-052 |
-| CD-44 | 必须 | 默认库（「我的笔记库」）的「身份标识」须用同一索引用法判定：凡按库去重/归一（托盘菜单、历史库、窗口绑定等）之处，默认库要么用 `null` 键、要么用与实际默认库路径统一比较（`vaultKey(p) === defaultVaultRoot().toLowerCase()`）后归一为同一键；禁止出现 null 形式与路径形式键不同，导致同一默认库被重复列出/重复处理 | Bug-057 |
-| CD-45 | 必须 | 读取事件目标 `className` 前必须先判型：HTML 元素是字符串、而 **SVG 元素 `className` 是 `SVGAnimatedString` 对象（无 `.slice`/`.split`/`.match` 等字符串方法）**；凡对 `e.target.className`（或任意可能为 SVG 的元素）做字符串操作，须用 `typeof === 'string'` 守卫或改用 `getAttribute('class')`，禁止直接调字符串方法致「is not a function」 | Bug-058 |
-| CD-46 | 必须 | 任何「按实体归一后以 `null` 代表默认态」的去重/归一逻辑（默认库 `binding=null` 等），其**去重检查不得只写在 `if (binding)` / `if (p)` 等仅覆盖「有值分支」的守卫内**——那样默认态会整个跳过检查，导致默认实体每次都新建资源（多窗口）而非复用；应先算出默认态对应的非空查找键（如 `vaultKey(binding || defaultVaultRoot())`），与登记表口径一致后**无条件**执行查重覆盖全部态 | Bug-059 |
-| CD-47 | 必须 | 渲染结果若依赖「输入框/配置值」的解析（如「已使用」需 `cfgPathValue` 展开 `{modelDir}` 与本地 `localPath` 比较），而回填该值（`fillLocal`）与实际渲染（`renderAllLib`）分属**不同的并行异步链**（如 `getConfig` 回填 vs `getModelLib` 扫描）时，必须在**配置回填完成后主动重绘一次**，不得只依赖异步结果链自身触发——否则竞态下由配置驱动显示的状态（如「已使用」）会丢失且不再刷新 | Bug-060 |
-| CD-48 | 必须 | 凡写入/更新 vault 文件的路径，其**进入向量索引的入口（增量 `updateNote`、全量扫描）必须使用同一套隐藏路径判定**（任一路径段以 `.` 开头即隐藏路径，覆盖 `.gitignore`/`.obsidian`/`.second-brain` 等）；且对历史已误入的脏 chunk 要在**索引加载（`_loadIndexFrom`）与检索（`retrieve`）时兜底过滤**，防止过滤文件/配置类文件污染检索来源 | Bug-061 |
-| CD-49 | 必须 | ① 面向同一仓库目录的 git 写命令（status/add/commit/push/checkout/reset 等）必须经**按 cwd 的串行队列**执行并防重入，观测到 `.lock ... File exists / cannot lock ref` 时先清除 `.git` 下残留 `*.lock` 再重试一次，不得直接失败；② 纯探测类 git 命令（`remote get-url`、分支名等）失败属预期状态，**不得**记入错误日志（调用侧对探测命令传 `logFailure:false`）。**补充**：清理残留锁的正则必须匹配真实文件名样例（`master.lock`/`HEAD.lock` 单点 `.lock` 结构，用 `/\.lock$/`，勿用「点段.lock」式正则） | Bug-062·063 |
-| CD-50 | 必须 | 插件/UI 声明的 **lucide 图标名必须存在于实际打包的 lucide 包内**：改动图标后以包 `icons`（`kebab-case` → PascalCase 键）核对命中，勿凭「看着像」取名；渲染端对缺失图标默认抛 `createIcons` 告警（NDEBUG 下仍进控制台/error 日志） | Bug-063 |
-| CD-51 | 必须 | 插件内容若经 `new Function(...)` 沙箱作用域执行，其顶层 `function` 声明**不会成为 `window` 全局**：宿主要调用插件能力（如 vditor 工具栏 bridge）时，插件必须**显式 `window.xxx = f` 导出**，宿主一律经 `typeof window.xxx === 'function'` 守卫后调用，禁止假定顶层函数全局可见 | Bug-064 |
-| CD-52 | 必须 | vditor 预览/阅读代码块行号 = **配置开启 + 样式补齐**双要素：`preview.hljs.lineNumber:true` 启用生成 `.hljs-ln` table 行号结构，且必须自定义 `.hljs-ln*` CSS（vditor 自带 `dist/index.css` 不含行号样式）以两列显示行号——二者缺一即行号不显示 | Bug-064 |
-| CD-53 | 必须 | 凡 IPC（及同类异步）**读文件**的边界必须先做**目录判定**（`lstat()` 后 `isDirectory()`），用清晰错误取代 Node 裸 `EISDIR`；且渲染端 `await` 可能失败的读（IPC/引擎）必须 `try/catch`，失败时回滚到安全状态（如撤销刚压入的页签再返回）再退出，禁止让拒绝上抛成「未处理 Promise 异常」或留打不开的幽灵条目 | Bug-065 |
-| CD-54 | 必须 | 凡「根据链接/文件名查找目标文件」的原理能力（`md-linknav.js` 链接导航等）在多窗口复用（知识库 + 普通项目共用同一渲染/插件）场景下，其**候选文件清单来源必须先判窗口模式**：项目模式从项目文件树 `window.sbProject.list()`（相对项目根的 rel 路径），知识库从 `PluginAPI.editor.listNotes()`（`noteStore.list`），禁止只喂知识库笔记列表——否则项目文件永远匹配不到，链接点击表现为「只 preventDefault 不开」。复用「相对路径=当前笔记路径」契约 + openNote 内容装载分支（已识别项目模式），不要为项目另起一套读打开 | Bug-070 |
-| CD-55 | 必须 | 标题栏/库选择器等「当前实体（当前知识库/当前项目）」的**显示数据必须按窗口模式分流**：项目模式取 `project.current()`（项目根目录名、标签「当前项目」），知识库模式取 `getVault()`（当前知识库）；凡有「多窗口共用同一块 UI」的场景，禁止无条件读单一来源（如项目窗口读知识库 `getVault()`）落到兜底名。另：append 为父容器子节点的**悬浮子菜单**（fixed 定位到父容器外、与触发 head 有跨空隙）收起时机**不得只依赖父容器整体 mouseleave**——对这类子菜单须「离开触发处延迟收起 + 子菜单自身 mouseenter 取消」的 bridge，实现 head↔子菜单连续悬停、移往其它项/容器外才收起（延续 CD-05 子菜单空隙思路） | Bug-071 |
+> 完整清单落盘 **`doc/bugs/防再犯清单.md`**（CD-编号约束，依赖本项目技术架构，属本项目数据，不入 `.hermes/`）。向其他项目搬运 `.hermes/` 时无需携带该清单；本机制只保证「修复 bug 把根因提炼成通用约束」的方式一致。
 
 ## 维护要求
 

@@ -1220,8 +1220,20 @@
     }
   }
 
-  /** 确保实例存在并返回（懒创建）；vditor 不可用时返回 null */
+  /** 确保实例存在并返回（懒创建）；vditor 不可用时返回 null。
+   * 冷启动（开机后首次）时编辑器装载与视图重建/插件重挂并发，#ed-vditor 容器可能被替换，
+   * 旧实例仍指向已摘除节点：对它的 setValue 只写进脱离 DOM 的节点，界面恒空白且切换文件也无法
+   * 恢复（Bug-069，仅新窗/重启重建才恢复）。故检测到实例根节点已脱离文档即销毁重建到当前容器，
+   * 保证内容始终进入可视实例。作者: 火 冰 */
   function ensureVd() {
+    const root = vdInst && vdInst.vditor && vdInst.vditor.element;
+    if (vdInst && root && root.isConnected === false) {
+      if (window.SBLog) window.SBLog.warn('[vditor] 实例容器已脱离文档，自愈重建');
+      else console.warn('[vditor] 实例容器已脱离文档，自愈重建');
+      try { vdInst.destroy(); } catch (_) { /* 忽略销毁异常 */ }
+      vdInst = null;
+      vdReady = false;
+    }
     if (!vdInst) buildVditor();
     return vdInst;
   }
@@ -1240,7 +1252,10 @@
    * @param {string} md markdown 源文本 */
   window.vdSyncValue = function (md) {
     vdBuffer = String(md == null ? '' : md);
-    if (!vdInst) { buildVditor(); return; }
+    // 经 ensureVd 懒创建；若旧实例根节点已脱离文档（冷启动视图重建后容器被替换）则销毁重建，
+    // 避免 setValue 写进已摘除节点、界面恒空白（Bug-069）。
+    ensureVd();
+    if (!vdInst) return;
     // 实例尚未完成异步渲染（vditor 的 mode 首帧渲染是异步的，见 options.after）：
     // 立即 setValue 会因首发渲染后重置而被丢弃，导致启动/快速切换时编辑区空白。
     // 故未就绪时先暂存，待 after 回调再补渲染进去。

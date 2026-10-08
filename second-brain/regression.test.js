@@ -306,6 +306,21 @@ function testVditorBridge() {
   assert(newInst._val === 'Bug-050 content',
     'Bug-050: 最新实例 after 消费 vdPending 补渲内容，编辑区非空白（旧抢占不得清空 pending）');
   assert(W.vdGetValue() === 'Bug-050 content', 'Bug-050: 补渲后 getValue 返回最新内容');
+
+  // Bug-069 回归：冷启动视图重建后 #ed-vditor 容器可能被替换，旧实例根节点脱离文档（isConnected=false），
+  // 其 setValue 只写进已摘除节点 → 界面恒空白且切换文件无法恢复（仅新窗/重启重建才正常）。
+  // ensureVd 检测到实例容器脱离文档应立即销毁重建到当前容器，不得保留失效实例。
+  const detachInst = calls.instancesOld[calls.instancesOld.length - 1];
+  detachInst.vditor.element = D.createElement('div');                // 未挂入文档 → isConnected=false
+  detachInst._val = '';                                               // 摘除节点上内容为空（界面白）
+  const beforeDetach = calls.instancesOld.length;
+  W.vdSyncValue('Bug-069 content');                                   // 应检测脱离文档 → 销毁旧实例并重建
+  const afterDetach = calls.instancesOld[calls.instancesOld.length - 1];
+  assert(calls.instancesOld.length === beforeDetach + 1,
+    'Bug-069: 实例容器脱离文档时 vdSyncValue 触发自愈重建（失效实例不保留、不写摘除节点）');
+  afterDetach._val = 'Bug-069 content';                               // 模拟新实例内容（未做异步断言，仅验证重建路径可达）
+  assert(JSON.stringify(calls.initModes.slice(-1)) === JSON.stringify(['wysiwyg']),
+    'Bug-069: 自愈重建沿用当前编辑节点 mode（不因重建回退或抱失效状态）');
 }
 
 /* ---- Bug-052: 首帧渲染完成前 blur 不得触发保存（防空内容清空笔记）----
