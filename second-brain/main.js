@@ -254,6 +254,20 @@ function createWindow(vaultPath, opts) {
     if (ex && !ex.isDestroyed()) { showWindow(ex); return null; }
     vaultWinId.delete(existId);
   }
+  // 窗口标题优先取用户自定义别名（customName），否则用目录末级名；便于任务栏区分多窗口
+  let winTitle = '我的笔记库'; // 默认库
+  if (projectPath) {
+    // 项目窗口：优先从 recentProjects 找别名
+    const projEntry = recentProjects.find(function (r) { return r && r.path === projectPath; });
+    const projName = (projEntry && projEntry.customName) || path.basename(projectPath);
+    winTitle = '项目：' + projName;
+  } else if (binding) {
+    // 知识库窗口：优先从 vaultHistory 找别名
+    const key = binding.toLowerCase();
+    const hEntry = vaultHistory.find(function (h) { return String(h.path).toLowerCase() === key; });
+    const hName = (hEntry && hEntry.customName) || path.basename(binding);
+    winTitle = hName;
+  }
   const cascade = computeCascadePos(1280, 820); // 多窗口级联偏移：避免新窗口完整遮挡旧窗口
   const win = new BrowserWindow({
     width: 1280,
@@ -261,7 +275,7 @@ function createWindow(vaultPath, opts) {
     ...(cascade ? { x: cascade.x, y: cascade.y } : {}), // 有锚点窗口时向右下错位显示，否则系统居中
     minWidth: 900,
     minHeight: 600,
-    title: '第二脑 · ' + (projectPath ? ('项目：' + path.basename(projectPath)) : (binding ? path.basename(binding) : '我的笔记库')), // 项目/库名用于标题、任务栏区分
+    title: '第二脑 · ' + winTitle, // 项目/库名用于标题、任务栏区分
     backgroundColor: '#1E1E2E',
     show: false,             // 待首帧渲染完成后才显示窗口，避免先露出深色窗口背景（Bug-041 消除首屏闪烁）
     frame: false,            // 移除系统标题栏，由前端自绘 Windows 风格标题栏
@@ -526,19 +540,33 @@ function createTray() {
 
 /** 刷新托盘右键菜单：列出全部知识库（默认库 + 当前各窗口打开的库 + 历史库，去重）与
  * 「一般项目」（winProjects 中打开的非知识库工作区）。
+ * 显示名优先取用户自定义别名（customName），否则用目录末级名。
  * 点击库/项目在对应窗口打开（已存在则该类窗口聚焦旧窗口）；尾部为「显示主窗口/退出」。
- * 在启动、窗口创建/关闭、库切换/迁移/移除时调用，保证列表实时与当前一致。
+ * 在启动、窗口创建/关闭、库切换/迁移/移除/改名时调用，保证列表实时与当前一致。
  * 作者: 火 冰 */
 function refreshTrayMenu() {
   if (!tray) return;
   const items = [];
   const seen = new Set();
+  // 查找知识库别名：从 vaultHistory 中找 customName
+  const vaultAlias = function (p) {
+    if (!p) return '';
+    const key = p.toLowerCase();
+    const h = vaultHistory.find(function (x) { return String(x.path).toLowerCase() === key; });
+    return (h && h.customName) ? h.customName : '';
+  };
+  // 查找项目别名：从 recentProjects 中找 customName
+  const projAlias = function (p) {
+    const x = recentProjects.find(function (r) { return r && r.path === p; });
+    return (x && x.customName) ? x.customName : '';
+  };
   const pushVault = function (p, name) {
     const k = (p == null || vaultKey(p) === defaultVaultRoot().toLowerCase()) ? '__default__' : vaultKey(p);
     if (seen.has(k)) return;
     seen.add(k);
+    const finalName = name || vaultAlias(p) || (p ? path.basename(p) : '我的笔记库');
     items.push({
-      label: name || (p ? path.basename(p) : '我的笔记库'),
+      label: finalName,
       click: function () { openVaultWindow(p); },
     });
   };
@@ -546,33 +574,53 @@ function refreshTrayMenu() {
   pushVault(null, '我的笔记库');
   // 2) 当前各窗口打开的库（winVaults 中去重）
   for (const [, vp] of winVaults) {
-    if (vp) pushVault(vp, path.basename(vp));
+    if (vp) pushVault(vp, vaultAlias(vp) || path.basename(vp));
   }
   // 3) 历史库（最近打开，目录仍存在才列出）
   (vaultHistory || []).forEach(function (h) {
-    if (h && typeof h.path === 'string' && fs.existsSync(h.path)) pushVault(h.path, h.name || path.basename(h.path));
+    if (h && typeof h.path === 'string' && fs.existsSync(h.path)) {
+      pushVault(h.path, h.customName || h.name || path.basename(h.path));
+    }
   });
-  // 4) 一般项目（非知识库工作区）：二级子菜单展开，点击聚焦/新开项目窗口
-  const projWins = [];
+  // 4) 一般项目（非知识库工作区）：二级子菜单展开，点击聚焦已有窗口或新开项目窗口
+  // 源为 recentProjects 全量（不是只打开中的窗口），去重、目录存在才列出；
+  // 已打开的项目窗口点击时聚焦，未打开的调 openProjectPath 新开/聚焦。作者: 火 冰
+  const projSeen = new Set();
+  const projMenuItems = [];
+  // 先收集打开中的项目 winId 映射，便于点击时聚焦已有窗口
+  const openProjMap = new Map(); // path → winId
   for (const [winId, pp] of winProjects) {
-    const w = BrowserWindow.fromId(winId);
-    if (pp && w && !w.isDestroyed()) projWins.push({ winId: winId, pp: pp });
+    if (pp) openProjMap.set(pp, winId);
   }
-  if (projWins.length) {
-    if (items.length) items.push({ type: 'separator' });
-    items.push({
-      label: '一般项目',
-      submenu: projWins.map(function (pw) {
-        return {
-          label: path.basename(pw.pp) || pw.pp,
-          click: function () { const w = BrowserWindow.fromId(pw.winId); if (w && !w.isDestroyed()) showWindow(w); },
-        };
-      }),
+  recentProjects.forEach(function (rp) {
+    if (!rp || !rp.path || projSeen.has(rp.path)) return;
+    if (!fs.existsSync(rp.path)) return; // 目录不存在不列出
+    projSeen.add(rp.path);
+    const label = (rp.customName || rp.name || path.basename(rp.path) || rp.path);
+    const winId = openProjMap.get(rp.path);
+    const projPath = rp.path; // 闭包捕获
+    projMenuItems.push({
+      label: label,
+      click: function () {
+        // 已打开则聚焦；否则新建项目窗口（复用 project:openPath 的内部逻辑）
+        if (winId != null) {
+          const w = BrowserWindow.fromId(winId);
+          if (w && !w.isDestroyed()) { showWindow(w); return; }
+        }
+        const abs = path.resolve(projPath);
+        recordRecentProject(abs);
+        let w = createWindow(null, { project: abs });
+        if (w && !w.isDestroyed()) { if (w.isMinimized()) w.restore(); w.focus(); }
+        recordLastEntity('project', abs);
+      },
     });
+  });
+  if (projMenuItems.length) {
+    if (items.length) items.push({ type: 'separator' });
+    items.push({ label: '一般项目', submenu: projMenuItems });
   }
+  // 末尾：退出（去掉独立「显示主窗口」项——托盘左键双击/单击已处理聚焦主窗口，右键菜单不需重复）
   if (items.length) items.push({ type: 'separator' });
-  items.push({ label: '显示主窗口', click: showMainWindow });
-  items.push({ type: 'separator' });
   items.push({ label: '退出', click: function () { app.quit(); } });
   tray.setContextMenu(Menu.buildFromTemplate(items));
 }
@@ -838,14 +886,20 @@ function saveConfig() {
   } catch (e) { /* 写入失败不阻塞 */ }
 }
 
-/* 记录一次打开的库：按绝对路径去重（Windows 忽略大小写）、置顶、上限 12 条；返回规范化对象 */
+/* 记录一次打开的库：按绝对路径去重（Windows 忽略大小写）、置顶、上限 12 条；返回规范化对象。
+ * 若该路径已有自定义别名（h.customName），记录时保留不覆盖；否则用目录末级名。作者: 火 冰 */
 function recordHistory(dir) {
   if (!dir) return null;
   const clean = path.resolve(dir);
   const key = clean.toLowerCase(); // Windows 路径大小写不敏感，用统一小写做去重键
   const isDefault = key === defaultVaultRoot().toLowerCase(); // 默认库显示名「我的笔记库」
+  // 检查已有的自定义别名
+  const existing = vaultHistory.find(function (h) { return String(h.path).toLowerCase() === key; });
+  const customName = existing && existing.customName ? existing.customName : null;
   vaultHistory = vaultHistory.filter(function (h) { return String(h.path).toLowerCase() !== key; });
-  vaultHistory.unshift({ path: clean, name: isDefault ? '我的笔记库' : path.basename(clean), ts: Date.now() });
+  const record = { path: clean, name: customName || (isDefault ? '我的笔记库' : path.basename(clean)), ts: Date.now() };
+  if (customName) record.customName = customName;
+  vaultHistory.unshift(record);
   if (vaultHistory.length > 12) vaultHistory.length = 12;
   return vaultHistory[0];
 }
@@ -1885,12 +1939,30 @@ vaultHandle('notes:removeDir', async (_e, dir) => {
 
 /* ---------- 笔记库选择 IPC（标题栏库选择器） ---------- */
 
-/* 获取当前笔记库信息：绝对路径 + 显示名（默认库显示「我的笔记库」）+ 默认库路径（按发起窗口解析） */
+/* 获取当前笔记库信息：绝对路径 + 显示名（优先取用户自定义别名，否则目录末级名；默认库显示「我的笔记库」）
+ * 新增 kind 字段：'vault'（知识库窗口）或 'project'（项目工作区窗口）；项目窗口返回项目路径 + 项目名。 */
 vaultHandle('vault:get', async (event) => {
+  const win = winFromEvent(event);
+  const wcId = win ? win.webContents.id : null;
+  // 优先检测是否为项目工作区窗口
+  if (wcId != null && winProjects.has(wcId)) {
+    const projPath = winProjects.get(wcId);
+    // 从 recentProjects 中找自定义别名
+    const pEntry = recentProjects.find(function (x) { return x && x.path === projPath; });
+    const pName = (pEntry && pEntry.customName) || path.basename(projPath) || projPath;
+    return { path: projPath, name: pName, kind: 'project', defaultPath: defaultVaultRoot(), history: vaultHistory.slice() };
+  }
+  // 知识库窗口
   const p = vaultRoot();
   scheduleMetaRefresh(); // 打开知识库时后台构建全库（当前目录及全部子目录）的属性数据
   const binding = windowVaultBinding(event);
-  return { path: p, name: binding ? path.basename(p) : '我的笔记库', defaultPath: defaultVaultRoot(), history: vaultHistory.slice() };
+  // 优先从 vaultHistory 中查找自定义别名
+  const key = String(binding || p).toLowerCase();
+  const histEntry = vaultHistory.find(function (h) { return String(h.path).toLowerCase() === key; });
+  const customName = histEntry && histEntry.customName;
+  const defaultIsDefault = binding == null;
+  const name = customName || (defaultIsDefault ? '我的笔记库' : path.basename(binding || p));
+  return { path: p, name: name, kind: 'vault', defaultPath: defaultVaultRoot(), history: vaultHistory.slice() };
 });
 
 /* 打开目录选择器：选中即在**新主窗口**打开该知识库（当前窗口不变）。
@@ -1906,6 +1978,7 @@ vaultHandle('vault:choose', async (event) => {
   recordHistory(vaultRoot()); // 把当前窗口的库记入最近打开
   recordHistory(target);
   currentVault = target; // 持久化：下次启动主窗口打开该库
+  recordLastEntity('vault', target);
   saveConfig();
   openVaultWindow(target); // 新开窗口 / 聚焦已有窗口
   refreshTrayMenu(); // 库列表变化后刷新托盘菜单
@@ -1921,6 +1994,7 @@ vaultHandle('vault:switch', async (event, dir) => {
   recordHistory(vaultRoot()); // 把当前窗口的库记入最近打开
   recordHistory(target);
   currentVault = target; // 持久化：下次启动主窗口打开该库
+  recordLastEntity('vault', target);
   saveConfig();
   openVaultWindow(target); // 新开窗口 / 聚焦已有窗口
   refreshTrayMenu(); // 库列表变化后刷新托盘菜单
@@ -1951,10 +2025,41 @@ vaultHandle('vault:remove', async (event, dir) => {
 vaultHandle('vault:reset', async () => {
   recordHistory(vaultRoot()); // 把当前窗口的库记入最近打开
   currentVault = null; // 持久化：下次启动主窗口打开默认库
+  recordLastEntity('vault', null);
   saveConfig();
   openVaultWindow(defaultVaultRoot()); // 新开窗口 / 聚焦已有默认库窗口
   refreshTrayMenu(); // 库列表变化后刷新托盘菜单
   return { canceled: false, opened: true };
+});
+
+/* 设置知识库自定义别名（vault:setAlias）：更新 vaultHistory 中指定路径的 customName 字段。
+ * alias 为空串则清除自定义别名（恢复默认目录末级名）；持久化后刷新托盘菜单。返回 {ok, path, name}。
+ * 作者: 火 冰 */
+vaultHandle('vault:setAlias', async (event, dir, alias) => {
+  if (!dir || typeof dir !== 'string') return { ok: false, error: '无效路径' };
+  const clean = path.resolve(dir);
+  const key = clean.toLowerCase();
+  const aliasStr = (typeof alias === 'string' && alias.trim()) ? alias.trim() : '';
+  const isDefault = key === defaultVaultRoot().toLowerCase();
+  vaultHistory.forEach(function (h) {
+    if (String(h.path).toLowerCase() === key) {
+      if (aliasStr) { h.customName = aliasStr; h.name = aliasStr; }
+      else { delete h.customName; h.name = isDefault ? '我的笔记库' : path.basename(clean); }
+    }
+  });
+  saveConfig();
+  refreshTrayMenu();
+  // 更新窗口标题（若该库有打开的窗口）
+  for (const [winId, vp] of winVaults) {
+    const w = BrowserWindow.fromId(winId);
+    if (!w || w.isDestroyed()) continue;
+    const wKey = (vp || defaultVaultRoot()) && String(vp || defaultVaultRoot()).toLowerCase();
+    if (wKey === key) {
+      const disp = aliasStr || (isDefault ? '我的笔记库' : path.basename(clean));
+      try { w.setTitle('第二脑 · ' + disp); } catch (_) { /* 忽略 */ }
+    }
+  }
+  return { ok: true, path: clean, name: aliasStr || (isDefault ? '我的笔记库' : path.basename(clean)) };
 });
 
 /* ============================================
@@ -2160,6 +2265,7 @@ vaultHandle('vault:cloneGit', async (event, url) => {
   if (cl.exit !== 0) return { canceled: false, error: '克隆失败：' + cl.stderr.trim() };
   recordHistory(target);
   currentVault = target; // 持久化：下次启动主窗口打开该库
+  recordLastEntity('vault', target);
   saveConfig();
   openVaultWindow(target);
   return { canceled: false, path: target, name: name };
@@ -2192,12 +2298,33 @@ let recentProjects = loadRecentProjects();
 function persistRecentProjects() {
   try { fs.writeFileSync(recentProjectsFile(), JSON.stringify(recentProjects, null, 2), 'utf8'); } catch (_) { /* 忽略写失败 */ }
 }
-/* 登记一个项目到「最近打开」（去重置顶，保留无上限；供库下拉列出全部已打开项目） */
+/* 登记一个项目到「最近打开」（去重置顶，保留无上限；供库下拉列出全部已打开项目）。
+ * 若该路径已有自定义别名（customName），保留不覆盖；否则用目录末级名。作者: 火 冰 */
 function recordRecentProject(p) {
+  const existing = recentProjects.find(function (x) { return x && x.path === p; });
+  const customName = existing && existing.customName ? existing.customName : null;
   recentProjects = recentProjects.filter(function (x) { return x.path !== p; });
-  recentProjects.unshift({ path: p, name: path.basename(p) || p });
+  const record = { path: p, name: customName || (path.basename(p) || p) };
+  if (customName) record.customName = customName;
+  recentProjects.unshift(record);
   persistRecentProjects();
 }
+
+/* 记录「最后打开的项目实体」（知识库或普通项目），供下次启动自动打开最近的。
+ * lastEntity = { kind:'project'|'vault', path }（path=null 表示默认库）。
+ * project → 下次启动打开项目窗口；vault → 下次启动打开对应知识库窗口。作者: 火 冰 */
+function lastEntityFile() { return path.join(app.getPath('userData'), 'last-entity.json'); }
+function loadLastEntity() {
+  try {
+    const j = JSON.parse(fs.readFileSync(lastEntityFile(), 'utf8'));
+    if (j && (j.kind === 'project' || j.kind === 'vault') && typeof j.path === 'string') return j;
+  } catch (_) { /* 文件缺失/损坏返回 null（启动打开默认库） */ }
+  return null;
+}
+function persistLastEntity(e) {
+  try { fs.writeFileSync(lastEntityFile(), JSON.stringify(e, null, 2), 'utf8'); } catch (_) { /* 忽略写失败 */ }
+}
+function recordLastEntity(kind, p) { persistLastEntity({ kind: kind, path: p ? path.resolve(p) : null }); }
 
 /* 递归收集项目目录文件树（跳过 .git 与常见元数据目录、二进制文件标 isBinary）
  * @returns {Array<{rel,name,folder,size,mtime,isBinary}>} */
@@ -2261,6 +2388,7 @@ vaultHandle('project:open', async (event) => {
   if (picked.canceled || !picked.filePaths[0]) return { canceled: true };
   const p = path.resolve(picked.filePaths[0]);
   recordRecentProject(p);
+  recordLastEntity('project', p); // 下次启动自动打开最近的项目窗口
   refreshTrayMenu(); // 项目登记后刷新托盘「一般项目」列表
   const w = createWindow(null, { project: p });
   return { canceled: false, path: p, name: path.basename(p) || p, windowOpened: !!w };
@@ -2285,6 +2413,7 @@ vaultHandle('project:openPath', async (event, p) => {
   }
   if (!w) w = createWindow(null, { project: abs });
   if (w && !w.isDestroyed()) { if (w.isMinimized()) w.restore(); w.focus(); }
+  recordLastEntity('project', abs); // 下次启动自动打开最近的项目窗口
   return { ok: !!w, path: abs, name: path.basename(abs) || abs, windowOpened: !!w };
 });
 
@@ -2292,6 +2421,44 @@ vaultHandle('project:openPath', async (event, p) => {
 vaultHandle('project:current', async (event) => {
   const win = winFromEvent(event);
   return win ? (winProjects.get(win.webContents.id) ?? null) : null;
+});
+
+/* 从「最近打开」项目列表移除指定路径（不改任何打开的项目窗口）。
+ * 若该项目窗口正在打开，仅从历史列表移除；窗口仍可正常使用。作者: 火 冰 */
+vaultHandle('project:remove', async (event, p) => {
+  if (typeof p !== 'string' || !p.trim()) return { ok: false, error: '无效路径' };
+  const abs = path.resolve(p.trim());
+  recentProjects = recentProjects.filter(function (x) { return x.path !== abs; });
+  persistRecentProjects();
+  refreshTrayMenu();
+  return { ok: true, projects: recentProjects.slice() };
+});
+
+/* 设置项目自定义别名（project:setAlias）：更新 recentProjects 中指定路径的 customName 字段。
+ * alias 为空串则清除自定义别名（恢复默认目录末级名）；持久化后刷新托盘菜单。返回 {ok, path, name}。
+ * 作者: 火 冰 */
+vaultHandle('project:setAlias', async (event, p, alias) => {
+  if (typeof p !== 'string' || !p.trim()) return { ok: false, error: '无效路径' };
+  const abs = path.resolve(p.trim());
+  const aliasStr = (typeof alias === 'string' && alias.trim()) ? alias.trim() : '';
+  const defName = path.basename(abs) || abs;
+  recentProjects.forEach(function (x) {
+    if (x.path === abs) {
+      if (aliasStr) { x.customName = aliasStr; x.name = aliasStr; }
+      else { delete x.customName; x.name = defName; }
+    }
+  });
+  persistRecentProjects();
+  refreshTrayMenu();
+  // 更新窗口标题（若该项目有打开的窗口）
+  for (const [winId, pp] of winProjects) {
+    if (pp !== abs) continue;
+    const w = BrowserWindow.fromId(winId);
+    if (!w || w.isDestroyed()) continue;
+    const disp = aliasStr || defName;
+    try { w.setTitle('第二脑 · 项目：' + disp); } catch (_) { /* 忽略 */ }
+  }
+  return { ok: true, path: abs, name: aliasStr || defName };
 });
 
 /* 返回项目文件树（相对项目根） */
@@ -2356,8 +2523,11 @@ vaultHandle('project:reveal', async (event, rel) => {
   const root = winProjects.get(winFromEvent(event)?.webContents?.id) || null;
   if (!root) return false;
   const abs = resolveProjectRel(root, rel);
-  if (!abs) return false;
-  await shell.openPath(abs);
+  if (!abs || !fs.existsSync(abs)) return false;
+  // 目录：在资源管理器打开该目录（查看内容）；文件：在资源管理器定位显示（避免被默认应用打开）
+  const st = await fs.promises.stat(abs);
+  if (st.isDirectory()) await shell.openPath(abs);
+  else shell.showItemInFolder(abs);
   return true;
 });
 
@@ -3882,7 +4052,15 @@ app.whenReady().then(async () => {
   // 清除历史磁盘缓存，防止拆分/升级后残留旧 HTML/JS 脚本导致界面空白
   await session.defaultSession.clearCache();
   _slog('after_clearCache');
-  createWindow();
+  // 启动自动打开「最后打开的项目实体」（库或普通项目）：project → 项目窗口；vault → 对应库；无记录/路径失效 → 默认库
+  const lastEntity = loadLastEntity();
+  if (lastEntity && lastEntity.kind === 'project' && lastEntity.path && fs.existsSync(lastEntity.path)) {
+    createWindow(null, { project: path.resolve(lastEntity.path) });
+  } else if (lastEntity && lastEntity.kind === 'vault' && lastEntity.path && fs.existsSync(lastEntity.path)) {
+    createWindow(path.resolve(lastEntity.path));
+  } else {
+    createWindow();
+  }
   // Windows 首次「打开方式」启动：process.argv 在 exe 后可能带外部文件路径 → 按临时文件打开（渲染端 sbTempFiles.openTemp）
   const startFile = pickOpenWithArg(process.argv);
   if (startFile) openWithFile(startFile);

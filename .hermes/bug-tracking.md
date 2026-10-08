@@ -91,6 +91,8 @@
 | CD-51 | 必须 | 插件内容若经 `new Function(...)` 沙箱作用域执行，其顶层 `function` 声明**不会成为 `window` 全局**：宿主要调用插件能力（如 vditor 工具栏 bridge）时，插件必须**显式 `window.xxx = f` 导出**，宿主一律经 `typeof window.xxx === 'function'` 守卫后调用，禁止假定顶层函数全局可见 | Bug-064 |
 | CD-52 | 必须 | vditor 预览/阅读代码块行号 = **配置开启 + 样式补齐**双要素：`preview.hljs.lineNumber:true` 启用生成 `.hljs-ln` table 行号结构，且必须自定义 `.hljs-ln*` CSS（vditor 自带 `dist/index.css` 不含行号样式）以两列显示行号——二者缺一即行号不显示 | Bug-064 |
 | CD-53 | 必须 | 凡 IPC（及同类异步）**读文件**的边界必须先做**目录判定**（`lstat()` 后 `isDirectory()`），用清晰错误取代 Node 裸 `EISDIR`；且渲染端 `await` 可能失败的读（IPC/引擎）必须 `try/catch`，失败时回滚到安全状态（如撤销刚压入的页签再返回）再退出，禁止让拒绝上抛成「未处理 Promise 异常」或留打不开的幽灵条目 | Bug-065 |
+| CD-54 | 必须 | 凡「根据链接/文件名查找目标文件」的原理能力（`md-linknav.js` 链接导航等）在多窗口复用（知识库 + 普通项目共用同一渲染/插件）场景下，其**候选文件清单来源必须先判窗口模式**：项目模式从项目文件树 `window.sbProject.list()`（相对项目根的 rel 路径），知识库从 `PluginAPI.editor.listNotes()`（`noteStore.list`），禁止只喂知识库笔记列表——否则项目文件永远匹配不到，链接点击表现为「只 preventDefault 不开」。复用「相对路径=当前笔记路径」契约 + openNote 内容装载分支（已识别项目模式），不要为项目另起一套读打开 | Bug-070 |
+| CD-55 | 必须 | 标题栏/库选择器等「当前实体（当前知识库/当前项目）」的**显示数据必须按窗口模式分流**：项目模式取 `project.current()`（项目根目录名、标签「当前项目」），知识库模式取 `getVault()`（当前知识库）；凡有「多窗口共用同一块 UI」的场景，禁止无条件读单一来源（如项目窗口读知识库 `getVault()`）落到兜底名。另：append 为父容器子节点的**悬浮子菜单**（fixed 定位到父容器外、与触发 head 有跨空隙）收起时机**不得只依赖父容器整体 mouseleave**——对这类子菜单须「离开触发处延迟收起 + 子菜单自身 mouseenter 取消」的 bridge，实现 head↔子菜单连续悬停、移往其它项/容器外才收起（延续 CD-05 子菜单空隙思路） | Bug-071 |
 
 ## 维护要求
 

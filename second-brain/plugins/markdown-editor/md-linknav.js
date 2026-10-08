@@ -89,9 +89,25 @@
     return null;
   }
 
-  /* 笔记列表缓存（异步预加载 + openNote 后刷新） */
+  /* 是否处于项目窗口（普通项目工作区，非知识库）：
+   *  项目模式下链接按「项目文件树（相对项目根的 rel 路径）」解析与打开，
+   *  而不是知识库笔记列表。作者: 火 冰 */
+  function sbInProjectMode() {
+    return !!(window.sbProject && window.sbProject.isProjectMode && window.sbProject.isProjectMode());
+  }
+
+  /* 笔记列表缓存（异步预加载 + openNote 后刷新）
+   *  项目模式：清单来自项目文件树 window.sbProject.list()（path 为相对项目根的 rel 路径）；
+   *  知识库模式：清单来自 PluginAPI.editor.listNotes()（noteStore.list）。
+   *  作者: 火 冰 */
   var notesCache = [];
   function refreshNotes() {
+    if (sbInProjectMode()) {
+      if (window.sbProject && window.sbProject.list) {
+        window.sbProject.list().then(function (list) { notesCache = list || []; }).catch(function () { /* 列表刷新失败不阻塞 */ });
+      }
+      return;
+    }
     var api = (typeof PluginAPI !== 'undefined' && PluginAPI && PluginAPI.editor) ? PluginAPI.editor : null;
     if (api && api.listNotes) {
       api.listNotes().then(function (list) { notesCache = list || []; }).catch(function () { /* 列表刷新失败不阻塞 */ });

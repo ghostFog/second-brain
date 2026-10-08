@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 回归断言脚本（防再犯基础设施，保留不删）
  * 作者: 火 冰
  * 覆盖已修 Bug 的可确定性复现点，触碰相关代码时作为门禁拦截回归：
@@ -1785,6 +1785,135 @@ function testTempAreaDedupe() {
 }
 testTempAreaDedupe();
 testLinkNavDelegate();
+
+/* ---- Bug-NNN: 普通项目 md 文档中的链接点击无效果 ----
+ * 根因: md-linknav.js 的 refreshNotes 用 PluginAPI.editor.listNotes()（知识库 noteStore.list）取笔记列表，
+ *       而项目窗口没有知识库笔记 → notesCache 为空/错列表 → findNoteByLink 恒 null → 点击仅 preventDefault，不打开
+ *       （外部 http(s) 因 openExternal 与模式无关本来可用）。
+ * 修复: refreshNotes 在项目模式（window.sbProject.isProjectMode()）下改从项目文件树 window.sbProject.list()
+ *       取列表（path 为相对项目根的 rel 路径），内部/[[wiki]] 链接按项目 rel 解析并 openNote，外链仍 openExternal。
+ * 断言: ①源码 refreshNotes 含项目模式分支调 window.sbProject.list()；②项目 rel 链接（含子目录与 wiki）命中
+ *       → openNote 以 rel 路径打开；③不命中 .md 防 note:// 404；④外链 https → openExternal。
+ * 作者: 火 冰 */
+function testMdLinkNavProjectMode() {
+  const pjs = fs.readFileSync(path.join(__dirname, 'plugins', 'markdown-editor', 'md-linknav.js'), 'utf8');
+  // ① 源码：refreshNotes 项目模式分支从项目文件树取列表
+  assert(/sbInProjectMode\(\)[\s\S]{0,160}?window\.sbProject\.list\(\)/.test(pjs),
+    'Bug-NNN-1: refreshNotes 项目模式改从 window.sbProject.list() 取链接解析列表');
+  assert(/if \(api && api\.listNotes\)/.test(pjs),
+    'Bug-NNN-2: 知识库模式仍走 PluginAPI.editor.listNotes()，未破坏知识库链接导航');
+
+  // ② 行为：项目文件树（rel 路径、含子目录）+ 链接解析委托
+  const projNotes = [
+    { path: 'docs/a.md', name: 'a.md' },
+    { path: 'docs/foo.md', name: 'foo.md' },
+  ];
+  let edCurrent = 'docs/a.md';
+  function resolveRelPath(baseDir, rel) {
+    let r = String(rel || '').replace(/^\.\//, '');
+    let parts = baseDir ? baseDir.split('/').filter(Boolean) : [];
+    for (const seg of r.split('/')) {
+      if (seg === '..') parts.pop();
+      else if (seg === '.') continue;
+      else if (seg) parts.push(seg);
+    }
+    return parts.join('/');
+  }
+  function findNoteByLink(target) {
+    const t = String(target || '').trim();
+    if (!t) return null;
+    const tn = t.replace(/\.md$/i, '');
+    let hit = projNotes.find(n => n.path === t);
+    if (hit) return hit.path;
+    hit = projNotes.find(n => n.path === tn);
+    if (hit) return hit.path;
+    const isPath = t.indexOf('/') >= 0 || t.indexOf('\\') >= 0 || /^\.\.?[/\\]/.test(t);
+    if (isPath && edCurrent) {
+      const slash = edCurrent.lastIndexOf('/');
+      const cwd = slash >= 0 ? edCurrent.slice(0, slash) : '';
+      const clean = t.replace(/^[/\\]+/, '');
+      const resolved = /^[/\\]/.test(t) ? clean : resolveRelPath(cwd, clean);
+      if (resolved && resolved !== t) {
+        hit = projNotes.find(n => n.path === resolved);
+        if (hit) return hit.path;
+        hit = projNotes.find(n => n.path === resolved + '.md');
+        if (hit) return hit.path;
+      }
+    }
+    hit = projNotes.find(n => (n.name || '').replace(/\.md$/i, '') === tn);
+    if (hit) return hit.path;
+    return null;
+  }
+  const projOpened = [];
+  const projExternal = [];
+  function pOpenNote(p) { projOpened.push(p); }
+  const projDom = new JSDOM('<!DOCTYPE html><html><body><div id="ed-vditor">'
+    + '<p><a href="foo.md">foo</a></p>'
+    + '<p><a href="#" data-wikilink="foo">wiki</a></p>'
+    + '<p><a href="https://example.com">外链</a></p>'
+    + '<p><a href="nope.md">缺失</a></p>'
+    + '</div></body></html>', { url: 'https://localhost/', runScripts: 'outside-only' });
+  const DW = projDom.window;
+  DW.document.addEventListener('click', function (e) {
+    if (e.target && e.target.closest && !e.target.closest('#ed-vditor')) return;
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    const href = a.getAttribute('href') || '';
+    const wiki = a.dataset.wikilink || '';
+    if (wiki) {
+      const hw = findNoteByLink(wiki);
+      if (hw) { e.preventDefault(); e.stopPropagation(); pOpenNote(hw); }
+      return;
+    }
+    if (!href || href === '#' || href.charAt(0) === '#') return;
+    if (/^https?:\/\//i.test(href)) { e.preventDefault(); e.stopPropagation(); projExternal.push(href); return; }
+    if (/^(note:|mailto:|tel:|ftp:|file:|javascript:|data:)/i.test(href)) return;
+    const hit = findNoteByLink(href);
+    if (hit) { e.preventDefault(); e.stopPropagation(); pOpenNote(hit); return; }
+    if (/\.md$/i.test(href) || href.indexOf('.') === -1) e.preventDefault();
+  }, true);
+  const plinks = DW.document.querySelectorAll('#ed-vditor a[href]');
+  const pr = [];
+  plinks.forEach(function (a) {
+    const ev = new DW.MouseEvent('click', { bubbles: true, cancelable: true });
+    a.dispatchEvent(ev);
+    pr.push({ dp: ev.defaultPrevented, opened: projOpened.slice() });
+  });
+  assert(pr[0].dp === true && pr[0].opened[0] === 'docs/foo.md',
+    'Bug-NNN-3: 项目 rel 链接（同目录 foo.md）→ openNote("docs/foo.md") + preventDefault');
+  assert(pr[1].dp === true && pr[1].opened[1] === 'docs/foo.md',
+    'Bug-NNN-4: 项目 [[wiki]] 链接按项目名命中 → openNote rel 路径');
+  assert(pr[2].dp === true && pr[2].opened.length === 2 && projExternal[0] === 'https://example.com',
+    'Bug-NNN-5: 项目外链 https → preventDefault + openExternal');
+  assert(pr[3].dp === true && pr[3].opened.length === 2,
+    'Bug-NNN-6: 项目未命中 .md 链接 preventDefault 防 404，不误开');
+  projDom.window.close();
+}
+testMdLinkNavProjectMode();
+
+/* ---- Bug-071: 普通项目窗口库下拉不显示当前项目 + 库下拉「最近打开」二级菜单移出 head 不收起 ----
+ * ① 项目窗口库下拉「当前项」仍显示知识库：修复后按 window.sbProject.isProjectMode() 走
+ *    window.noteDesktop.project.current() 取根路径，当前项显示项目名「当前项目」。
+ * ② 「最近打开」二级菜单仅靠整下拉 mouseleave 收起，移到 head 外/其它项仍挂着：
+ *    改为「延迟收起 + head↔二级菜单 mouseenter 取消」，离开 head/二级菜单（往其它项/下拉外）才收起。
+ * 断言（源码级，确定性复现点）：
+ * 作者: 火 冰 */
+function testVaultDropdownProjectSubmenu() {
+  const vjs = fs.readFileSync(path.join(__dirname, 'js', 'app-vault.js'), 'utf8');
+  // ① 普通项目：当前项按 vault:get().kind === 'project' 判断模式（比 sbProject.isProjectMode 更可靠）
+  assert(/vaultInfo[\s\S]{0,120}?kind\s*===\s*['"]project['"]/.test(vjs),
+    'Bug-071-1: 库下拉当前项在项目模式经 vault:get().kind 判断（不再依赖 project.current()）');
+  assert(/当前项目/.test(vjs) && /当前知识库/.test(vjs),
+    'Bug-071-2: 项目模式当前项标签「当前项目」，知识库标签「当前知识库」');
+  // ② 最近打开二级菜单：延迟收起 + head/二级菜单互 bridge
+  assert(/scheduleTempClose/.test(vjs) && /setTimeout\(closeTempMenu,\s*220\)/.test(vjs),
+    'Bug-071-3: 最近打开二级菜单离开后延迟收起（220ms），不再只靠整下拉 mouseleave 瞬时关');
+  assert(/tempHead\.addEventListener\('mouseenter'[\s\S]{0,1600}?tm\.addEventListener\('mouseenter', cancelTempClose\)/.test(vjs),
+    'Bug-071-4: 二级菜单自身 mouseenter 取消延迟关闭，桥接头↔菜单 6px 间隙，悬停不闪关');
+  assert(/tempHead\.addEventListener\('mouseleave', scheduleTempClose\)/.test(vjs),
+    'Bug-071-5: 移出「最近打开」head 即延迟收起二级菜单（不再等移出整个下拉）');
+}
+testVaultDropdownProjectSubmenu();
 testLogBadge();
 testSemanticChunk();
 testPluginLoad();
@@ -1890,7 +2019,8 @@ async function testProjectFileTreeNoCrash() {
   s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-filetree.js'), 'utf8');
   W.document.head.appendChild(s);
   W.edCurrent = '';
-  W.collapsedFolders = new Map();
+  W.collapsedFolders = new Set();   // 与真实实现一致用 Set（collapsedFolders 需支持 .add）
+  W.__treeDefaultCollapsed = 1;     // 跳过「默认全折叠」初始化，保持本测试关注点（目录节点渲染不抛错）
   W.restoreS = function () { return false; };
   W.esc = function (v) { return String(v).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); };
   W.relDate = function () { return '今天'; };
@@ -1913,6 +2043,42 @@ async function testProjectFileTreeNoCrash() {
     '打开项目: 目录条目不作为文件行重复渲染（实际 ' + W.document.querySelectorAll('.tree-file').length + '）');
 }
 
+/* ---- 目录区默认折叠（知识库 / 普通项目共用 renderFileTree） ----
+ * 需求：目录区默认折叠。collapsedFolders 原先为空 Set（默认全展开）；
+ * 现 renderFileTree 首次渲染时把所有目录 key 加入 collapsedFolders（默认收起），
+ * 用户点击目录展开/折叠后各自保持；折叠的目录不渲染其子文件。
+ * 作者: 火 冰 */
+function testDefaultTreeCollapsed() {
+  const dom = new JSDOM('<!DOCTYPE html><html><body><div id="file-tree"></div></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-filetree.js'), 'utf8');
+  W.document.head.appendChild(s);
+  W.edCurrent = '';
+  W.collapsedFolders = new Set();
+  W.restoreS = function () { return false; };
+  W.esc = function (v) { return String(v).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); };
+  W.relDate = function () { return '今天'; };
+  W.refreshIcons = function () {};
+  W.__gsColoring = {};
+  W.noteStore = { isMock: function () { return false; } };
+  W.$ = function (id) { return W.document.getElementById(id); };
+  const list = [
+    { path: 'a/one.md', name: 'one.md', folder: 'a', size: 1, mtime: 0 },
+    { path: 'b/x.md', name: 'x.md', folder: 'b', size: 1, mtime: 0 },
+  ];
+  W.renderFileTree(list);
+  assert(W.collapsedFolders.has('a') && W.collapsedFolders.has('b'),
+    '默认折叠: 首次渲染后全部目录进入折叠态（实际 has a=' + W.collapsedFolders.has('a') + ', has b=' + W.collapsedFolders.has('b') + '）');
+  assert(!W.document.querySelector('.tree-file[data-path="a/one.md"]'),
+    '默认折叠: 折叠目录的子文件不渲染');
+  // 目录节点本身仍渲染
+  assert(!!W.document.querySelector('.tree-folder[data-folder="a"]'),
+    '默认折叠: 目录节点本身仍渲染');
+  dom.window.close();
+}
+
 Promise.all([
   testCodeHighlightCopyBtn(),
   testRenameNoteFile(),
@@ -1921,6 +2087,7 @@ Promise.all([
   testEdOpenRace(),
   testFindbar(),
   testProjectFileTreeNoCrash(),
+  testDefaultTreeCollapsed(),
 ]).then(function () {
   console.log(`\n回归结果: ${pass} 通过, ${fail} 失败`);
   if (fail) process.exitCode = 1;

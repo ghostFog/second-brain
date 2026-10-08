@@ -77,6 +77,13 @@ function pluginFileTreeItems(slot, kind, target) {
  * 所以统一调 revealNote 即可（参数路径若是目录，Electron 也能正确定位）。
  * 作者: 火 冰 */
 function openInExplorer(path) {
+  // 普通项目窗口：路径是相对项目根的 rel，必须走 project:reveal 按项目根解析；
+  // 若误走 notes:reveal（按知识库根 resolveVaultPath）路径在知识库下不存在 → 静默无反应。
+  if (typeof sbIsProjectMode === 'function' && sbIsProjectMode()
+      && window.noteDesktop && window.noteDesktop.project && window.noteDesktop.project.reveal) {
+    window.noteDesktop.project.reveal(path).catch(() => {});
+    return;
+  }
   const bridge = window.noteDesktop;
   if (!bridge) { showToast('该功能仅桌面版可用'); return; }
   if (bridge.revealNote) bridge.revealNote(path).catch(() => {});

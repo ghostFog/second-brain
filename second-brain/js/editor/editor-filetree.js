@@ -45,6 +45,12 @@
       f.depth = depth;
       folderNodes.set(key, f);
     });
+    // 目录区默认折叠：首次渲染把全部目录置为折叠态（原逻辑 collapsedFolders 为空=全部展开）。
+    // 用户点击目录展开/折叠后各自保持（collapsedFolders 为会话内状态，重启回到默认折叠）。
+    if (!window.__treeDefaultCollapsed) {
+      window.__treeDefaultCollapsed = 1;
+      folderNodes.forEach((_f, key) => collapsedFolders.add(key));
+    }
     // 深度优先输出，根层级排序
     const rootFolders = [];
     folderNodes.forEach((f, key) => { if (!f.parent) rootFolders.push({ key, f }); });

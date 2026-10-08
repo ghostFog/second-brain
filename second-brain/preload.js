@@ -98,6 +98,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   switchVault: (dir) => ipcRenderer.invoke('vault:switch', dir),
   /** 从历史列表移除某库（不改当前库），返回 {history} */
   removeVault: (dir) => ipcRenderer.invoke('vault:remove', dir),
+  /** 设置知识库自定义别名：dir=绝对路径, alias=新名称（空串清除别名）；返回 {ok, path, name} */
+  setVaultAlias: (dir, alias) => ipcRenderer.invoke('vault:setAlias', dir, alias),
   /** 恢复默认笔记库（userData/vault 或已迁移后的新默认库），返回 {path, name, history} */
   resetVault: () => ipcRenderer.invoke('vault:reset'),
 
@@ -121,6 +123,10 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     gitStatus: () => ipcRenderer.invoke('project:gitStatus'),
     /** 在系统文件管理器中显示项目文件 */
     reveal: (rel) => ipcRenderer.invoke('project:reveal', rel),
+    /** 从最近打开列表移除指定项目（不改打开中的项目窗口），返回 {ok, projects} */
+    remove: (absPath) => ipcRenderer.invoke('project:remove', absPath),
+    /** 设置项目自定义别名：absPath=绝对路径, alias=新名称（空串清除别名）；返回 {ok, path, name} */
+    setAlias: (absPath, alias) => ipcRenderer.invoke('project:setAlias', absPath, alias),
   },
 
   /* ---------- 应用安全桥接（SEC-01 启动密码 / SEC-02 超时锁定） ---------- */
