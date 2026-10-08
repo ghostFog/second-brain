@@ -1,4 +1,4 @@
-# Bug 记录归档
+﻿# Bug 记录归档
 
 > [返回 历史 Bug 记录](../历史Bug记录.md)
 > 本目录按 Bug 编号拆存每条完整记录；新 Bug 追加到此创建对应 `Bug-NNN.md`。
@@ -73,9 +73,10 @@
 | [Bug-067](Bug-067.md) | 已修复（待真机验证） | 单篇笔记显示密文、切换其他笔记正常：该文件用旧密码 key 加密而当前 keyring 只有新 key（列表条目 key 不一致），`decryptNoteTextAny` 全失败返回密文原文且无修复入口。修复：新增 `encRepairNote` + `app:encRepairNote` IPC + 渲染端密文检测弹「输入旧密码修复」遮罩，解密成功用当前主密钥重加密落盘 + 并入 keyring + 更新列表条目 keyId。 |
 | [Bug-068](Bug-068.md) | 已修复（待真机验证） | AI 索引库列表同一知识库重复（dfzx×2）：9/17 索引 key 算法升级时新旧两套各写一个 `.index.json`（6qb8ht=旧算法残留、dr30tz=当前），`listIndexes` 按文件名平铺不去重。修复：新增 `_pruneStaleIndexFor`，`rebuildIndex`/`rebuildIndexFor` 写盘前自动清理同库旧 key 文件，重建一次即收敛；立即清理可删 `6qb8ht.index.json`。 |
 | [Bug-069](Bug-069.md) | 已修复（待真机验证） | 开机后第一窗输入锁屏密码后编辑区空白：切换目录文件仍空白，切换知识库新开窗口才正常恢复。修复：`ensureVd` 检测 vditor 实例容器根节点脱离文档（`isConnected===false`）即销毁重建到当前容器，`vdSyncValue` 改经 `ensureVd` 懒创建；回归断言 2 条。 |
-| [Bug-069](Bug-069.md) | 已修复（测试完成） | 普通项目窗口目录区右键「在资源管理器打开」无反应：`openInExplorer` 固定走 `notes:reveal`（按知识库根 `resolveVaultPath` 解析），项目相对路径被解析到库下不存在 → 静默 return false。修复：`sbIsProjectMode()` 时改走 `project:reveal`（按项目根解析）。 |
 | [Bug-070](Bug-070.md) | 已修复（测试完成） | 普通项目窗口 md 文档内部链接/`[[wiki]]` 点击无效果：`md-linknav.js` 的 `refreshNotes` 固定用 `PluginAPI.editor.listNotes()`（只列知识库笔记），项目文件匹配不到 → 点击仅 preventDefault 不开。修复：项目模式改从 `window.sbProject.list()` 取项目文件树解析并 `openNote(rel)`，外链仍 openExternal。 |
 | [Bug-071](Bug-071.md) | 已修复（测试完成） | ①普通项目库下拉「当前项」仍显示知识库：当前项取值无条件走 `getVault()`，项目模式落到兜底名。修复：项目模式经 `project.current()` 显示项目名「当前项目」。②「最近打开」二级菜单移出 head 不收起（仅整下拉 mouseleave 才关）：改延迟收起 + head↔菜单 mouseenter 取消 bridge。 |
+| [Bug-072](Bug-072.md) | 已修复（测试完成） | 普通项目窗口目录区右键「在资源管理器打开」无反应：`openInExplorer` 固定走 `notes:reveal`（按知识库根 `resolveVaultPath` 解析），项目相对路径被解析到库下不存在 → 静默 return false。修复：`sbIsProjectMode()` 时改走 `project:reveal`（按项目根解析）。 |
 
 > 注（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——语言选择器(chip)显隐保留为 Bug-011，链接弹框 `docButton` 那条纠正为 Bug-042。
+
 
