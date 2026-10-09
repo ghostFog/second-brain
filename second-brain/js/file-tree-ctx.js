@@ -104,6 +104,8 @@ function handleDeleteOfCurrent(path) {
 
 /* 右键菜单 动作：删除笔记 */
 async function actDeleteNote(path) {
+  // 项目模式守卫：走知识库 noteStore 会误删知识库同名笔记，暂不支持
+  if (sbIsProjectMode()) { showToast('项目模式暂不支持在应用内删除，请在系统资源管理器操作'); return; }
   if (!confirm('确定删除笔记「' + path.split('/').pop() + '」吗？\n（同时清理该笔记的 AI 索引）')) return;
   try {
     await noteStore.remove(path);
@@ -115,6 +117,8 @@ async function actDeleteNote(path) {
 
 /* 右键菜单 动作：删除目录（递归删所有下级笔记 + 索引） */
 async function actDeleteDir(dir) {
+  // 项目模式守卫：走知识库 noteStore 会误删知识库同名目录，暂不支持
+  if (sbIsProjectMode()) { showToast('项目模式暂不支持在应用内删除，请在系统资源管理器操作'); return; }
   if (!confirm('确定删除目录「' + dir + '」及其下所有笔记吗？\n（每篇笔记的 AI 索引将一并清理）')) return;
   try {
     const removed = await noteStore.removeDir(dir);
@@ -129,6 +133,8 @@ async function actDeleteDir(dir) {
 /* 右键菜单 动作：移动笔记到新父目录（跨目录移动；若新父目录下已存在同名笔记则失败） */
 async function actMoveNote(oldPath, newPath) {
   if (oldPath === newPath) return;
+  // 项目模式守卫：走知识库 noteStore 会误移动知识库同名文件，暂不支持
+  if (sbIsProjectMode()) { showToast('项目模式暂不支持在应用内移动，请在系统资源管理器操作'); return; }
   try {
     const ok = await noteStore.move(oldPath, newPath);
     if (!ok) { showToast('移动失败：目标可能已存在'); return; }
@@ -150,6 +156,8 @@ async function actMoveDir(oldDir, newParent) {
     showToast('不能把目录移动到它自己的子目录里');
     return;
   }
+  // 项目模式守卫：走知识库 noteStore 会误移动知识库同名目录，暂不支持
+  if (sbIsProjectMode()) { showToast('项目模式暂不支持在应用内移动，请在系统资源管理器操作'); return; }
   try {
     const moved = await noteStore.moveDir(oldDir, newParent);
     showToast('已移动目录「' + oldDir.split('/').pop() + '」' + (moved ? '（含 ' + moved + ' 篇笔记）' : ''));
@@ -171,8 +179,11 @@ async function actMoveDir(oldDir, newParent) {
 }
 
 /* 变更后统一刷新文件树 + 笔记列表缓存
+ * 项目模式：走项目列表刷新（sbProject.refresh → project:list），绝不能误拉知识库列表
+ * 把目录树重绘成知识库内容（Bug-073「目录区变成上一次打开的知识库」的统一收口点）。
  * 作者: 火 冰 */
 async function refreshTreeAfterChange() {
+  if (sbIsProjectMode()) { await window.sbProject.refresh(); refreshIcons(); return; }
   edNotes = (await noteStore.list()).sort((a, b) => a.path.localeCompare(b.path, 'zh'));
   renderFileTree(edNotes);
   refreshIcons();
@@ -255,6 +266,8 @@ function buildOpenChildren(path) {
  *         确保子孙目录与祖先目录数据全部修正。
  *  @author 火 冰 */
 async function rebuildMeta(dir) {
+  // 项目模式守卫：重建的是知识库元数据，与项目无关
+  if (sbIsProjectMode()) { showToast('项目模式不使用笔记元数据，无需重建'); return; }
   const bridge = window.noteDesktop;
   if (!bridge || !bridge.refreshMeta) {
     if (typeof showToast === 'function') showToast('该功能仅桌面版可用');

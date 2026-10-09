@@ -33,6 +33,12 @@
         key = key ? key + '/' + p : p;
         if (!folders.has(key)) folders.set(key, { label: p, parent: parentKey, children: [] });
       });
+      // 项目模式目录条目（isFolder=true）自身也注册为目录节点：
+      // 空目录（子树内无文件）原本只靠「文件的 folder 字符串」间接出现，新建空目录后不可见。作者: 火 冰
+      if (n.isFolder && typeof n.path === 'string' && n.path) {
+        const slash = n.path.lastIndexOf('/');
+        if (!folders.has(n.path)) folders.set(n.path, { label: n.name || n.path.slice(slash + 1), parent: slash > 0 ? n.path.slice(0, slash) : '', children: [] });
+      }
     });
     const filesByFolder = new Map();
     notes.forEach(n => { if (!filesByFolder.has(n.folder)) filesByFolder.set(n.folder, []); filesByFolder.get(n.folder).push(n); });
@@ -312,6 +318,8 @@
    * 由文件树右键「重命名」与「双击文件名」共用。作者: 火 冰 */
   async function renameNoteFile(path) {
     if (!path) return;
+    // 项目模式守卫：重命名走知识库 noteStore 会误改知识库同名文件，暂不支持
+    if (sbIsProjectMode()) { showToast('项目模式暂不支持在应用内重命名，请在系统资源管理器操作'); return; }
     const row = Array.prototype.find.call(document.querySelectorAll('.tree-file'),
       function (f) { return f.dataset.path === path; });
     if (!row) return;
@@ -379,6 +387,8 @@
    * 由文件树右键菜单「重命名」与「双击目录名」共用。作者: 火 冰 */
   async function renameDirInline(oldDir) {
     if (!oldDir) return;
+    // 项目模式守卫：重命名走知识库 noteStore 会误改知识库同名目录，暂不支持
+    if (sbIsProjectMode()) { showToast('项目模式暂不支持在应用内重命名，请在系统资源管理器操作'); return; }
     const row = Array.prototype.find.call(document.querySelectorAll('.tree-folder'),
       function (f) { return f.dataset.folder === oldDir; });
     if (!row) return;
@@ -467,11 +477,35 @@
 
   /* 新建笔记
    * 参数 targetDir：目标目录相对路径（空字符串=根目录）。文件树右键传入的目录/同级目录。默认根目录。
+   * 项目模式：相对项目根直连 project:save 写空文件（同名自动追加序号），不走知识库。
    * 作者: 火 冰 */
   async function doNewNote(targetDir) {
     const dir = targetDir || '';
     const name = (await window.inputModal({ title: '新笔记名称', value: '新笔记-' + new Date().getDate() + '-' + (new Date().getHours()) + (new Date().getMinutes()) })) || '';
     if (!name || !name.trim()) return;
+    // 项目模式：写入项目根（saveRel 内部 mkdir 递归 + 写盘），刷新项目树后打开
+    if (sbIsProjectMode()) {
+      let nm = name.trim();
+      if (!/\.(md|markdown|txt)$/i.test(nm)) nm += '.md';
+      const prefix = dir ? dir.replace(/[\\/]+$/, '') + '/' : '';
+      const exist = new Set(edNotes.map(n => n.path));
+      let rel = prefix + nm;
+      if (exist.has(rel)) {
+        const base = rel.replace(/\.(md|markdown|txt)$/i, '');
+        const ext = rel.slice(base.length);
+        let i = 1;
+        while (exist.has(base + '-' + i + ext)) i++;
+        rel = base + '-' + i + ext;
+      }
+      const ok = await window.sbProject.saveRel(rel, '');
+      if (!ok) { alert('新建失败：项目文件写入失败'); return; }
+      await window.sbProject.refresh();
+      await sbProjectOpenNote(rel);
+      setEditorMode('edit');
+      const visEl = edSource ? $('ed-edit') : $('ed-wysiwyg');
+      if (visEl) visEl.focus();
+      return;
+    }
     let rel;
     try { rel = await noteStore.create(name, dir); }
     catch (err) { alert('新建失败：' + err.message); return; }
@@ -488,12 +522,21 @@
 
   /* 新建目录：提示输入目录名，创建后刷新文件树
    * 参数 parentDir：父目录相对路径（空字符串=根目录）。文件树右键时传入当前目录。默认根目录。
+   * 项目模式：相对项目根直连 project:createDir（mkdir 递归），绝不落入知识库。
    * 作者: 火 冰 */
   async function doNewFolder(parentDir) {
     const parent = parentDir || '';
     const name = (await window.inputModal({ title: '新建目录名', placeholder: '支持子目录，用 / 分隔' })) || '';
     if (!name || !name.trim()) return;
     const full = parent ? parent.replace(/[\\/]+$/, '') + '/' + name : name;
+    // 项目模式：在项目根下创建目录并刷新项目树（此前误走知识库 noteStore，导致目录建进知识库且目录树被重绘为知识库内容）
+    if (sbIsProjectMode()) {
+      const r = await window.sbProject.createDir(full);
+      if (!r || !r.ok) { alert('新建目录失败：' + (r && r.error || '未知错误')); return; }
+      await window.sbProject.refresh();
+      showToast('已创建目录 ' + (r.rel || full));
+      return;
+    }
     let rel;
     try { rel = await noteStore.createDir(full); }
     catch (err) { alert('新建目录失败：' + err.message); return; }

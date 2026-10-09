@@ -101,6 +101,24 @@ globalThis.sbProject = (function () {
     return !!(r && r.ok);
   }
 
+  /* 在项目根下新建目录（支持多级 a/b/c，递归创建）
+   * @param {string} rel 相对项目根的目录路径
+   * @returns {Promise<{ok,rel,error}>} 创建结果
+   * 作者: 火 冰 */
+  async function createDir(rel) {
+    if (!window.noteDesktop || !window.noteDesktop.project) return { ok: false, error: '仅桌面版可用' };
+    return await window.noteDesktop.project.createDir(rel);
+  }
+
+  /* 用系统默认程序打开项目文件（二进制/未支持后缀的兜底打开方式）
+   * @param {string} rel 相对项目根的路径
+   * @returns {Promise<{ok,error}>} 打开结果
+   * 作者: 火 冰 */
+  async function openExternal(rel) {
+    if (!window.noteDesktop || !window.noteDesktop.project) return { ok: false, error: '仅桌面版可用' };
+    return await window.noteDesktop.project.openExternal(rel);
+  }
+
   /* 隐藏知识库专属 UI：Ribbon 的 图谱/插件/AI 入口、右侧侧边面板与底板统计、移动端侧面板按钮。
    * 只隐藏 DOM，不改动知识库渲染逻辑。作者: 火 冰 */
   function hideVaultUi() {
@@ -179,14 +197,23 @@ globalThis.sbProject = (function () {
     showToast('已打开项目：' + root.split(/[\\/]/).pop());
   }
 
-  return { detect: detect, isProjectMode: isProjectMode, applyUi: applyUi, list: loadList, refresh: renderProjectTree, read: read, saveRel: saveRel };
+  return { detect: detect, isProjectMode: isProjectMode, applyUi: applyUi, list: loadList, refresh: renderProjectTree, read: read, saveRel: saveRel, createDir: createDir, openExternal: openExternal };
 })();
 
 /* 项目模式打开笔记的薄封装（供 initEditor 项目分支与页签复用）：先按项目读正文注入缓存，
- * 再走既有 openNote（其内容装载分支已识别项目模式）。作者: 火 冰 */
+ * 再走既有 openNote（其内容装载分支已识别项目模式）。
+ * 二进制/未支持后缀（project:read 判定 binary）→ 调系统默认程序打开，不进编辑器。作者: 火 冰 */
 async function sbProjectOpenNote(rel) {
   const r = await window.sbProject.read(rel);
-  if (!r || !r.ok || r.binary) { if (r && r.binary) showToast('二进制文件不可编辑'); return; }
+  if (!r || !r.ok || r.binary) {
+    if (r && r.binary) {
+      showToast('已调用系统默认程序打开：' + rel.split('/').pop());
+      await window.sbProject.openExternal(rel);
+    } else if (r && r.error) {
+      showToast('打开失败：' + r.error);
+    }
+    return;
+  }
   edOutdated[rel] = r.content;
   await openNote(rel);
 }

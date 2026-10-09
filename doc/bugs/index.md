@@ -1,4 +1,4 @@
-﻿# Bug 记录归档
+# Bug 记录归档
 
 > [返回 历史 Bug 记录](../历史Bug记录.md)
 > 本目录按 Bug 编号拆存每条完整记录；新 Bug 追加到此创建对应 `Bug-NNN.md`。
@@ -76,6 +76,9 @@
 | [Bug-070](Bug-070.md) | 已修复（测试完成） | 普通项目窗口 md 文档内部链接/`[[wiki]]` 点击无效果：`md-linknav.js` 的 `refreshNotes` 固定用 `PluginAPI.editor.listNotes()`（只列知识库笔记），项目文件匹配不到 → 点击仅 preventDefault 不开。修复：项目模式改从 `window.sbProject.list()` 取项目文件树解析并 `openNote(rel)`，外链仍 openExternal。 |
 | [Bug-071](Bug-071.md) | 已修复（测试完成） | ①普通项目库下拉「当前项」仍显示知识库：当前项取值无条件走 `getVault()`，项目模式落到兜底名。修复：项目模式经 `project.current()` 显示项目名「当前项目」。②「最近打开」二级菜单移出 head 不收起（仅整下拉 mouseleave 才关）：改延迟收起 + head↔菜单 mouseenter 取消 bridge。 |
 | [Bug-072](Bug-072.md) | 已修复（测试完成） | 普通项目窗口目录区右键「在资源管理器打开」无反应：`openInExplorer` 固定走 `notes:reveal`（按知识库根 `resolveVaultPath` 解析），项目相对路径被解析到库下不存在 → 静默 return false。修复：`sbIsProjectMode()` 时改走 `project:reveal`（按项目根解析）。 |
+| [Bug-073](Bug-073.md) | 已修复（测试完成） | 项目窗口「新建目录」建进上一次打开的知识库，且目录区被重绘成知识库树：`doNewFolder/doNewNote/refreshTreeAfterChange` 全走知识库 `noteStore`。修复：新建目录/笔记项目分支直连 `project:createDir/save`，刷新收口 `sbProject.refresh()`；删除/移动/重命名加项目模式守卫；空目录注册为树节点可见。 |
+| [Bug-074](Bug-074.md) | 已修复（测试完成） | 项目窗口点击二进制/未支持后缀文件无法打开（仅提示不可编辑或塞进编辑器乱码）。修复：新增 `project:openExternal`（`shell.openPath`），两条打开路径探测 `binary` 后调系统默认程序打开，不进编辑器。 |
+| [Bug-075](Bug-075.md) | 已修复（测试完成） | 项目窗口打开 .sql 等文本文件编辑区完全空白（页签/字数正常、无报错），且非 md 文本无高亮：`buildVditor` 在 `window.Vditor` 未就绪（启动 clearCache 竞态）时静默放弃且永不重试。修复：Vditor 未就绪 500ms 延迟重试构建（60 次上限）；项目模式非 md 文本按后缀包 ```lang fence 复用代码块 hljs 高亮、`onEdInput` 统一解包；`project:read` 优先按 UTF-16 BOM 解码（文本一律进编辑器）。 |
 
 > 注（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——语言选择器(chip)显隐保留为 Bug-011，链接弹框 `docButton` 那条纠正为 Bug-042。
 

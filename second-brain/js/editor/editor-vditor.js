@@ -31,6 +31,10 @@
   let vdPending = null;
   /** @type {number} 构建序号自增：标记「当前最新一次 buildVditor」，供异步 after 判断是否本实例，防止旧实例乱序抢占 */
   let vdBuildSeq = 0;
+  /** @type {number|null} window.Vditor 脚本未就绪时的延迟重试构建 timer（Bug-075 启动竞态空白修复） */
+  let vdBuildRetryTimer = null;
+  /** @type {number} 重试剩余次数：500ms × 60 = 30s 上限，避免无限轮询 */
+  let vdBuildRetryLeft = 0;
   /** @type {string[]} 工具栏精简项：承接原自研格式/表格/代码/数学能力，含原生搜索、大纲、导出；
    *  upload 为 vditor 内置上传按钮，支持图片与附件（accept/上传逻辑见 buildVditor 的 upload 配置） */
   const VDTOOLBAR = [
@@ -1132,6 +1136,24 @@
     vdReady = false;   // 重建后视为未就绪，待 after 回调确认首帧渲染完成
     if (!el || typeof window.Vditor !== 'function') {
       vdBuffer = value;   // vditor 不可用（如 jsdom/无依赖）时保留缓冲，保障宿主不崩
+      // Bug-075：容器已存在而 window.Vditor 脚本未就绪（note:// 启动时主进程 clearCache 与
+      // 渲染端脚本加载存在竞态），原实现静默放弃且永不重试 → 整窗编辑区永久空白、无报错。
+      // 改为 500ms 间隔延迟重试构建（60 次上限 30s），jsdom 回归沙箱无真实脚本仍保持跳过；
+      // el 不存在（视图尚未重建）时不重试：后续 openNote→vdSyncValue→ensureVd 会再次触发。
+      if (el && !vdBuildRetryTimer
+          && !(navigator && /jsdom/i.test(navigator.userAgent))) {
+        vdBuildRetryLeft = 60;
+        vdBuildRetryTimer = setTimeout(function retryBuild() {
+          vdBuildRetryTimer = null;
+          if (vdInst || vdBuildRetryLeft-- <= 0) return;   // 已有实例 / 重试耗尽即停
+          const el2 = vdEl();
+          if (!el2 || typeof window.Vditor !== 'function') {
+            vdBuildRetryTimer = setTimeout(retryBuild, 500);
+            return;
+          }
+          buildVditor();   // 脚本就绪：重走正常构建，vdBuffer 中的待渲内容随 value 装载
+        }, 500);
+      }
       return;
     }
     /* 闭包捕获待创建实例：vditor 的 after 回调是平调用（this 不指向实例），

@@ -2479,8 +2479,18 @@ vaultHandle('project:read', async (event, rel) => {
     if (st.isDirectory()) return { ok: false, error: '不能打开目录' };
     if (st.size > PROJECT_READ_MAX_BYTES) return { ok: false, error: '文件超过 ' + Math.round(PROJECT_READ_MAX_BYTES / 1024 / 1024) + 'MB 限制' };
     const buf = await fs.promises.readFile(abs);
-    const binary = buf.includes(0);
-    return { ok: true, content: binary ? '' : buf.toString('utf8'), binary: binary, name: path.basename(rel) };
+    // Bug-075：文本格式一律进编辑器——优先按 BOM 识别 UTF-16 LE/BE 文本并解码
+    // （原「含 NUL 即二进制」会把 UTF-16 文件误判为二进制）；无 BOM 且含 NUL 才按二进制处理。
+    let binary = false, content;
+    if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+      content = buf.slice(2).toString('utf16le');
+    } else if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+      const be = buf.slice(2);
+      for (let i = 0; i + 1 < be.length; i += 2) { const t = be[i]; be[i] = be[i + 1]; be[i + 1] = t; }
+      content = be.toString('utf16le');
+    } else if (buf.includes(0)) { binary = true; content = ''; }
+    else content = buf.toString('utf8');
+    return { ok: true, content: content, binary: binary, name: path.basename(rel) };
   } catch (e) { return { ok: false, error: String(e.message || e) }; }
 });
 
@@ -2529,6 +2539,33 @@ vaultHandle('project:reveal', async (event, rel) => {
   if (st.isDirectory()) await shell.openPath(abs);
   else shell.showItemInFolder(abs);
   return true;
+});
+
+/* 在项目根下新建目录：rel 支持多级（a/b/c，mkdir 递归）→ { ok, rel, error }。
+ * 越权路径经 resolveProjectRel 拒绝，杜绝把目录建到项目外。作者: 火 冰 */
+vaultHandle('project:createDir', async (event, rel) => {
+  const root = winProjects.get(winFromEvent(event)?.webContents?.id) || null;
+  if (!root) return { ok: false, error: '非项目窗口' };
+  if (!rel || typeof rel !== 'string') return { ok: false, error: '参数缺失' };
+  const abs = resolveProjectRel(root, rel);
+  if (!abs) return { ok: false, error: '非法的项目目录路径' };
+  try {
+    await fs.promises.mkdir(abs, { recursive: true });
+    return { ok: true, rel: rel };
+  } catch (e) { return { ok: false, error: String(e.message || e) }; }
+});
+
+/* 用系统默认程序打开项目文件（二进制/未支持后缀的兜底打开方式）→ { ok, error }。
+ * shell.openPath 返回空串=成功，非空串为失败原因。作者: 火 冰 */
+vaultHandle('project:openExternal', async (event, rel) => {
+  const root = winProjects.get(winFromEvent(event)?.webContents?.id) || null;
+  if (!root) return { ok: false, error: '非项目窗口' };
+  const abs = resolveProjectRel(root, rel);
+  if (!abs || !fs.existsSync(abs)) return { ok: false, error: '文件不存在' };
+  try {
+    const err = await shell.openPath(abs);
+    return err ? { ok: false, error: err } : { ok: true };
+  } catch (e) { return { ok: false, error: String(e.message || e) }; }
 });
 
 /* ============================================

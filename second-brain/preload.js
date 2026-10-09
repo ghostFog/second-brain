@@ -119,6 +119,10 @@ contextBridge.exposeInMainWorld('noteDesktop', {
     read: (rel) => ipcRenderer.invoke('project:read', rel),
     /** 保存项目文本文件：{rel, content} → {ok, error} */
     save: (rel, content) => ipcRenderer.invoke('project:save', { rel: rel, content: content }),
+    /** 在项目根下新建目录（支持多级 a/b/c 递归）：{rel} → {ok, rel, error} */
+    createDir: (rel) => ipcRenderer.invoke('project:createDir', rel),
+    /** 用系统默认程序打开项目文件（二进制/未支持后缀兜底）：{rel} → {ok, error} */
+    openExternal: (rel) => ipcRenderer.invoke('project:openExternal', rel),
     /** 项目 git 状态：{ok, repo, status:{rel:code}}（status --porcelain 解析） */
     gitStatus: () => ipcRenderer.invoke('project:gitStatus'),
     /** 在系统文件管理器中显示项目文件 */

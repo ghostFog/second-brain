@@ -144,9 +144,19 @@
     // 既避免「未处理 Promise 异常」，也不留打不开的幽灵页签。作者: 火 冰
     if (!(path in edOutdated)) {
       try {
-        const c = (window.sbProject && window.sbProject.isProjectMode() && !sbIsPseudoPath(path))
-          ? (await window.sbProject.read(path)).content
-          : await noteStore.read(path);
+        // 项目模式：先探测二进制（project:read 返回 binary 标记）→ 二进制/未支持后缀
+        // 调系统默认程序打开（并撤销刚压入的页签，避免留下打不开的幽灵页签）。作者: 火 冰
+        const pr = (window.sbProject && window.sbProject.isProjectMode() && !sbIsPseudoPath(path))
+          ? await window.sbProject.read(path) : null;
+        if (pr && pr.binary) {
+          const ti = edOpenTabs.indexOf(path);
+          if (ti !== -1) edOpenTabs.splice(ti, 1);
+          renderTabs();
+          await window.sbProject.openExternal(path);
+          showToast('已调用系统默认程序打开：' + path.split('/').pop());
+          return;
+        }
+        const c = pr ? pr.content : await noteStore.read(path);
         edOutdated[path] = c;
         // 单篇密文笔记修复（ENC-04 异常处理）：读取结果仍为密文（当前 keyring 解不开，可能用旧密码加密）
         // → 弹「输入旧密码修复」遮罩（桌面笔记库才可能加密；项目模式不加密跳过）。
@@ -183,8 +193,9 @@
      * 事件会把「旧文件可见内容」以新文件路径保存，造成串文件/笔记丢失。故在内容就绪后、渲染前
      * 再激活为当前文件，保证 edCurrent 恒等于「编辑器当前正显示的文件」。作者: 火 冰 */
     edCurrent = path;
-    // 打开方式：入参优先，否则按上次记忆的统一编辑模式（WYSIWYG/IR/SV/阅读）应用
-    applyEditorMode(opts.mode || lastEditorMode());
+    // 打开方式：入参优先，否则按上次记忆的统一编辑模式（WYSIWYG/IR/SV/阅读）应用；
+    // 项目模式代码文件（fence 包装命中）强制 IR：代码块高亮仅 IR/WYSIWYG 渲染，SV 源码面板无高亮（Bug-075）
+    applyEditorMode(opts.mode || (projCodeLangOf(path) ? 'ir' : lastEditorMode()));
     renderTabs();
     renderArticle();
     renderFileTree(edNotes);
@@ -284,6 +295,9 @@
     // （串文件/覆盖丢失），或 A 的去抖 timer 被 B 的输入 clearTimeout 清掉导致 A 的修改不保存。
     const p = edCurrent;
     if (!p) return;
+    // Bug-075：项目模式非 md 文本在编辑器内为 fence 包装态，任何落盘/缓存入口先解包回原文，
+    // 保证磁盘与缓存恒为原始内容（解包后再做脏判定，避免 blur 回灌把包装态误判为修改）。
+    mdText = sbProjFenceUnwrap(p, mdText);
     // 非用户实际修改：内容与已缓存一致且本不是脏文件（失焦同步/程序回灌/blur 重复）→ 忽略，
     // 不写文件，避免把旧/空内容覆盖回磁盘。作者: 火 冰
     const prev = edOutdated[p] || '';
@@ -332,12 +346,69 @@
     if (window.vdFindbar && typeof window.vdFindbar.refresh === 'function') window.vdFindbar.refresh();
   }
 
+  /* ============================
+   * 项目模式非 md 文本的高亮承载（Bug-075）
+   * 项目内 .sql/.json/.py 等文本文件复用 vditor 现有代码块高亮：按后缀包一层 ```lang fence
+   * 进编辑器渲染（hljs 高亮），缓存/磁盘恒为原始内容（onEdInput 入口统一解包）。
+   * 作者: 火 冰
+   * ============================ */
+
+  /* 后缀 → fence 语言映射（hljs 语言标识；未列出且非 md 的后缀不包装，走纯文本展示）
+   * 作者: 火 冰 */
+  const PROJ_CODE_LANGS = {
+    sql: 'sql', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+    ts: 'typescript', json: 'json', py: 'python', sh: 'bash',
+    bat: 'dos', cmd: 'dos', ps1: 'powershell',
+    yml: 'yaml', yaml: 'yaml', xml: 'xml', html: 'xml', htm: 'xml', css: 'css',
+    java: 'java', c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cs: 'csharp',
+    go: 'go', rs: 'rust', php: 'php', rb: 'ruby', ini: 'ini', conf: 'ini', toml: 'toml',
+  };
+
+  /* 取文件对应的 fence 语言：仅项目模式生效；非项目模式/未映射后缀返回 ''（不包装）。
+   * 注意 fileExtension 返回带点后缀（如 '.sql'），映射表键不带点，此处统一去点。
+   * @param {string} path 文件相对路径
+   * @returns {string} hljs 语言标识或 ''
+   * 作者: 火 冰 */
+  function projCodeLangOf(path) {
+    if (!(window.sbProject && window.sbProject.isProjectMode())) return '';
+    const ext = ((typeof fileExtension === 'function') ? fileExtension(path) : '').replace(/^\./, '').toLowerCase();
+    return PROJ_CODE_LANGS[ext] || '';
+  }
+
+  /* 把原始文本包装成单 fence 代码块（供 vditor 复用代码块高亮渲染）
+   * @param {string} path 文件相对路径
+   * @param {string} raw 原始文本
+   * @returns {string} 包装后的 markdown 文本（无映射语言时原样返回）
+   * 作者: 火 冰 */
+  function sbProjFenceWrap(path, raw) {
+    const lang = projCodeLangOf(path);
+    if (!lang) return raw;
+    return '```' + lang + '\n' + String(raw == null ? '' : raw) + '\n```';
+  }
+
+  /* 解包 fence：把编辑器取回的 fence 包装文本还原为原始文本（换行无损往返）
+   * @param {string} path 文件相对路径
+   * @param {string} v 编辑器取回文本
+   * @returns {string} 原始文本（无映射语言/非本包装格式时原样返回）
+   * 作者: 火 冰 */
+  function sbProjFenceUnwrap(path, v) {
+    const lang = projCodeLangOf(path);
+    if (!lang || typeof v !== 'string') return v;
+    const head = '```' + lang;
+    if (v.slice(0, head.length) !== head) return v;
+    return v.slice(head.length).replace(/^\n/, '').replace(/\n?```[ \t]*$/, '');
+  }
+
+  /* 暴露给回归测试与调试（只读工具集） */
+  window.__sbProjFence = { langFor: projCodeLangOf, wrap: sbProjFenceWrap, unwrap: sbProjFenceUnwrap };
+
   /* 渲染编辑区（vditor 化）与元信息/大纲/反链/标签 */
   function renderArticle() {
     const path = edCurrent;
     const md = edOutdated[path] || '';
-    // 编辑区移交 vditor：首次打开懒创建实例，并把当前内容同步进去（预览/分屏由 vditor 自管）
-    if (typeof vdSyncValue === 'function') vdSyncValue(md);
+    // 编辑区移交 vditor：首次打开懒创建实例，并把当前内容同步进去（预览/分屏由 vditor 自管）；
+    // 项目模式非 md 文本按后缀包 fence 进 vditor，复用代码块高亮（Bug-075），字数/标签仍按原文统计
+    if (typeof vdSyncValue === 'function') vdSyncValue(sbProjFenceWrap(path, md));
     // 标题/时间/字数组件已按 ED-44 移除：顶部不留标题条，改名统一走文件树（右键「重命名」/双击文件名）
     // 字数/保存状态仍由下方状态栏（ed-count/ed-saved）承担
     const cnt = $('ed-count'); if (cnt) cnt.textContent = countChars(md) + ' 字';

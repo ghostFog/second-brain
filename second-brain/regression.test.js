@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 回归断言脚本（防再犯基础设施，保留不删）
  * 作者: 火 冰
  * 覆盖已修 Bug 的可确定性复现点，触碰相关代码时作为门禁拦截回归：
@@ -401,6 +401,7 @@ async function testRenameNoteFile() {
   W.document.head.appendChild(s);
 
   // 桩宿主状态与副作用
+  W.sbIsProjectMode = function () { return false; }; // 宿主由 project-mode.js 提供，沙箱内桩为知识库模式
   W.edNotes = [{ path: 'a.md', name: 'a.md' }];
   W.edOutdated = {}; W.edOpenTabs = ['a.md']; W.edCurrent = 'a.md';
   W.edPinned = new Set(); W.edDirty = new Set();
@@ -2094,6 +2095,181 @@ function testDefaultTreeCollapsed() {
   dom.window.close();
 }
 
+/* ---- Bug-073: 项目窗口目录树操作误路由到知识库 + Bug-074: 未支持后缀调系统默认程序打开 ----
+ * 根因: 项目模式的 新建目录/新建笔记/删除/移动/重命名 全部走知识库 noteStore —— 新建目录建进
+ *       上一次打开的知识库，且刷新时 noteStore.list() 把整个目录区重绘成知识库内容；
+ *       二进制/未支持后缀文件点击后仅提示「不可编辑」，编辑区留白。
+ * 修复: ① doNewFolder/doNewNote 项目分支直连 project:createDir / project:save（新建不落知识库）；
+ *       ② refreshTreeAfterChange 项目分支改走 sbProject.refresh()（重绘收口到项目列表）；
+ *       ③ 删除/移动/重命名/重建元数据加项目模式守卫（防误伤知识库）；
+ *       ④ sbProjectOpenNote / openNote 二进制分支 → project:openExternal 调系统默认程序打开。
+ * 断言: 行为（jsdom）①新建目录路由 project:createDir 且不触 noteStore；②新建笔记路由 project:save
+ *       并自动补 .md；③二进制文件 sbProjectOpenNote 调 openExternal 不进 openNote；
+ *       源码：refreshTreeAfterChange 项目分支、删除/移动守卫、main/preload 新 IPC 存在。
+ * 作者: 火 冰 */
+function testProjectModeTreeRouting() {
+  // ===== 源码断言 =====
+  const ftSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-filetree.js'), 'utf8');
+  const ctxSrc = fs.readFileSync(path.join(__dirname, 'js', 'file-tree-ctx.js'), 'utf8');
+  const hostSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-host.js'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+  const preSrc = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
+  assert(/async function doNewFolder[\s\S]{0,900}?sbIsProjectMode\(\)[\s\S]{0,300}?createDir\(full\)/.test(ftSrc),
+    'Bug-073-1: doNewFolder 项目模式走 sbProject.createDir');
+  assert(/async function doNewNote[\s\S]{0,900}?sbIsProjectMode\(\)[\s\S]{0,700}?saveRel\(rel, ''\)/.test(ftSrc),
+    'Bug-073-2: doNewNote 项目模式走 sbProject.saveRel');
+  assert(/async function refreshTreeAfterChange\(\)\s*\{\s*if \(sbIsProjectMode\(\)\) \{ await window\.sbProject\.refresh\(\);/.test(ctxSrc),
+    'Bug-073-3: refreshTreeAfterChange 项目模式收口到 sbProject.refresh()');
+  assert(/async function actDeleteNote\(path\) \{[\s\S]{0,200}?sbIsProjectMode\(\)/.test(ctxSrc)
+    && /async function actDeleteDir\(dir\) \{[\s\S]{0,300}?sbIsProjectMode\(\)/.test(ctxSrc)
+    && /async function actMoveNote\(oldPath, newPath\) \{[\s\S]{0,300}?sbIsProjectMode\(\)/.test(ctxSrc)
+    && /async function actMoveDir\(oldDir, newParent\) \{[\s\S]{0,500}?sbIsProjectMode\(\)/.test(ctxSrc),
+    'Bug-073-4: 删除/移动在项目模式有防误伤守卫');
+  assert(/vaultHandle\('project:createDir'/.test(mainSrc) && /vaultHandle\('project:openExternal'/.test(mainSrc),
+    'Bug-074-1: main.js 新增 project:createDir / project:openExternal IPC');
+  assert(/createDir: \(rel\) => ipcRenderer\.invoke\('project:createDir', rel\)/.test(preSrc)
+    && /openExternal: \(rel\) => ipcRenderer\.invoke\('project:openExternal', rel\)/.test(preSrc),
+    'Bug-074-2: preload 暴露 project.createDir / project.openExternal');
+  assert(/pr && pr\.binary[\s\S]{0,200}?openExternal\(path\)/.test(hostSrc),
+    'Bug-074-3: openNote 项目模式二进制分支调系统默认程序打开');
+
+  // ===== 行为断言（jsdom） =====
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body><div id="file-tree"></div></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  const load = function (rel) {
+    const s = W.document.createElement('script');
+    s.textContent = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+    W.document.head.appendChild(s);
+  };
+  load(path.join('js', 'project-mode.js'));
+  load(path.join('js', 'editor', 'editor-filetree.js'));
+  // 桩宿主依赖
+  const calls = { createDir: [], save: [], openExternal: [], openNote: [], noteStoreCreateDir: 0, toasts: [] };
+  W.collapsedFolders = new Set();
+  W.restoreS = function () { return false; };
+  W.esc = function (v) { return String(v).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); };
+  W.relDate = function () { return '今天'; };
+  W.refreshIcons = function () {};
+  W.__gsColoring = {};
+  W.$ = function (id) { return W.document.getElementById(id); };
+  W.edNotes = []; W.edCurrent = ''; W.edOutdated = {};
+  W.edSource = false; W.setEditorMode = function () {};
+  W.showToast = function (m) { calls.toasts.push(String(m)); };
+  W.alert = function (m) { calls.toasts.push('alert:' + String(m)); };
+  W.inputModal = async function (o) { return W.__modalName || ''; };
+  W.openNote = async function (p) { calls.openNote.push(p); };
+  W.noteStore = { createDir: async function () { calls.noteStoreCreateDir++; return 'leaked'; } };
+  let binaryRead = false;
+  const created = { dir: false, file: false }; // 模拟真实磁盘：创建后才出现在列表
+  W.noteDesktop = { project: {
+    current: async function () { return 'C:\\proj'; },
+    list: async function () {
+      const l = [{ rel: 'docs', name: 'docs', folder: true, size: 0, mtime: 0 }];
+      if (created.dir) l.push({ rel: 'docs/newdir', name: 'newdir', folder: true, size: 0, mtime: 0 });
+      if (created.file) l.push({ rel: 'docs/hello.md', name: 'hello.md', folder: false, size: 0, mtime: 0 });
+      return l;
+    },
+    createDir: async function (rel) { calls.createDir.push(rel); created.dir = true; return { ok: true, rel: rel }; },
+    save: async function (rel, content) { calls.save.push([rel, content]); created.file = true; return { ok: true }; },
+    read: async function () { return binaryRead ? { ok: true, binary: true, content: '' } : { ok: true, binary: false, content: '' }; },
+    openExternal: async function (rel) { calls.openExternal.push(rel); return { ok: true }; },
+    gitStatus: async function () { return { ok: true, repo: false, status: {} }; },
+  } };
+
+  const run = (async function () {
+    await W.sbProject.detect();
+    assert(W.sbProject.isProjectMode(), 'Bug-073-5: jsdom 内 sbProject.detect() 进入项目模式');
+    // ① 新建目录：路由到 project:createDir，绝不触 noteStore.createDir
+    W.__modalName = 'newdir';
+    await W.doNewFolder('docs');
+    assert(calls.createDir.length === 1 && calls.createDir[0] === 'docs/newdir',
+      'Bug-073-6: 新建目录调用 project:createDir（实际 ' + JSON.stringify(calls.createDir) + '）');
+    assert(calls.noteStoreCreateDir === 0, 'Bug-073-7: 新建目录不再误触知识库 noteStore.createDir');
+    // 空目录可见性：目录条目自身注册为目录节点 → 进入折叠集合；展开父目录后 DOM 中可见
+    assert(W.collapsedFolders.has('docs/newdir'),
+      'Bug-073-8: 新建空目录后进入刷新后的项目树数据（已注册进折叠集合）');
+    W.collapsedFolders.delete('docs');
+    W.renderFileTree(W.edNotes);
+    assert(W.document.querySelector('.tree-folder[data-folder="docs/newdir"]'),
+      'Bug-073-8b: 展开父目录后新建空目录在目录区可见（空目录不再丢失）');
+    // ② 新建笔记：路由到 project:save（自动补 .md），随后打开
+    W.__modalName = 'hello';
+    await W.doNewNote('docs');
+    assert(calls.save.length === 1 && calls.save[0][0] === 'docs/hello.md' && calls.save[0][1] === '',
+      'Bug-073-9: 新建笔记调用 project:save 写入项目根（实际 ' + JSON.stringify(calls.save) + '）');
+    assert(calls.openNote.indexOf('docs/hello.md') !== -1, 'Bug-073-10: 新建笔记后打开新文件');
+    // ③ 二进制/未支持后缀：sbProjectOpenNote → 系统默认程序，不进编辑器
+    binaryRead = true;
+    await W.sbProjectOpenNote('docs/img.png');
+    assert(calls.openExternal.indexOf('docs/img.png') !== -1,
+      'Bug-074-4: 二进制文件 sbProjectOpenNote 调 project:openExternal（实际 ' + JSON.stringify(calls.openExternal) + '）');
+    assert(calls.openNote.indexOf('docs/img.png') === -1, 'Bug-074-5: 二进制文件不进入 openNote 编辑器');
+    dom.window.close();
+  })();
+  return run;
+}
+
+/* ---- Bug-075: 项目窗口文本文件打开空白 + 非 md 文本复用代码块高亮 ----
+ * 现象: 项目窗口打开 .sql 等文本文件，页签已开但编辑区完全空白、无报错。
+ * 根因: 主进程启动 clearCache 与渲染端 vditor 脚本加载存在竞态 → window.Vditor 未定义时
+ *       buildVditor 静默放弃且永不重试 → 整窗编辑区永久空白；且项目内 .sql/.json 等文本
+ *       无高亮承载；UTF-16 BOM 文本被「含 NUL 即二进制」误判调系统程序打开。
+ * 修复: ① buildVditor 在 Vditor 脚本未就绪时 500ms 延迟重试构建（60 次上限，jsdom 跳过）；
+ *       ② 项目模式非 md 文本按后缀包 ```lang fence 进 vditor 复用 hljs 高亮，onEdInput 统一解包；
+ *       ③ project:read 优先按 UTF-16 BOM 解码文本，无 BOM 且含 NUL 才判二进制。
+ * 断言: 源码（重试逻辑/fence 包装解包/BOM 判定）+ 行为（jsdom 内 __sbProjFence 往返无损）。
+ * 作者: 火 冰 */
+function testProjectCodeFileHighlight() {
+  // ===== 源码断言 =====
+  const vdSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  const hostSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-host.js'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+  assert(/vdBuildRetryTimer = setTimeout\(function retryBuild\(\)/.test(vdSrc)
+    && /if \(vdInst \|\| vdBuildRetryLeft-- <= 0\) return;/.test(vdSrc),
+    'Bug-075-1: buildVditor 在 Vditor 脚本未就绪时延迟重试构建（不再静默永久放弃）');
+  assert(/\/jsdom\/i\.test\(navigator\.userAgent\)/.test(vdSrc),
+    'Bug-075-2: jsdom 回归沙箱跳过重试（不依赖真实定时器）');
+  assert(/vdSyncValue\(sbProjFenceWrap\(path, md\)\)/.test(hostSrc),
+    'Bug-075-3: renderArticle 项目非 md 文本按后缀包 fence 进 vditor（复用代码块高亮）');
+  assert(/mdText = sbProjFenceUnwrap\(p, mdText\);/.test(hostSrc),
+    'Bug-075-4: onEdInput 落盘/缓存入口统一解包（磁盘恒为原文）');
+  assert(/buf\[0\] === 0xFF && buf\[1\] === 0xFE/.test(mainSrc)
+    && /buf\[0\] === 0xFE && buf\[1\] === 0xFF/.test(mainSrc)
+    && /toString\('utf16le'\)/.test(mainSrc),
+    'Bug-075-5: project:read 优先按 UTF-16 BOM 解码文本（无 BOM 含 NUL 才判二进制）');
+
+  // ===== 行为断言（jsdom）：fence 包装/解包换行无损往返 =====
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  try {
+    const s = W.document.createElement('script');
+    s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-host.js'), 'utf8');
+    W.document.head.appendChild(s);
+  } catch (e) { assert(false, 'Bug-075-6: 注入 editor-host.js 失败: ' + e.message); return; }
+  W.sbProject = { isProjectMode: function () { return true; } };   // 模拟项目模式
+  // 桩与真机语义一致：fileExtension 返回带点后缀（如 '.sql'，见 app-plugins.js）
+  W.fileExtension = function (p) { const m = /\.([a-z0-9]+)$/i.exec(String(p)); return m ? '.' + m[1].toLowerCase() : ''; };
+  const F = W.__sbProjFence;
+  assert(F && typeof F.wrap === 'function' && typeof F.unwrap === 'function',
+    'Bug-075-7: editor-host 暴露 __sbProjFence 工具集');
+  if (!F) { dom.window.close(); return; }
+  assert(F.langFor('2026/05/20260506.sql') === 'sql', 'Bug-075-8: .sql → sql fence 语言');
+  assert(F.langFor('note.md') === '', 'Bug-075-9: .md 不包装（保持 markdown 原生渲染）');
+  const raw = 'SELECT * FROM t;\nGO\n';
+  const wrapped = F.wrap('2026/05/20260506.sql', raw);
+  assert(wrapped.indexOf('```sql') === 0 && wrapped.indexOf('```sql') === wrapped.lastIndexOf('```sql'),
+    'Bug-075-10: 包装为 ```sql fence 代码块（开头单 fence）');
+  assert(F.unwrap('2026/05/20260506.sql', wrapped) === raw,
+    'Bug-075-11: wrap→unwrap 换行无损往返（磁盘/缓存恒为原文）');
+  assert(F.unwrap('2026/05/20260506.sql', raw) === raw && F.wrap('plain.xyz', raw) === raw,
+    'Bug-075-12: 未映射后缀/非包装格式原样返回（不破坏纯文本兜底）');
+  dom.window.close();
+}
+
+testProjectCodeFileHighlight();
+
 Promise.all([
   testCodeHighlightCopyBtn(),
   testRenameNoteFile(),
@@ -2103,6 +2279,7 @@ Promise.all([
   testFindbar(),
   testProjectFileTreeNoCrash(),
   testDefaultTreeCollapsed(),
+  testProjectModeTreeRouting(),
 ]).then(function () {
   console.log(`\n回归结果: ${pass} 通过, ${fail} 失败`);
   if (fail) process.exitCode = 1;
