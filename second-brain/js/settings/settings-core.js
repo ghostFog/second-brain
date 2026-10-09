@@ -59,6 +59,10 @@
     if (key === 'edMode') { const v = (val === '预览' || val === 'preview') ? 'preview' : 'edit'; setEditorMode(v); return '默认编辑模式：' + val; }
     if (key === 'edAutoSave') return on ? '自动保存已开启' : '自动保存已关闭';
     if (key === 'smartList') return on ? '智能列表延续已开启' : '智能列表延续已关闭';
+    if (key === 'codeLineNumbers') {
+      if (typeof window.vdCodeGutterSetEnabled === 'function') window.vdCodeGutterSetEnabled(on);
+      return on ? '行号已开启' : '行号已关闭';
+    }
     if (key.indexOf('openAs:') === 0) { const ext = key.slice(7); return ext ? '默认打开方式已更新：' + ext : null; }
     if (key === 'wrap') { setEditorWrap(on); return on ? '自动换行已开启' : '自动换行已关闭'; }
     if (key === 'reduceMotion') { applyReduceMotion(on); return on ? '减少动画已开启' : '减少动画已关闭'; }

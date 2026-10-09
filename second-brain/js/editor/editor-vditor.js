@@ -581,6 +581,8 @@
     }
     // sv 分屏源码行号随视图显隐刷新（非 sv 时自动清理）
     vdSvGutterRefresh();
+    // 代码块行号随布局切换重扫（IR/WYSIWYG/sv 三布局的唯一收口，隐藏 pane 由 offsetParent 判定跳过）
+    vdCodeLnSchedule();
   }
 
   /** 取视觉锚点元素（vditor 挂载容器） */
@@ -1169,15 +1171,15 @@
       // 也避免在仓库内 vendor 复制 vditor 导致 dist 迁移占用/历史膨胀（Bug-031）。
       cdn: 'node_modules/vditor',
       theme: resolveVdTheme().theme,
-      lineNumber: !!(typeof restoreS === 'function' ? restoreS('lineNumbers', true) : true),
       /* 工具栏 = 宿主内置项 + 插件/宿主经注入桥入队的自定义按钮（宽屏/列宽/大纲/全屏） */
       toolbar: VDTOOLBAR.concat(window.__sbVdToolbarInjects || []),
       preview: {
         delay: 50, cdn: '', mode: (vdPreview === 'both') ? 'both' : 'editor', transform: transformPreviewHtml,
         // 隐藏预览顶部的动作条（Desktop/Tablet/Mobile/Wechat/知乎 等预览动作按钮），置空 actions 即不渲染
         actions: [],
-        // 预览/阅读模式代码块行号已移除：vditor 内置 .vditor-linenumber 为绝对定位，不参与 pre 高度、
-        // 超区溢出且不随滚动条同步（见开发进度 ED-57）。源码模式行号由宿主自绘，与此无关。
+        // 预览/阅读模式代码块行号由宿主自绘（.sb-code-gutter，见下方「代码块行号」模块）：
+        // vditor 内置 .vditor-linenumber 与 code 内边距/字号错位不可修（Bug-065），故内置行号保持关闭，
+        // 仅以本配置防内置残留。源码模式行号由宿主自绘（vdSvGutterRefresh），与此无关。
         hljs: { lineNumber: false },
       },
       // 上传图片/附件：accept 覆盖图片与常用附件（pdf/office/脚本/压缩包等），
@@ -1222,6 +1224,8 @@
         sbEnsureToolbarHoverTips(target);
         // 新实例异步渲染完成后，通知插件大纲重建（切文档/分屏重建场景下标题实时跟随）
         window.sbOutlineNotify();
+        // 首帧补渲（setValue）完成后再扫一次代码块行号（observer 可能晚于补渲触发）
+        vdCodeLnSchedule();
       },
     };
     try {
@@ -1235,6 +1239,8 @@
       // 构建后确定性应用当前模式对应的视图显隐（sv 三种布局 / ir / wysiwyg），
       // 取代 vditor setPreviewMode（其对 'preview' 无效且会强制 sv 源码可见）
       applyVdVisibility();
+      // 构建即挂代码块行号观察器并首轮扫描（IR 渲染态/预览/阅读代码块行号）
+      vdCodeLnEnsureObserver();
     } catch (err) {
       vdInst = null;
       vdBuffer = value;
@@ -1558,8 +1564,144 @@
   }
   window.vdSvGutterRefresh = vdSvGutterRefresh;
 
+  /* ============================================================
+   * 代码块行号（宿主自绘 .sb-code-gutter）：覆盖 IR 渲染态 / 预览 / 阅读。
+   * 不开 vditor 内置行号（Bug-065 判定其 rows 与 code 内边距/字号错位不可修），
+   * 与 sv 源码行号同用 vdSvLineRows 实测断行，逐行对齐有保证。
+   * 设置键用新键 'codeLineNumbers'（默认开）：旧键 'lineNumbers' 是旧源码行号按钮的历史语义，
+   * 用户机器可能残留 false 值，新功能沿用会继承旧值导致默认不显示，故分键。
+   * IR 源码编辑态 / WYSIWYG 源码态 / 图表块排除。
+   * 作者: 火 冰
+   * ============================================================ */
+  const SB_CODE_LN_SKIP = ['mermaid', 'echarts', 'math', 'abc', 'plantuml', 'graphviz', 'flowchart', 'mindmap', 'katex', 'smiles'];
+  let vdCodeLnObs = null;        // MutationObserver 单例（重建实例时先 disconnect 再重挂，防泄漏）
+  let vdCodeLnScheduled = false; // rAF 合并标志：同一帧内多次触发只扫一次
+
+  /** 行号开关是否生效：惰性读持久化设置，默认开 */
+  function vdCodeLnOn() {
+    try { return !!(typeof restoreS === 'function' ? restoreS('codeLineNumbers', true) : true); }
+    catch (_) { return true; }
+  }
+
+  /** 判定一个 pre 是否为「可注入行号的渲染态代码块」。
+   * @param {Element} pre 待判定的 pre 元素
+   * @returns {Element|null} 可注入时返回其 code 元素，否则 null */
+  function vdCodeLnMatch(pre) {
+    if (!pre || pre.tagName !== 'PRE' || pre.offsetParent === null) return null;   // 隐藏 pane（如仅源码布局的预览侧）跳过，防 0 宽测量畸形
+    const cls = (typeof pre.className === 'string') ? pre.className : '';          // CD-45：className 判型后再用
+    if (/\bvditor-ir__marker--pre\b/.test(cls) || /\bvditor-wysiwyg__pre\b/.test(cls)) return null;   // 源码编辑态不带行号
+    const code = pre.querySelector('code');
+    if (!code) return null;
+    /* 渲染态判据：vditor 高亮渲染必给 code 加 hljs class（dist index.js L3202，未知语言回落 plaintext 也加），
+     * 而各编辑态（IR fence 编辑态 / IR 激活编辑态 pre.vditor-reset / WYSIWYG 源码态）一律无 hljs。
+     * 行号只挂在已高亮渲染的块上，以此兜底所有编辑态形态。 */
+    if (!/\bhljs\b/.test((typeof code.className === 'string') ? code.className : '')) return null;
+    const m = /language-([\w-]+)/.exec((typeof code.className === 'string') ? code.className : '');
+    if (m && SB_CODE_LN_SKIP.indexOf(m[1]) !== -1) return null;                    // 图表/公式块（会被替换渲染）
+    return code;
+  }
+
+  /** 取 pre 下已注入的行号列（children 遍历，兼容无 :scope 支持的环境） */
+  function vdCodeLnGutterOf(pre) {
+    for (let i = 0; i < pre.children.length; i++) {
+      const c = pre.children[i];
+      if (c.classList && c.classList.contains('sb-code-gutter')) return c;
+    }
+    return null;
+  }
+
+  /** 单块注入/更新：先让位（paddingLeft）再测量，保证 availW 为注入态真实宽；三元组去重未变跳过。
+   *  gutter 挂在 pre 下、code 外：highlightRender 重写 code.innerHTML 不伤行号列。 */
+  function vdCodeLnInject(pre, code) {
+    if (pre.style.position === '') pre.style.position = 'relative';
+    pre.style.paddingLeft = '36px';                          // 先占位让出左缘，clientWidth 随之收缩（再测量）
+    const cs = window.getComputedStyle(code);
+    const lh = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) || 16) * 1.4;
+    const availW = Math.max(0, code.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0));
+    const text = code.textContent || '';
+    const old = vdCodeLnGutterOf(pre);
+    if (old && old.__lnText === text && old.__lnW === availW.toFixed(1) && old.__lnLh === lh.toFixed(2)) return;   // 文本/宽度/行高未变不重建
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    const g = document.createElement('div');
+    g.className = 'sb-code-gutter';   // 命中 css/app.css 的 #ed-vditor .sb-code-gutter（CD-23 特异度）
+    g.__lnText = text; g.__lnW = availW.toFixed(1); g.__lnLh = lh.toFixed(2);
+    g.style.top = (code.offsetTop + (parseFloat(cs.paddingTop) || 0)) + 'px';   // 与首行文本对齐
+    const frag = document.createDocumentFragment();
+    const lines = text.replace(/\n$/, '').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const d = document.createElement('div');
+      d.textContent = String(i + 1);
+      const rows = vdSvLineRows(lines[i], availW, lh, cs);   // 复用 sv gutter 实测断行（复刻 pre-wrap + break-word）
+      d.style.height = (rows * lh).toFixed(2) + 'px';        // 换行后的真实行高，逐行与文本对齐
+      frag.appendChild(d);
+    }
+    g.appendChild(frag);
+    pre.appendChild(g);
+  }
+
+  /** 关闭态/反向拆除：移除 gutter 并还原 pre 内边距（CSS 类无法还原 JS 内联 padding，故整块拆除） */
+  function vdCodeLnTeardown(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll('pre > .sb-code-gutter').forEach(g => {
+      const pre = g.parentNode;
+      if (g.parentNode) g.parentNode.removeChild(g);
+      if (pre) pre.style.paddingLeft = '';
+    });
+  }
+
+  /** 扫描入口：开=逐块注入/更新，关=全量拆除（幂等，可重复调用） */
+  function vdCodeLnScan(root) {
+    if (!root || !root.querySelectorAll) return;
+    if (!vdCodeLnOn()) { vdCodeLnTeardown(root); return; }
+    root.querySelectorAll('pre').forEach(pre => {
+      const code = vdCodeLnMatch(pre);
+      if (code) vdCodeLnInject(pre, code);
+      else {                                                 // 曾注入后转为编辑态/图表块 → 还原
+        const g = vdCodeLnGutterOf(pre);
+        if (g) { if (g.parentNode) g.parentNode.removeChild(g); pre.style.paddingLeft = ''; }
+      }
+    });
+  }
+
+  /** rAF 合并调度：同一帧内多次触发（observer/回调/resize）只扫一次 */
+  function vdCodeLnSchedule() {
+    if (vdCodeLnScheduled) return;
+    vdCodeLnScheduled = true;
+    const run = function () { vdCodeLnScheduled = false; vdCodeLnScan(document.getElementById('ed-vditor')); };
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(run);
+    else setTimeout(run, 0);
+  }
+
+  /** 挂/重挂观察器到当前实例根：childList（代码块渲染/重建）+ attributes（class=IR 编辑态切换、
+   *  style=applyVdVisibility 切 pane display）。回调只 schedule，扫描在 rAF 中统一做。 */
+  function vdCodeLnEnsureObserver() {
+    const rootEl = (vdInst && vdInst.vditor && vdInst.vditor.element) || document.getElementById('ed-vditor');
+    if (!rootEl) return;
+    if (vdCodeLnObs) vdCodeLnObs.disconnect();
+    vdCodeLnObs = new MutationObserver(function () {
+      if (!rootEl.isConnected) return;                       // 脱离文档（CD-02/CD-54）不再处理
+      vdCodeLnSchedule();
+    });
+    vdCodeLnObs.observe(rootEl, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+    vdCodeLnSchedule();
+  }
+
+  /* 开关切换副作用入口（设置页调用）：关=立即全量拆除，开=重扫注入 */
+  window.vdCodeGutterSetEnabled = function (on) {
+    const rootEl = document.getElementById('ed-vditor');
+    if (!on && rootEl) vdCodeLnTeardown(rootEl);
+    vdCodeLnSchedule();
+  };
+  /* 测试/调试钩子（仿 __sbProjFence 惯例）：扫描核心纯 DOM 可测 */
+  window.vdCodeGutterScan = vdCodeLnScan;
+
+  if (!(navigator && /jsdom/i.test(navigator.userAgent))) {
+    window.addEventListener('resize', vdCodeLnSchedule);     // 宽度变化 → availW 变化 → 去重键失效重建
+  }
+
   /** 销毁实例（切库/卸载编辑器时释放资源） */
   window.vdDestroy = function () {
+    if (vdCodeLnObs) { vdCodeLnObs.disconnect(); vdCodeLnObs = null; }   // 同步拆代码块行号观察器，防跨实例泄漏
     if (vdInst) { try { vdInst.destroy(); } catch (_) { /* 忽略 */ } }
     vdInst = null;
   };

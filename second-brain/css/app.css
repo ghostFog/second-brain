@@ -71,6 +71,18 @@
   overflow: hidden; user-select: none; pointer-events: none; z-index: 6; white-space: nowrap;
 }
 
+/* ---------- 代码块行号列（宿主自绘，配合 editor-vditor.js vdCodeLnInject；IR 渲染态/预览/阅读通用） ----------
+ * 背景透明融入 hljs 代码块背景（CD-33：内容层颜色取 --note-*），paddingLeft 让位由 JS 内联设置/还原。
+ * 作者: 火 冰 */
+#ed-vditor .vditor-reset pre { position: relative; }   /* gutter 定位锚点（vditor 未给 pre 设 position，覆盖安全） */
+#ed-vditor .sb-code-gutter {
+  position: absolute; left: 0; width: 28px; box-sizing: border-box;
+  font-family: var(--note-font-mono); font-size: 12px;
+  color: var(--note-ink-3);
+  text-align: right; padding-right: 6px;
+  overflow: hidden; user-select: none; pointer-events: none; z-index: 1; white-space: nowrap;
+}
+
 /* ---------- 源码模式当前行高亮：绝对定位半透明色带，铺在 textarea 上（不拦截交互），位置/尺寸由 JS 计算 ----------
  * 作者: 火 冰 */
 .ed-current-line {

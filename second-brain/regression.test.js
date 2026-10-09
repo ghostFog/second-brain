@@ -2270,6 +2270,113 @@ function testProjectCodeFileHighlight() {
 
 testProjectCodeFileHighlight();
 
+/* ---- ED-59: 编辑器代码块显示行号（宿主自绘 .sb-code-gutter） ----
+ * 需求: IR 渲染态/预览/阅读的代码块统一显示行号；恢复设置-编辑器「显示行号」开关（默认开）。
+ * 方案: 不开 vditor 内置行号（Bug-065 判定错位不可修），宿主 MutationObserver 观察 #ed-vditor
+ *       子树 → rAF 合并 → 扫描渲染态 pre>code 注入行号列，行高复用 vdSvLineRows 实测断行逐行对齐；
+ *       IR/WYSIWYG 源码编辑态与图表块排除；vdDestroy 同步拆观察器。
+ * 断言: 源码（模块结构/排除/接线/开关/样式/死代码清理）+ 行为（jsdom 注入/排除/幂等/开关切换）。
+ * 作者: 火 冰 */
+function testCodeBlockLineNumbers() {
+  // ===== 源码断言 =====
+  const vdSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  const hostSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-host.js'), 'utf8');
+  const panelsSrc = fs.readFileSync(path.join(__dirname, 'js', 'settings', 'settings-panels.js'), 'utf8');
+  const coreSrc = fs.readFileSync(path.join(__dirname, 'js', 'settings', 'settings-core.js'), 'utf8');
+  const cssSrc = fs.readFileSync(path.join(__dirname, 'css', 'app.css'), 'utf8');
+  assert(vdSrc.indexOf('sb-code-gutter') !== -1
+    && vdSrc.indexOf('vditor-ir__marker--pre') !== -1 && vdSrc.indexOf('vditor-wysiwyg__pre') !== -1,
+    'ED-59-1: 自绘代码块行号 .sb-code-gutter 且排除 IR/WYSIWYG 源码编辑态');
+  assert(vdSrc.indexOf('if (!/\\bhljs\\b/.test(') !== -1,
+    'ED-59-1b: 渲染态判据=code 带 hljs class（兜底 IR 激活编辑态 pre.vditor-reset 等所有编辑态形态）');
+  assert(/SB_CODE_LN_SKIP = \[[^\]]*mermaid/.test(vdSrc),
+    'ED-59-2: 图表/公式语言块（mermaid 等）排除注入');
+  assert(/window\.vdCodeGutterSetEnabled = function/.test(vdSrc)
+    && /window\.vdCodeGutterScan = vdCodeLnScan/.test(vdSrc)
+    && /vdSvLineRows\(lines\[i\], availW, lh, cs\)/.test(vdSrc),
+    'ED-59-3: 暴露开关/扫描钩子并复用 vdSvLineRows 实测断行');
+  assert(/if \(vdCodeLnObs\) \{ vdCodeLnObs\.disconnect\(\); vdCodeLnObs = null; \}/.test(vdSrc),
+    'ED-59-4: vdDestroy 同步拆代码块行号观察器（防跨实例泄漏）');
+  assert(/vdSvGutterRefresh\(\);[\s\S]{0,120}vdCodeLnSchedule\(\);/.test(vdSrc),
+    'ED-59-5: applyVdVisibility 布局切换收口处重扫代码块行号');
+  assert(panelsSrc.indexOf("tgRow('显示行号'") !== -1 && panelsSrc.indexOf("'codeLineNumbers'") !== -1,
+    'ED-59-6: 设置-编辑器恢复「显示行号」开关（codeLineNumbers，新键避免继承旧 lineNumbers 残留值）');
+  assert(/key === 'codeLineNumbers'/.test(coreSrc)
+    && /typeof window\.vdCodeGutterSetEnabled === 'function'/.test(coreSrc),
+    'ED-59-7: 设置副作用接 vdCodeGutterSetEnabled（带守卫）');
+  assert(hostSrc.indexOf('toggle-line-numbers') === -1,
+    'ED-59-8: editor-host 清理旧行号按钮绑定死代码');
+  assert(cssSrc.indexOf('#ed-vditor .sb-code-gutter') !== -1,
+    'ED-59-9: app.css 定义代码块行号列样式（#ed-vditor 特异度）');
+
+  // ===== 行为断言（jsdom）=====
+  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
+    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  W.restoreS = function () { return true; };   // 行号开关默认开
+  W.saveS = function () {};
+  try {
+    const s = W.document.createElement('script');
+    s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+    W.document.head.appendChild(s);
+  } catch (e) { assert(false, 'ED-59-10: 注入 editor-vditor.js 失败: ' + e.message); dom.window.close(); return; }
+  const scan = W.vdCodeGutterScan;
+  assert(typeof scan === 'function', 'ED-59-10: editor-vditor 暴露 vdCodeGutterScan 扫描钩子');
+  if (typeof scan !== 'function') { dom.window.close(); return; }
+
+  // 构造测试 DOM：普通代码块（3 行）+ mermaid 块 + IR fence 编辑态块 + IR 激活编辑态块 + 行内 code
+  const root = W.document.createElement('div');
+  root.id = 'ed-vditor';
+  root.innerHTML =
+    '<pre><code class="language-js hljs">const a = 1;\nconst b = 2;\nconst c = 3;\n</code></pre>'
+    + '<pre><code class="language-mermaid">graph TD</code></pre>'
+    + '<pre class="vditor-ir__marker--pre"><code class="language-sql">SELECT 1;</code></pre>'
+    + '<pre class="vditor-reset"><code class="language-sql">SELECT 2;</code></pre>'
+    + '<p>行内 <code>code</code> 不受影响</p>';
+  W.document.body.appendChild(root);
+  // jsdom 无布局：offsetParent 恒 null（真机仅 display:none 祖先才为 null），逐 pre 桩为 body
+  [].forEach.call(root.querySelectorAll('pre'), p => {
+    Object.defineProperty(p, 'offsetParent', { value: W.document.body, configurable: true });
+  });
+
+  scan(root);
+  const pres = root.querySelectorAll('pre');
+  const gutters = root.querySelectorAll('.sb-code-gutter');
+  assert(gutters.length === 1 && gutters[0].parentNode === pres[0],
+    'ED-59-11: 仅普通渲染态代码块注入行号列');
+  assert(gutters.length && gutters[0].children.length === 3,
+    'ED-59-12: 行号 div 数 = 代码逻辑行数（3 行，末尾换行不产生空行号）');
+  assert(pres[0].style.paddingLeft === '36px',
+    'ED-59-13: pre 注入后让位 paddingLeft=36px');
+  assert(!vdQueryGutter(pres[1]) && !vdQueryGutter(pres[2]) && !vdQueryGutter(pres[3]),
+    'ED-59-14: mermaid 块 / IR fence 编辑态块 / IR 激活编辑态块（pre.vditor-reset 无 hljs）均不注入');
+  assert(pres[1].style.paddingLeft === '' && pres[2].style.paddingLeft === '' && pres[3].style.paddingLeft === '',
+    'ED-59-15: 排除块不让位内边距');
+  gutters[0].__lnKeep = 1;                       // 幂等标记：去重命中则元素不重建、标记保留
+  scan(root);
+  const g2 = root.querySelectorAll('.sb-code-gutter');
+  assert(g2.length === 1 && g2[0].__lnKeep === 1,
+    'ED-59-16: 二次扫描幂等（文本/宽度/行高未变不重建）');
+  W.restoreS = function () { return false; };    // 关开关
+  scan(root);
+  assert(root.querySelectorAll('.sb-code-gutter').length === 0 && pres[0].style.paddingLeft === '',
+    'ED-59-17: 开关关闭 → 全量拆除且还原内边距');
+  W.restoreS = function () { return true; };     // 重开
+  scan(root);
+  assert(root.querySelectorAll('.sb-code-gutter').length === 1,
+    'ED-59-18: 开关重开 → 重新注入');
+  dom.window.close();
+}
+/** 查 pre 下已注入的行号列（测试辅助，与产品 vdCodeLnGutterOf 同语义） */
+function vdQueryGutter(pre) {
+  for (let i = 0; i < pre.children.length; i++) {
+    if (pre.children[i].classList && pre.children[i].classList.contains('sb-code-gutter')) return pre.children[i];
+  }
+  return null;
+}
+
+testCodeBlockLineNumbers();
+
 Promise.all([
   testCodeHighlightCopyBtn(),
   testRenameNoteFile(),

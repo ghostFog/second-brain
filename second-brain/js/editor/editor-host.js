@@ -780,12 +780,7 @@
     setEditorWrap(restoreS('wrap', true));
     applyDensity(restoreS('density', '标准'));
     applyReduceMotion(restoreS('reduceMotion', false));
-    // 行号开关：恢复持久化设置并绑定工具栏按钮（点击切换，与设置「显示行号」联动）
-    edLineNum = !!restoreS('lineNumbers', true);
-    document.querySelectorAll('[data-action="toggle-line-numbers"]').forEach(b => {
-      b.addEventListener('click', function () { setLineNumbers(!edLineNum); });
-    });
-    updateGutter();
+    // 代码块行号（codeLineNumbers 设置）由 editor-vditor.js 代码块行号模块惰性读取，此处不再绑定旧工具栏按钮
     // 窗口尺寸变化时，编辑区 textarea 的位置/换行会随布局改变，需刷新行号 gutter 与当前行高亮，
     // 否则行号列（绝对定位）仍按旧坐标计算导致序号错位。仅绑定一次，避免多次切回重复注册。
     if (!window.__sbEdResizeBound) {
