@@ -73,14 +73,52 @@
 
 /* ---------- 代码块行号列（宿主自绘，配合 editor-vditor.js vdCodeLnInject；IR 渲染态/预览/阅读通用） ----------
  * 背景透明融入 hljs 代码块背景（CD-33：内容层颜色取 --note-*），paddingLeft 让位由 JS 内联设置/还原。
- * 作者: 火 冰 */
-#ed-vditor .vditor-reset pre { position: relative; }   /* gutter 定位锚点（vditor 未给 pre 设 position，覆盖安全） */
+ * 作者: 火 冰
+ *
+ * 唯一滚动源策略：让 .vditor-reset（vditor 编辑区容器）成为**唯一**滚动容器。
+ * pre 和 code 全部设 overflow: visible + width: 100%，长行自然溢出到外层统一滚动。
+ * 根因：CSS 规范「overflow-x 非 visible → overflow-y 的 visible 自动变 auto」是浏览器强制行为，
+ * 任何 !important 都覆盖不了。所以不能在 pre 上单独设 overflow-x:auto，
+ * 否则 pre 自己会产生纵向滚动条，和外层 .vditor-reset 叠加 → 2 个滚动条。
+ * 另外 width:100% 是必须的——block 元素在 overflow 环境下可能触发 shrink-to-fit，
+ * 导致宽度塌缩成 1ch（每行单文字）。 */
+#ed-vditor .vditor-reset pre {
+  position: relative;         /* gutter 定位锚点 */
+  width: 100%;                /* 撑满父容器，防止 shrink-to-fit 塌缩 */
+  box-sizing: border-box;
+  overflow: visible !important;   /* pre 不滚动，溢出到外层 vditor-reset */
+}
+/* code 层也完全不滚动：覆盖 vditor 默认 overflow:auto + hljs 主题 overflow-x:auto */
+#ed-vditor .vditor-reset pre > code.hljs {
+  width: 100%;                /* 撑满 pre，和 pre 同宽 */
+  box-sizing: border-box;
+  overflow: visible !important;
+}
+/* 换行模式：pre-wrap 让代码自动折行，不需要任何滚动条 */
+#ed-vditor .vditor-reset pre.sb-code-wrap > code.hljs {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 #ed-vditor .sb-code-gutter {
   position: absolute; left: 0; width: 28px; box-sizing: border-box;
   font-family: var(--note-font-mono); font-size: 12px;
   color: var(--note-ink-3);
   text-align: right; padding-right: 6px;
   overflow: hidden; user-select: none; pointer-events: none; z-index: 1; white-space: nowrap;
+}
+
+/* ---------- 代码块悬浮工具栏（已废弃：行号/换行按钮移至顶部编辑器工具栏） ----------
+ * 保留样式但隐藏，避免旧 DOM 残留时视觉异常。作者: 火 冰 */
+#ed-vditor .sb-code-toolbar { display: none !important; }
+
+/* ---------- 编辑器工具栏自定义按钮激活态（行号/换行） ----------
+ * 顶部工具栏按钮激活时高亮显示，蓝色强调。作者: 火 冰 */
+#ed-vditor .vditor-toolbar button.is-on {
+  color: var(--note-brand-300, #7dd3fc) !important;
+  background: var(--note-surface-2) !important;
+}
+#ed-vditor .vditor-toolbar button.is-on:hover {
+  color: var(--note-brand-300, #7dd3fc) !important;
 }
 
 /* ---------- 源码模式当前行高亮：绝对定位半透明色带，铺在 textarea 上（不拦截交互），位置/尺寸由 JS 计算 ----------
@@ -866,3 +904,13 @@ body.enc-locked .app-main { visibility: hidden; }
 .vditor-reset pre code.hljs-line-numbers,
 .vditor-reset pre.hljs-line-numbers,
 .vditor-reset pre table.hljs-ln td:first-child { display: none !important; }
+
+/* ---------- 第三方 Provider 编辑区容器（CodeMirror 等） ----------
+ * 宿主 renderArticle 路由到第三方 Provider 时，会把 Provider DOM 插到这个容器里。
+ * 必须撑满 #ed-vditor（宿主编辑区容器），Provider 自渲染编辑器内部再占满。
+ * 作者: 火 冰 */
+#ed-vditor .sb-provider-dom {
+  width: 100%; height: 100%;
+  overflow: hidden;               /* CodeMirror 自己处理滚动 */
+  box-sizing: border-box;
+}

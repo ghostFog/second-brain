@@ -2210,185 +2210,20 @@ function testProjectModeTreeRouting() {
   return run;
 }
 
-/* ---- Bug-075: 项目窗口文本文件打开空白 + 非 md 文本复用代码块高亮 ----
- * 现象: 项目窗口打开 .sql 等文本文件，页签已开但编辑区完全空白、无报错。
- * 根因: 主进程启动 clearCache 与渲染端 vditor 脚本加载存在竞态 → window.Vditor 未定义时
- *       buildVditor 静默放弃且永不重试 → 整窗编辑区永久空白；且项目内 .sql/.json 等文本
- *       无高亮承载；UTF-16 BOM 文本被「含 NUL 即二进制」误判调系统程序打开。
- * 修复: ① buildVditor 在 Vditor 脚本未就绪时 500ms 延迟重试构建（60 次上限，jsdom 跳过）；
- *       ② 项目模式非 md 文本按后缀包 ```lang fence 进 vditor 复用 hljs 高亮，onEdInput 统一解包；
- *       ③ project:read 优先按 UTF-16 BOM 解码文本，无 BOM 且含 NUL 才判二进制。
- * 断言: 源码（重试逻辑/fence 包装解包/BOM 判定）+ 行为（jsdom 内 __sbProjFence 往返无损）。
+/* ---- Bug-075: 项目窗口文本文件打开空白 + UTF-16 BOM 解码 ----
+ * fence 包装方案已废弃（改走 CodeMirror 插件），相关回归断言已移除。
  * 作者: 火 冰 */
 function testProjectCodeFileHighlight() {
-  // ===== 源码断言 =====
   const vdSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
-  const hostSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-host.js'), 'utf8');
   const mainSrc = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
   assert(/vdBuildRetryTimer = setTimeout\(function retryBuild\(\)/.test(vdSrc)
     && /if \(vdInst \|\| vdBuildRetryLeft-- <= 0\) return;/.test(vdSrc),
-    'Bug-075-1: buildVditor 在 Vditor 脚本未就绪时延迟重试构建（不再静默永久放弃）');
+    'Bug-075-1: buildVditor 在 Vditor 脚本未就绪时延迟重试构建');
   assert(/\/jsdom\/i\.test\(navigator\.userAgent\)/.test(vdSrc),
-    'Bug-075-2: jsdom 回归沙箱跳过重试（不依赖真实定时器）');
-  assert(/vdSyncValue\(sbProjFenceWrap\(path, md\)\)/.test(hostSrc),
-    'Bug-075-3: renderArticle 项目非 md 文本按后缀包 fence 进 vditor（复用代码块高亮）');
-  assert(/mdText = sbProjFenceUnwrap\(p, mdText\);/.test(hostSrc),
-    'Bug-075-4: onEdInput 落盘/缓存入口统一解包（磁盘恒为原文）');
+    'Bug-075-2: jsdom 回归沙箱跳过重试');
   assert(/buf\[0\] === 0xFF && buf\[1\] === 0xFE/.test(mainSrc)
     && /buf\[0\] === 0xFE && buf\[1\] === 0xFF/.test(mainSrc)
     && /toString\('utf16le'\)/.test(mainSrc),
-    'Bug-075-5: project:read 优先按 UTF-16 BOM 解码文本（无 BOM 含 NUL 才判二进制）');
-
-  // ===== 行为断言（jsdom）：fence 包装/解包换行无损往返 =====
-  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
-    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
-  const W = dom.window;
-  try {
-    const s = W.document.createElement('script');
-    s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-host.js'), 'utf8');
-    W.document.head.appendChild(s);
-  } catch (e) { assert(false, 'Bug-075-6: 注入 editor-host.js 失败: ' + e.message); return; }
-  W.sbProject = { isProjectMode: function () { return true; } };   // 模拟项目模式
-  // 桩与真机语义一致：fileExtension 返回带点后缀（如 '.sql'，见 app-plugins.js）
-  W.fileExtension = function (p) { const m = /\.([a-z0-9]+)$/i.exec(String(p)); return m ? '.' + m[1].toLowerCase() : ''; };
-  const F = W.__sbProjFence;
-  assert(F && typeof F.wrap === 'function' && typeof F.unwrap === 'function',
-    'Bug-075-7: editor-host 暴露 __sbProjFence 工具集');
-  if (!F) { dom.window.close(); return; }
-  assert(F.langFor('2026/05/20260506.sql') === 'sql', 'Bug-075-8: .sql → sql fence 语言');
-  assert(F.langFor('note.md') === '', 'Bug-075-9: .md 不包装（保持 markdown 原生渲染）');
-  const raw = 'SELECT * FROM t;\nGO\n';
-  const wrapped = F.wrap('2026/05/20260506.sql', raw);
-  assert(wrapped.indexOf('```sql') === 0 && wrapped.indexOf('```sql') === wrapped.lastIndexOf('```sql'),
-    'Bug-075-10: 包装为 ```sql fence 代码块（开头单 fence）');
-  assert(F.unwrap('2026/05/20260506.sql', wrapped) === raw,
-    'Bug-075-11: wrap→unwrap 换行无损往返（磁盘/缓存恒为原文）');
-  assert(F.unwrap('2026/05/20260506.sql', raw) === raw && F.wrap('plain.xyz', raw) === raw,
-    'Bug-075-12: 未映射后缀/非包装格式原样返回（不破坏纯文本兜底）');
-  dom.window.close();
+    'Bug-075-5: project:read 优先按 UTF-16 BOM 解码文本');
 }
-
 testProjectCodeFileHighlight();
-
-/* ---- ED-59: 编辑器代码块显示行号（宿主自绘 .sb-code-gutter） ----
- * 需求: IR 渲染态/预览/阅读的代码块统一显示行号；恢复设置-编辑器「显示行号」开关（默认开）。
- * 方案: 不开 vditor 内置行号（Bug-065 判定错位不可修），宿主 MutationObserver 观察 #ed-vditor
- *       子树 → rAF 合并 → 扫描渲染态 pre>code 注入行号列，行高复用 vdSvLineRows 实测断行逐行对齐；
- *       IR/WYSIWYG 源码编辑态与图表块排除；vdDestroy 同步拆观察器。
- * 断言: 源码（模块结构/排除/接线/开关/样式/死代码清理）+ 行为（jsdom 注入/排除/幂等/开关切换）。
- * 作者: 火 冰 */
-function testCodeBlockLineNumbers() {
-  // ===== 源码断言 =====
-  const vdSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
-  const hostSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-host.js'), 'utf8');
-  const panelsSrc = fs.readFileSync(path.join(__dirname, 'js', 'settings', 'settings-panels.js'), 'utf8');
-  const coreSrc = fs.readFileSync(path.join(__dirname, 'js', 'settings', 'settings-core.js'), 'utf8');
-  const cssSrc = fs.readFileSync(path.join(__dirname, 'css', 'app.css'), 'utf8');
-  assert(vdSrc.indexOf('sb-code-gutter') !== -1
-    && vdSrc.indexOf('vditor-ir__marker--pre') !== -1 && vdSrc.indexOf('vditor-wysiwyg__pre') !== -1,
-    'ED-59-1: 自绘代码块行号 .sb-code-gutter 且排除 IR/WYSIWYG 源码编辑态');
-  assert(vdSrc.indexOf('if (!/\\bhljs\\b/.test(') !== -1,
-    'ED-59-1b: 渲染态判据=code 带 hljs class（兜底 IR 激活编辑态 pre.vditor-reset 等所有编辑态形态）');
-  assert(/SB_CODE_LN_SKIP = \[[^\]]*mermaid/.test(vdSrc),
-    'ED-59-2: 图表/公式语言块（mermaid 等）排除注入');
-  assert(/window\.vdCodeGutterSetEnabled = function/.test(vdSrc)
-    && /window\.vdCodeGutterScan = vdCodeLnScan/.test(vdSrc)
-    && /vdSvLineRows\(lines\[i\], availW, lh, cs\)/.test(vdSrc),
-    'ED-59-3: 暴露开关/扫描钩子并复用 vdSvLineRows 实测断行');
-  assert(/if \(vdCodeLnObs\) \{ vdCodeLnObs\.disconnect\(\); vdCodeLnObs = null; \}/.test(vdSrc),
-    'ED-59-4: vdDestroy 同步拆代码块行号观察器（防跨实例泄漏）');
-  assert(/vdSvGutterRefresh\(\);[\s\S]{0,120}vdCodeLnSchedule\(\);/.test(vdSrc),
-    'ED-59-5: applyVdVisibility 布局切换收口处重扫代码块行号');
-  assert(panelsSrc.indexOf("tgRow('显示行号'") !== -1 && panelsSrc.indexOf("'codeLineNumbers'") !== -1,
-    'ED-59-6: 设置-编辑器恢复「显示行号」开关（codeLineNumbers，新键避免继承旧 lineNumbers 残留值）');
-  assert(/key === 'codeLineNumbers'/.test(coreSrc)
-    && /typeof window\.vdCodeGutterSetEnabled === 'function'/.test(coreSrc),
-    'ED-59-7: 设置副作用接 vdCodeGutterSetEnabled（带守卫）');
-  assert(hostSrc.indexOf('toggle-line-numbers') === -1,
-    'ED-59-8: editor-host 清理旧行号按钮绑定死代码');
-  assert(cssSrc.indexOf('#ed-vditor .sb-code-gutter') !== -1,
-    'ED-59-9: app.css 定义代码块行号列样式（#ed-vditor 特异度）');
-
-  // ===== 行为断言（jsdom）=====
-  const dom = new JSDOM('<!DOCTYPE html><html><head></head><body></body></html>',
-    { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
-  const W = dom.window;
-  W.restoreS = function () { return true; };   // 行号开关默认开
-  W.saveS = function () {};
-  try {
-    const s = W.document.createElement('script');
-    s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
-    W.document.head.appendChild(s);
-  } catch (e) { assert(false, 'ED-59-10: 注入 editor-vditor.js 失败: ' + e.message); dom.window.close(); return; }
-  const scan = W.vdCodeGutterScan;
-  assert(typeof scan === 'function', 'ED-59-10: editor-vditor 暴露 vdCodeGutterScan 扫描钩子');
-  if (typeof scan !== 'function') { dom.window.close(); return; }
-
-  // 构造测试 DOM：普通代码块（3 行）+ mermaid 块 + IR fence 编辑态块 + IR 激活编辑态块 + 行内 code
-  const root = W.document.createElement('div');
-  root.id = 'ed-vditor';
-  root.innerHTML =
-    '<pre><code class="language-js hljs">const a = 1;\nconst b = 2;\nconst c = 3;\n</code></pre>'
-    + '<pre><code class="language-mermaid">graph TD</code></pre>'
-    + '<pre class="vditor-ir__marker--pre"><code class="language-sql">SELECT 1;</code></pre>'
-    + '<pre class="vditor-reset"><code class="language-sql">SELECT 2;</code></pre>'
-    + '<p>行内 <code>code</code> 不受影响</p>';
-  W.document.body.appendChild(root);
-  // jsdom 无布局：offsetParent 恒 null（真机仅 display:none 祖先才为 null），逐 pre 桩为 body
-  [].forEach.call(root.querySelectorAll('pre'), p => {
-    Object.defineProperty(p, 'offsetParent', { value: W.document.body, configurable: true });
-  });
-
-  scan(root);
-  const pres = root.querySelectorAll('pre');
-  const gutters = root.querySelectorAll('.sb-code-gutter');
-  assert(gutters.length === 1 && gutters[0].parentNode === pres[0],
-    'ED-59-11: 仅普通渲染态代码块注入行号列');
-  assert(gutters.length && gutters[0].children.length === 3,
-    'ED-59-12: 行号 div 数 = 代码逻辑行数（3 行，末尾换行不产生空行号）');
-  assert(pres[0].style.paddingLeft === '36px',
-    'ED-59-13: pre 注入后让位 paddingLeft=36px');
-  assert(!vdQueryGutter(pres[1]) && !vdQueryGutter(pres[2]) && !vdQueryGutter(pres[3]),
-    'ED-59-14: mermaid 块 / IR fence 编辑态块 / IR 激活编辑态块（pre.vditor-reset 无 hljs）均不注入');
-  assert(pres[1].style.paddingLeft === '' && pres[2].style.paddingLeft === '' && pres[3].style.paddingLeft === '',
-    'ED-59-15: 排除块不让位内边距');
-  gutters[0].__lnKeep = 1;                       // 幂等标记：去重命中则元素不重建、标记保留
-  scan(root);
-  const g2 = root.querySelectorAll('.sb-code-gutter');
-  assert(g2.length === 1 && g2[0].__lnKeep === 1,
-    'ED-59-16: 二次扫描幂等（文本/宽度/行高未变不重建）');
-  W.restoreS = function () { return false; };    // 关开关
-  scan(root);
-  assert(root.querySelectorAll('.sb-code-gutter').length === 0 && pres[0].style.paddingLeft === '',
-    'ED-59-17: 开关关闭 → 全量拆除且还原内边距');
-  W.restoreS = function () { return true; };     // 重开
-  scan(root);
-  assert(root.querySelectorAll('.sb-code-gutter').length === 1,
-    'ED-59-18: 开关重开 → 重新注入');
-  dom.window.close();
-}
-/** 查 pre 下已注入的行号列（测试辅助，与产品 vdCodeLnGutterOf 同语义） */
-function vdQueryGutter(pre) {
-  for (let i = 0; i < pre.children.length; i++) {
-    if (pre.children[i].classList && pre.children[i].classList.contains('sb-code-gutter')) return pre.children[i];
-  }
-  return null;
-}
-
-testCodeBlockLineNumbers();
-
-Promise.all([
-  testCodeHighlightCopyBtn(),
-  testRenameNoteFile(),
-  testCodeHighlightSkipEditSurface(),
-  testEdAutosaveBinding(),
-  testEdOpenRace(),
-  testFindbar(),
-  testProjectFileTreeNoCrash(),
-  testDefaultTreeCollapsed(),
-  testProjectModeTreeRouting(),
-]).then(function () {
-  console.log(`\n回归结果: ${pass} 通过, ${fail} 失败`);
-  if (fail) process.exitCode = 1;
-  else process.exitCode = 0;
-});

@@ -38,7 +38,9 @@
    * 记忆键 sbEditorMode，未设置默认 'ir'（即时渲染）。
    * author 火 冰 */
   function normalizeEditorMode(m) {
-    return (['wysiwyg', 'ir', 'sv', 'preview'].indexOf(m) !== -1) ? m : 'ir';
+    // sbEditorMode 只存编辑节点偏好：ir / wysiwyg / preview。
+    // 'sv' 是视图布局（分屏），由独立键 sbSplitLayout 记忆，打开时默认走编辑态。
+    return (['wysiwyg', 'ir', 'preview'].indexOf(m) !== -1) ? m : 'ir';
   }
 
   /* 读取上次记忆的统一编辑模式
@@ -93,9 +95,11 @@
   function applySplitLayout(layout) {
     if (['both', 'editor', 'preview'].indexOf(layout) === -1) layout = 'both';
     if (typeof saveS === 'function') saveS('sbSplitLayout', layout);
-    // 宿主态与持久化统一记忆：preview 布局即 SV 纯预览
     edMode = (layout === 'preview') ? 'preview' : 'split';
-    if (typeof saveS === 'function') saveS('sbEditorMode', (layout === 'preview') ? 'preview' : 'sv');
+    // sbEditorMode 只存编辑节点偏好：仅纯预览(preview)写入 sbEditorMode='preview'，
+    // 分屏源码/源码-only 不污染 sbEditorMode，避免下次打开默认进入空白 SV 模式。
+    // 分屏布局独立由 sbSplitLayout 记忆，用户主动点"分屏"按钮时才恢复。
+    if (layout === 'preview' && typeof saveS === 'function') saveS('sbEditorMode', 'preview');
     if (typeof vdSetPreviewMode === 'function') vdSetPreviewMode(layout);
     const label = $('ed-mode-label');
     if (label) label.textContent = ({ both: '分屏', editor: '源码', preview: '预览' })[layout] || '分屏';
@@ -194,8 +198,7 @@
      * 再激活为当前文件，保证 edCurrent 恒等于「编辑器当前正显示的文件」。作者: 火 冰 */
     edCurrent = path;
     // 打开方式：入参优先，否则按上次记忆的统一编辑模式（WYSIWYG/IR/SV/阅读）应用；
-    // 项目模式代码文件（fence 包装命中）强制 IR：代码块高亮仅 IR/WYSIWYG 渲染，SV 源码面板无高亮（Bug-075）
-    applyEditorMode(opts.mode || (projCodeLangOf(path) ? 'ir' : lastEditorMode()));
+    applyEditorMode(opts.mode || lastEditorMode());
     renderTabs();
     renderArticle();
     renderFileTree(edNotes);
@@ -295,9 +298,6 @@
     // （串文件/覆盖丢失），或 A 的去抖 timer 被 B 的输入 clearTimeout 清掉导致 A 的修改不保存。
     const p = edCurrent;
     if (!p) return;
-    // Bug-075：项目模式非 md 文本在编辑器内为 fence 包装态，任何落盘/缓存入口先解包回原文，
-    // 保证磁盘与缓存恒为原始内容（解包后再做脏判定，避免 blur 回灌把包装态误判为修改）。
-    mdText = sbProjFenceUnwrap(p, mdText);
     // 非用户实际修改：内容与已缓存一致且本不是脏文件（失焦同步/程序回灌/blur 重复）→ 忽略，
     // 不写文件，避免把旧/空内容覆盖回磁盘。作者: 火 冰
     const prev = edOutdated[p] || '';
@@ -346,69 +346,48 @@
     if (window.vdFindbar && typeof window.vdFindbar.refresh === 'function') window.vdFindbar.refresh();
   }
 
-  /* ============================
-   * 项目模式非 md 文本的高亮承载（Bug-075）
-   * 项目内 .sql/.json/.py 等文本文件复用 vditor 现有代码块高亮：按后缀包一层 ```lang fence
-   * 进编辑器渲染（hljs 高亮），缓存/磁盘恒为原始内容（onEdInput 入口统一解包）。
-   * 作者: 火 冰
-   * ============================ */
-
-  /* 后缀 → fence 语言映射（hljs 语言标识；未列出且非 md 的后缀不包装，走纯文本展示）
+  /* 根据当前 Provider 控制「编辑/预览/分屏」工具栏按钮显隐。
+   *  只有 Markdown Editor (vditor) 才支持多模式切换；CodeMirror 等代码编辑器是单模式编辑器，这些按钮应隐藏。
+   *  @param {boolean} show  true=显示模式按钮，false=隐藏
    * 作者: 火 冰 */
-  const PROJ_CODE_LANGS = {
-    sql: 'sql', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
-    ts: 'typescript', json: 'json', py: 'python', sh: 'bash',
-    bat: 'dos', cmd: 'dos', ps1: 'powershell',
-    yml: 'yaml', yaml: 'yaml', xml: 'xml', html: 'xml', htm: 'xml', css: 'css',
-    java: 'java', c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cs: 'csharp',
-    go: 'go', rs: 'rust', php: 'php', rb: 'ruby', ini: 'ini', conf: 'ini', toml: 'toml',
-  };
-
-  /* 取文件对应的 fence 语言：仅项目模式生效；非项目模式/未映射后缀返回 ''（不包装）。
-   * 注意 fileExtension 返回带点后缀（如 '.sql'），映射表键不带点，此处统一去点。
-   * @param {string} path 文件相对路径
-   * @returns {string} hljs 语言标识或 ''
-   * 作者: 火 冰 */
-  function projCodeLangOf(path) {
-    if (!(window.sbProject && window.sbProject.isProjectMode())) return '';
-    const ext = ((typeof fileExtension === 'function') ? fileExtension(path) : '').replace(/^\./, '').toLowerCase();
-    return PROJ_CODE_LANGS[ext] || '';
+  function setModeToolbarVisible(show) {
+    const editWrap = document.getElementById('ed-mode-edit-wrap');
+    const splitWrap = document.getElementById('ed-split-wrap');
+    const previewBtn = document.querySelector('button[data-mode="preview"]');
+    if (editWrap) editWrap.style.display = show ? '' : 'none';
+    if (splitWrap) splitWrap.style.display = show ? '' : 'none';
+    if (previewBtn) previewBtn.style.display = show ? '' : 'none';
   }
 
-  /* 把原始文本包装成单 fence 代码块（供 vditor 复用代码块高亮渲染）
-   * @param {string} path 文件相对路径
-   * @param {string} raw 原始文本
-   * @returns {string} 包装后的 markdown 文本（无映射语言时原样返回）
-   * 作者: 火 冰 */
-  function sbProjFenceWrap(path, raw) {
-    const lang = projCodeLangOf(path);
-    if (!lang) return raw;
-    return '```' + lang + '\n' + String(raw == null ? '' : raw) + '\n```';
-  }
-
-  /* 解包 fence：把编辑器取回的 fence 包装文本还原为原始文本（换行无损往返）
-   * @param {string} path 文件相对路径
-   * @param {string} v 编辑器取回文本
-   * @returns {string} 原始文本（无映射语言/非本包装格式时原样返回）
-   * 作者: 火 冰 */
-  function sbProjFenceUnwrap(path, v) {
-    const lang = projCodeLangOf(path);
-    if (!lang || typeof v !== 'string') return v;
-    const head = '```' + lang;
-    if (v.slice(0, head.length) !== head) return v;
-    return v.slice(head.length).replace(/^\n/, '').replace(/\n?```[ \t]*$/, '');
-  }
-
-  /* 暴露给回归测试与调试（只读工具集） */
-  window.__sbProjFence = { langFor: projCodeLangOf, wrap: sbProjFenceWrap, unwrap: sbProjFenceUnwrap };
-
-  /* 渲染编辑区（vditor 化）与元信息/大纲/反链/标签 */
+  /* 渲染编辑区与元信息/大纲/反链/标签 */
   function renderArticle() {
     const path = edCurrent;
     const md = edOutdated[path] || '';
-    // 编辑区移交 vditor：首次打开懒创建实例，并把当前内容同步进去（预览/分屏由 vditor 自管）；
-    // 项目模式非 md 文本按后缀包 fence 进 vditor，复用代码块高亮（Bug-075），字数/标签仍按原文统计
-    if (typeof vdSyncValue === 'function') vdSyncValue(sbProjFenceWrap(path, md));
+    const isMd = edProvider && edProvider.id === 'markdown-editor';
+    setModeToolbarVisible(isMd);   // 只有 vditor Markdown 编辑器需要模式切换按钮
+
+    // 编辑区 Provider 路由：第三方 Provider（CodeMirror 等）接管编辑区时整体隐藏 vditor 容器、插 DOM、调 open()
+    // 切回 Markdown 时恢复 vditor 容器显示，applyVdVisibility 会在 buildVditor after 里正确控制各面板显隐
+    if (edProvider && edProvider.id && edProvider.id !== 'markdown-editor' && edProvider.id !== '__fallback__') {
+      const vdHost = document.getElementById('ed-vditor');
+      if (vdHost) vdHost.style.display = 'none';
+      // 清理之前的 provider DOM 容器
+      document.querySelectorAll('.sb-provider-dom').forEach(function (n) { n.parentNode.removeChild(n); });
+      const wrap = document.createElement('div');
+      wrap.className = 'sb-provider-dom';
+      wrap.innerHTML = (typeof edProvider.renderWysiwyg === 'function') ? edProvider.renderWysiwyg(md) : '';
+      document.getElementById('ed-vditor').parentNode.appendChild(wrap);
+      if (typeof edProvider.open === 'function') {
+        try { Promise.resolve(edProvider.open(path, md, onEdInput)).catch(function (e) { console.error('[renderArticle] provider.open fail:', e); }); }
+        catch (e) { console.error('[renderArticle] provider.open err:', e); }
+      }
+    } else {
+      // Markdown 路径：恢复 vditor 容器显示，清理 provider DOM，内容同步交给 vditor（内部 applyVdVisibility 管显隐）
+      const vdHost = document.getElementById('ed-vditor');
+      if (vdHost) vdHost.style.display = '';
+      document.querySelectorAll('.sb-provider-dom').forEach(function (n) { n.parentNode.removeChild(n); });
+      if (typeof vdSyncValue === 'function') vdSyncValue(md);
+    }
     // 标题/时间/字数组件已按 ED-44 移除：顶部不留标题条，改名统一走文件树（右键「重命名」/双击文件名）
     // 字数/保存状态仍由下方状态栏（ed-count/ed-saved）承担
     const cnt = $('ed-count'); if (cnt) cnt.textContent = countChars(md) + ' 字';
@@ -422,12 +401,84 @@
     if (!altMode) {
       // 反向链接：其它笔记包含 [[当前名片段]]
       renderBacklinks();
-      // 文件属性：文档 id / 路径 / 索引分块起止规则
-      renderFileProps();
+      // 文件属性：文档 id / 路径 / 索引分块起止规则      renderFileProps();
+    }
+    updateProviderLabel(path);
+  }
+
+  function updateProviderLabel(path) {
+    const label = document.getElementById('ed-provider-label');
+    if (!label) return;
+    const ext = (typeof fileExtension === 'function') ? fileExtension(path) : '';
+    const provs = (typeof pluginManager !== 'undefined' && pluginManager && pluginManager.getEditorProviders)
+      ? pluginManager.getEditorProviders(ext) : [];
+    if (!edProvider) { label.textContent = '—'; return; }
+    label.textContent = edProvider.name || edProvider.id || '编辑器';
+    if (provs.length > 1) {
+      label.style.cursor = 'pointer';
+      label.style.color = 'var(--note-brand-300)';
+      label.title = '点击切换编辑器（共 ' + provs.length + ' 种可用）';
+      if (!label.__sbBound) {
+        label.addEventListener('click', function (e) {
+          e.stopPropagation();
+          toggleProviderMenu(path, label);
+        });
+        label.__sbBound = true;
+      }
+    } else {
+      label.style.cursor = 'default';
+      label.style.color = '';
+      label.title = '';
     }
   }
 
-  /* 选择编辑子节点（WYSIWYG / IR）：委托 vditor 切换并进入编辑模式。
+  function toggleProviderMenu(path, anchor) {
+    const exist = document.getElementById('ed-provider-menu');
+    if (exist) { exist.parentNode.removeChild(exist); return; }
+    const ext = (typeof fileExtension === 'function') ? fileExtension(path) : '';
+    const provs = (typeof pluginManager !== 'undefined' && pluginManager && pluginManager.getEditorProviders)
+      ? pluginManager.getEditorProviders(ext) : [];
+    if (provs.length <= 1) return;
+    const menu = document.createElement('div');
+    menu.id = 'ed-provider-menu';
+    menu.style.cssText = 'position:absolute;z-index:9999;min-width:180px;padding:4px;border-radius:6px;background:var(--note-surface-2);border:1px solid var(--note-border);box-shadow:0 4px 16px rgba(0,0,0,.15);font-size:12px;color:var(--note-ink);';
+    const title = document.createElement('div');
+    title.style.cssText = 'padding:4px 8px;color:var(--note-ink-3);font-size:11px;';
+    title.textContent = '选择 .' + ext.replace('.', '') + ' 文件编辑器：';
+    menu.appendChild(title);
+    provs.forEach(function (p) {
+      const item = document.createElement('div');
+      const isCur = (edProvider && edProvider.id === p.id);
+      item.style.cssText = 'padding:6px 10px;border-radius:4px;cursor:pointer;' + (isCur ? 'color:var(--note-brand-300);font-weight:600;' : '');
+      item.innerHTML = (isCur ? '✓ ' : '&nbsp;&nbsp;') + (p.name || p.id);
+      item.addEventListener('mouseenter', function () { if (!isCur) item.style.background = 'rgba(255,255,255,0.05)'; });
+      item.addEventListener('mouseleave', function () { item.style.background = ''; });
+      item.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (p.id !== edProvider.id) {
+          if (typeof pluginManager !== 'undefined' && pluginManager && pluginManager.setProviderPref) {
+            pluginManager.setProviderPref(ext, p.id);
+          }
+          const curPath = edCurrent; edCurrent = null; openNote(curPath);
+        }
+        if (menu.parentNode) menu.parentNode.removeChild(menu);
+      });
+      menu.appendChild(item);
+    });
+    const rect = anchor.getBoundingClientRect();
+    menu.style.left = rect.left + 'px'; menu.style.top = (rect.bottom + window.scrollY + 2) + 'px';
+    document.body.appendChild(menu);
+    setTimeout(function () {
+      document.addEventListener('click', function closemenu(e) {
+        if (!menu.contains(e.target) && e.target !== anchor) {
+          if (menu.parentNode) menu.parentNode.removeChild(menu);
+          document.removeEventListener('click', closemenu);
+        }
+      });
+    }, 0);
+  }
+
+  /* 选择编辑子节点 IR）：委托 vditor 切换并进入编辑模式。
    * @param {'wysiwyg'|'ir'} node 编辑节点类型
    * 作者: 火 冰 */
   function selectEditNode(node) {

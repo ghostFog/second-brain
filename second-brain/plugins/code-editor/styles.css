@@ -1,0 +1,33 @@
+/* Code Editor 插件样式（CodeMirror 5 底座）
+ * 作者: 火 冰 */
+
+/* 让 CodeMirror 占满宿主编辑区容器 */
+#ed-vditor .CodeMirror {
+  height: 100%;
+  font-size: 14px;
+  font-family: 'Consolas', 'Fira Code', 'JetBrains Mono', 'Microsoft YaHei Mono', monospace;
+  border: none;
+  border-radius: 0;
+}
+
+/* 适配宿主深色/浅色主题的基本色（后续可完善主题切换） */
+#ed-vditor .CodeMirror {
+  --cm-bg: #1e1e1e;
+  --cm-fg: #d4d4d4;
+  --cm-gutter-bg: #252526;
+  --cm-gutter-fg: #858585;
+  --cm-cursor: #aeafad;
+  background: var(--cm-bg);
+  color: var(--cm-fg);
+}
+
+/* 行号 gutter */
+#ed-vditor .CodeMirror-gutters {
+  background: var(--cm-gutter-bg) !important;
+  border-right: 1px solid #3a3a3a;
+}
+
+/* 活动行高亮 */
+#ed-vditor .CodeMirror-focused .CodeMirror-activeline-background {
+  background: rgba(255, 255, 255, 0.05) !important;
+}

@@ -54,6 +54,30 @@
       click: function () { vdOpenFindbar(true); },
     },
     '|',
+    /* 代码块工具：行号 / 换行。全局持久化设置，切换后所有代码块立即重绘。
+     * 工具栏按钮走 Custom 渲染，运行时根据当前全局设置高亮激活态（is-on）。
+     * 作者: 火 冰 */
+    {
+      name: 'sb-code-ln', tip: '代码块显示行号',
+      icon: '<svg viewBox="0 0 24 24" width="17" height="17" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>',
+      click: function () {
+        const cur = !vdCodeLnOn();
+        if (typeof saveS === 'function') saveS('codeLineNumbers', cur);
+        vdCodeLnSchedule();
+        vdToolbarRefreshStates();   // 更新按钮高亮
+      },
+    },
+    {
+      name: 'sb-code-wrap', tip: '代码块内容换行',
+      icon: '<svg viewBox="0 0 24 24" width="17" height="17" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><line x1="3" y1="6" x2="21" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/></svg>',
+      click: function () {
+        const cur = !vdCodeWrapOn();
+        if (typeof saveS === 'function') saveS('codeWrap', cur);
+        vdCodeLnSchedule();
+        vdToolbarRefreshStates();   // 更新按钮高亮
+      },
+    },
+    '|',
     /* 大纲 / 宽屏 / 表格列宽：三者均为 markdown-editor 插件能力，按钮由插件经
      * window.sbVdToolbarAdd 注入编辑工具栏（见插件 main.js），本数组不再声明。
      * 仅当桌面版未加载该插件时这些按钮不出现，功能不依赖宿主。作者: 火 冰 */
@@ -934,15 +958,34 @@
     showIrMenu(x, y, items);
   }
 
-  /** 显示 IR 代码块右键菜单（当前仅「在上方插入空行」）
+  /** 显示 IR 代码块右键菜单：「在上方插入空行」+ 行号切换 + 换行切换
    * @param {number} x 鼠标 X
-   * @param {number} y 鼠标 Y */
+   * @param {number} y 鼠标 Y
+   * 作者: 火 冰 */
   function showIrCodeMenu(x, y) {
-    showIrMenu(x, y, [{
+    // 读取当前全局设置状态，动态生成带勾选标记的菜单项
+    const lnOn = vdCodeLnOn();
+    const wrapOn = vdCodeWrapOn();
+    const menu = [{
       label: '在上方插入空行',
       icon: 'arrow-up-to-line',
       action: function () { irInsertAbove(irCtxCode); },
-    }]);
+    }, {
+      label: (lnOn ? '✓ ' : '  ') + '显示行号',
+      icon: 'list',
+      action: function () {
+        if (typeof saveS === 'function') saveS('codeLineNumbers', !lnOn);
+        vdCodeLnSchedule();
+      },
+    }, {
+      label: (wrapOn ? '✓ ' : '  ') + '内容换行',
+      icon: 'wrap-text',
+      action: function () {
+        if (typeof saveS === 'function') saveS('codeWrap', !wrapOn);
+        vdCodeLnSchedule();
+      },
+    }];
+    showIrMenu(x, y, menu);
   }
 
   /** 右键命中探测：落在 ir 编辑区某表格单元格内
@@ -1226,6 +1269,8 @@
         window.sbOutlineNotify();
         // 首帧补渲（setValue）完成后再扫一次代码块行号（observer 可能晚于补渲触发）
         vdCodeLnSchedule();
+        // 工具栏自定义按钮（行号/换行）首次渲染后同步激活态高亮
+        vdToolbarRefreshStates();
       },
     };
     try {
@@ -1583,6 +1628,32 @@
     catch (_) { return true; }
   }
 
+  /** 代码块内容换行开关：惰性读持久化设置，默认关（保持代码原始格式、横向滚动）
+   *  开启后 pre 加 sb-code-wrap class，由 CSS 覆盖 white-space 为 pre-wrap。
+   *  author 火 冰 */
+  function vdCodeWrapOn() {
+    try { return !!(typeof restoreS === 'function' ? restoreS('codeWrap', false) : false); }
+    catch (_) { return false; }
+  }
+
+  /** 同步工具栏自定义按钮（行号/换行）的激活态高亮
+   *  vditor 自定义按钮走 DOM 渲染，vditor 自身不管激活态；
+   *  这里按当前全局设置给按钮加/移除 is-on class（蓝色高亮）。
+   *  被 after 回调首次调用 + 工具栏按钮 click 后立即调用。
+   *  author 火 冰 */
+  function vdToolbarRefreshStates() {
+    const root = document.getElementById('ed-vditor');
+    if (!root) return;
+    const lnBtn = root.querySelector('.vditor-toolbar [data-name="sb-code-ln"], .vditor-toolbar button.sb-code-ln');
+    const wrapBtn = root.querySelector('.vditor-toolbar [data-name="sb-code-wrap"], .vditor-toolbar button.sb-code-wrap');
+    // vditor 自定义按钮可能用 data-name 或 button.title，双选择器兜底
+    const allBtns = root.querySelectorAll('.vditor-toolbar button');
+    allBtns.forEach(function (btn) {
+      if (btn.title && btn.title.indexOf('行号') !== -1) btn.classList.toggle('is-on', vdCodeLnOn());
+      if (btn.title && btn.title.indexOf('换行') !== -1) btn.classList.toggle('is-on', vdCodeWrapOn());
+    });
+  }
+
   /** 判定一个 pre 是否为「可注入行号的渲染态代码块」。
    * @param {Element} pre 待判定的 pre 元素
    * @returns {Element|null} 可注入时返回其 code 元素，否则 null */
@@ -1611,7 +1682,11 @@
   }
 
   /** 单块注入/更新：先让位（paddingLeft）再测量，保证 availW 为注入态真实宽；三元组去重未变跳过。
-   *  gutter 挂在 pre 下、code 外：highlightRender 重写 code.innerHTML 不伤行号列。 */
+   *  gutter 挂在 pre 下、code 外：highlightRender 重写 code.innerHTML 不伤行号列。
+   *  行高计算规则：
+   *    - 默认（white-space: pre，不换行）：每行 height = 1 * lh，横向滚动超长行 = 1 行高
+   *    - 开启换行（pre.sb-code-wrap → white-space: pre-wrap）：用 vdSvLineRows 计算折行后多行高
+   *  author 火 冰 */
   function vdCodeLnInject(pre, code) {
     if (pre.style.position === '') pre.style.position = 'relative';
     pre.style.paddingLeft = '36px';                          // 先占位让出左缘，clientWidth 随之收缩（再测量）
@@ -1619,20 +1694,29 @@
     const lh = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) || 16) * 1.4;
     const availW = Math.max(0, code.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0));
     const text = code.textContent || '';
+    const wrapOn = vdCodeWrapOn();                            // 当前是否开启代码块换行
     const old = vdCodeLnGutterOf(pre);
-    if (old && old.__lnText === text && old.__lnW === availW.toFixed(1) && old.__lnLh === lh.toFixed(2)) return;   // 文本/宽度/行高未变不重建
+    // 去重签名追加 wrapOn：换行开关切换后必须重建行号 height
+    const sig = text + '|' + availW.toFixed(1) + '|' + lh.toFixed(2) + '|' + (wrapOn ? 'w' : 'n');
+    if (old && old.__lnSig === sig) return;                    // 文本/宽度/行高/换行模式未变不重建
     if (old && old.parentNode) old.parentNode.removeChild(old);
     const g = document.createElement('div');
-    g.className = 'sb-code-gutter';   // 命中 css/app.css 的 #ed-vditor .sb-code-gutter（CD-23 特异度）
-    g.__lnText = text; g.__lnW = availW.toFixed(1); g.__lnLh = lh.toFixed(2);
+    g.className = 'sb-code-gutter';
+    g.__lnSig = sig;
     g.style.top = (code.offsetTop + (parseFloat(cs.paddingTop) || 0)) + 'px';   // 与首行文本对齐
     const frag = document.createDocumentFragment();
     const lines = text.replace(/\n$/, '').split('\n');
     for (let i = 0; i < lines.length; i++) {
       const d = document.createElement('div');
       d.textContent = String(i + 1);
-      const rows = vdSvLineRows(lines[i], availW, lh, cs);   // 复用 sv gutter 实测断行（复刻 pre-wrap + break-word）
-      d.style.height = (rows * lh).toFixed(2) + 'px';        // 换行后的真实行高，逐行与文本对齐
+      if (wrapOn) {
+        // 换行模式：pre-wrap + break-word，按折行后多行计算 height
+        const rows = vdSvLineRows(lines[i], availW, lh, cs);
+        d.style.height = (rows * lh).toFixed(2) + 'px';
+      } else {
+        // 默认模式：white-space: pre 不换行，超长行横向滚动，行高固定单行
+        d.style.height = lh.toFixed(2) + 'px';
+      }
       frag.appendChild(d);
     }
     g.appendChild(frag);
@@ -1649,16 +1733,21 @@
     });
   }
 
-  /** 扫描入口：开=逐块注入/更新，关=全量拆除（幂等，可重复调用） */
+  /** 扫描入口：开=逐块注入/更新，关=全量拆除（幂等，可重复调用）。
+   *  同时同步 sb-code-wrap class（codeWrap 设置）：开启换行时给 pre 加 class，关闭移除。 */
   function vdCodeLnScan(root) {
     if (!root || !root.querySelectorAll) return;
-    if (!vdCodeLnOn()) { vdCodeLnTeardown(root); return; }
+    const wrapOn = vdCodeWrapOn();   // 全局换行设置（每个代码块统一应用）
+    if (!vdCodeLnOn()) { vdCodeLnTeardown(root); }   // 行号关闭时全量拆除 gutter（保留 wrap class）
     root.querySelectorAll('pre').forEach(pre => {
       const code = vdCodeLnMatch(pre);
-      if (code) vdCodeLnInject(pre, code);
-      else {                                                 // 曾注入后转为编辑态/图表块 → 还原
+      // 代码块换行：无论行号开/关都同步 wrap class（设置面板独立控制）
+      if (code) pre.classList.toggle('sb-code-wrap', wrapOn);
+      if (code && vdCodeLnOn()) vdCodeLnInject(pre, code);
+      else if (code === null) {                                                 // 曾注入后转为编辑态/图表块 → 还原
         const g = vdCodeLnGutterOf(pre);
         if (g) { if (g.parentNode) g.parentNode.removeChild(g); pre.style.paddingLeft = ''; }
+        pre.classList.remove('sb-code-wrap');   // 非渲染态代码块移除 wrap class
       }
     });
   }
@@ -1692,6 +1781,13 @@
     if (!on && rootEl) vdCodeLnTeardown(rootEl);
     vdCodeLnSchedule();
   };
+
+  /* 代码块换行开关切换副作用入口（设置页调用）：切换后重扫所有代码块的 wrap class
+   *  author 火 冰 */
+  window.vdCodeWrapSetEnabled = function (on) {
+    vdCodeLnSchedule();   // 扫描时 vdCodeWrapOn() 会读取最新值并应用
+  };
+
   /* 测试/调试钩子（仿 __sbProjFence 惯例）：扫描核心纯 DOM 可测 */
   window.vdCodeGutterScan = vdCodeLnScan;
 

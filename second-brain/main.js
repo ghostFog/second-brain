@@ -131,6 +131,94 @@ const vaultCtx = new AsyncLocalStorage(); // IPC 请求上下文：链内 vaultR
  * 不建笔记索引/向量索引，文件树展示项目内全部文本文件，可编辑 + git 状态。 */
 const winProjects = new Map();
 
+/* ============================================
+ * 文件树自动快照监控器
+ * 每 10s 扫描所有活跃窗口绑定的目录（知识库根 + 项目根），
+ * 对比 path+mtime 签名，变化时推送 vault:tree-changed 到渲染进程。
+ * 解决「用户手动在资源管理器操作后目录区不更新」的问题。
+ *
+ * 为什么用快照 diff 而非 fs.watch：
+ *   Windows 下 fs.watch 不稳定（重命名事件丢失、SMB 网络盘无事件、
+ *   目录 mtime 不更新等）；快照 diff 虽稍慢但覆盖全场景、行为确定。
+ * 作者: 火 冰
+ * ============================================ */
+const TREE_WATCH_INTERVAL_MS = 10000;   // 10s 一次
+const treeSnapshots = new Map();        // windowId → 上次签名
+let treeWatchTimer = null;
+
+/** 生成知识库目录快照签名：walkNotes 得到的 {path, mtime} 拼接排序字符串
+ * @param {string} root 知识库根路径
+ * @returns {Promise<string>} 快照签名（空串表示扫描失败）
+ * @author 火 冰 */
+async function snapshotVault(root) {
+  if (!root || !fs.existsSync(root)) return '';
+  const out = [];
+  await walkNotes(root, '', out);
+  return out.map(n => n.path + '@' + n.mtime).sort().join('|');
+}
+
+/** 生成项目目录快照签名：walkProject 同样处理
+ * @param {string} root 项目根路径
+ * @returns {Promise<string>} 快照签名
+ * @author 火 冰 */
+async function snapshotProject(root) {
+  if (!root || !fs.existsSync(root)) return '';
+  const items = await walkProject(root);
+  return items.map(n => (n.rel || '') + '@' + (n.mtime || 0)).sort().join('|');
+}
+
+/** 全局扫描：遍历所有窗口，对比快照，变化时推送 vault:tree-changed
+ * 10s 一次的轻量操作：walkNotes/walkProject 本身就是全量扫磁盘，
+ * 签名拼接只是 O(n) 字符串操作。日志仅在变化时输出，避免刷屏。
+ * @author 火 冰 */
+async function treeWatchTick() {
+  const targets = [];
+  for (const [wcId, vp] of winVaults) {
+    const w = BrowserWindow.fromId(wcId);
+    if (!w || w.isDestroyed()) continue;
+    const root = vp || defaultVaultRoot();
+    if (root && fs.existsSync(root)) targets.push({ wcId, kind: 'vault', root });
+  }
+  for (const [wcId, pp] of winProjects) {
+    const w = BrowserWindow.fromId(wcId);
+    if (!w || w.isDestroyed()) continue;
+    if (pp && fs.existsSync(pp)) targets.push({ wcId, kind: 'project', root: pp });
+  }
+  for (const t of targets) {
+    try {
+      const sig = t.kind === 'vault' ? await snapshotVault(t.root) : await snapshotProject(t.root);
+      const prev = treeSnapshots.get(t.wcId);
+      if (prev !== undefined && prev !== sig) {
+        const w = BrowserWindow.fromId(t.wcId);
+        if (w && !w.isDestroyed()) {
+          w.webContents.send('vault:tree-changed', { kind: t.kind });
+          appendLog({ level: 'debug', msg: '[tree-watch] ' + t.kind + ' changed: ' + t.root });
+        }
+      }
+      treeSnapshots.set(t.wcId, sig);
+    } catch (_) { /* 忽略单窗口快照异常，不中断全局扫描 */ }
+  }
+  // 清理已关闭窗口的快照
+  for (const wcId of treeSnapshots.keys()) {
+    if (!winVaults.has(wcId) && !winProjects.has(wcId)) treeSnapshots.delete(wcId);
+  }
+}
+
+/** 启动定时快照监控：app.whenReady() 后调用
+ * @author 火 冰 */
+function startTreeWatch() {
+  if (treeWatchTimer) return;
+  treeWatchTimer = setInterval(function () { treeWatchTick().catch(function (_) {}); }, TREE_WATCH_INTERVAL_MS);
+  treeWatchTick().catch(function (_) {});   // 首次立即跑一次建立基线
+}
+
+/** 停止监控：应用退出时调用
+ * @author 火 冰 */
+function stopTreeWatch() {
+  if (treeWatchTimer) { clearInterval(treeWatchTimer); treeWatchTimer = null; }
+  treeSnapshots.clear();
+}
+
 /* 从 IPC event 定位发起窗口（renderer → BrowserWindow），取不到返回 null */
 function winFromEvent(event) {
   const wc = event && event.sender;
@@ -4083,6 +4171,7 @@ app.whenReady().then(async () => {
   loadConfig(); // 恢复上次选择的笔记库目录
   await loadSecurity(); // 恢复应用安全状态（启动密码/超时锁定，SEC-01/02；含 M1_1 临时事务恢复）
   startSecIdleMonitor(); // 启动系统空闲锁定轮询（桌面端 powerMonitor）
+  startTreeWatch();      // 启动文件树自动快照监控（10s 一次，检测资源管理器手动操作）
   initAiEngine(); // 初始化 AI 引擎（配置/索引持久化路径）
   registerNoteProtocol();
   _slog('before_clearCache');
@@ -4114,8 +4203,9 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// 退出前销毁托盘图标，避免系统栏残留无用图标
+// 退出前销毁托盘图标、停止监控器，避免残留定时器
 app.on('before-quit', () => {
+  stopTreeWatch();
   if (tray) { tray.destroy(); tray = null; }
 });
 

@@ -1,0 +1,33 @@
+{
+  "name": "Code Editor",
+  "id": "code-editor",
+  "author": "火 冰",
+  "icon": "code",
+  "color": "#f59e0b",
+  "cat": "editor",
+  "desc": "非 md 代码文件编辑器（CodeMirror 5 底座）：注册 .sql/.js/.py/.bat 等代码后缀，提供语法高亮、行号、自动换行、复制等编辑能力。未支持的后缀系统默认打开。",
+  "version": "1.0.0",
+  "main": "main.js",
+  "styles": "styles.css",
+  "permissions": ["ui.editor"],
+  "editor": {
+    "extensions": [
+      ".sql", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+      ".json", ".py", ".sh", ".bash",
+      ".bat", ".cmd", ".ps1", ".psm1",
+      ".yml", ".yaml", ".xml", ".html", ".htm", ".css", ".scss", ".less",
+      ".java", ".c", ".h", ".cpp", ".cc", ".hpp", ".hh", ".cs",
+      ".go", ".rs", ".rb", ".php", ".pl", ".lua", ".scala", ".kt",
+      ".ini", ".conf", ".cfg", ".toml", ".properties", ".env",
+      ".r", ".swift", ".m", ".mm"
+    ],
+    "openers": [
+      { "id": "edit", "label": "编辑", "icon": "pencil" }
+    ],
+    "toolbar": [
+      { "id": "toggle-lineno", "label": "行号", "icon": "list-ordered" },
+      { "id": "toggle-wrap", "label": "自动换行", "icon": "wrap-text" },
+      { "id": "copy", "label": "复制全部", "icon": "clipboard-copy" }
+    ]
+  }
+}

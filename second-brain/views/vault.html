@@ -10,6 +10,9 @@
           <i data-lucide="search" class="w-3.5 h-3.5 shrink-0" style="color: var(--note-ink-3);"></i>
           <input id="file-search" type="text" placeholder="搜索文件..." class="flex-1 bg-transparent text-[12px] outline-none" style="color: var(--note-ink-2);">
         </div>
+        <button id="file-tree-refresh" class="w-7 h-7 flex items-center justify-center rounded-md border transition-colors hover:opacity-80 shrink-0" style="border-color: var(--note-border); background: var(--note-surface-2); color: var(--note-ink-2);" title="刷新文件树（手动在资源管理器操作后点击）">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+        </button>
       </div>
     </div>
 
@@ -105,7 +108,7 @@
     <div id="ed-statusbar" class="h-7 shrink-0 flex items-center justify-between px-4 border-t text-[11px]" style="border-color: var(--note-border); background: var(--note-surface); color: var(--note-ink-3);">
       <div class="flex items-center gap-4">
         <div class="flex items-center gap-1"><i data-lucide="circle-check" class="w-3 h-3" style="color: var(--state-success);"></i><span id="ed-saved">已自动保存</span></div>
-        <span>Markdown</span><span>UTF-8</span>
+        <span id="ed-provider-label" style="cursor:pointer;color:var(--note-brand-300);" title="点击切换编辑器">Markdown Editor</span><span>UTF-8</span>
       </div>
       <div class="flex items-center gap-4">
         <span id="cursor-pos">行 1, 列 1</span>

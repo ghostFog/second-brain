@@ -157,6 +157,7 @@
         + tgRow('自动保存', '编辑后自动写入磁盘', true, 'edAutoSave')
         + tgRow('智能列表延续', '回车自动延续列表缩进', true, 'smartList')
         + tgRow('显示行号', '代码块显示行号序号', true, 'codeLineNumbers')
+        + tgRow('代码块内容换行', '长代码自动折行（关闭时横向滚动）', false, 'codeWrap')
         + '</section>'
         + '<section class="settings-group"><h3 class="text-body font-semibold mb-4" style="color:var(--note-ink);">文件类型</h3>'
         + '<div class="text-caption mb-2" style="color:var(--note-ink-3);">不同后缀文件的默认打开方式（由插件注册）</div>'

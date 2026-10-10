@@ -177,6 +177,10 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   writeFileExternal: (absPath, content) => ipcRenderer.invoke('notes:writeFileExternal', { absPath: absPath, content: content }),
   /** 订阅：系统「打开方式」传入的外部文件（OS 右键→打开方式→第二脑）→ 回调绝对路径，作为临时文件打开 */
   onOpenFile: (cb) => ipcRenderer.on('open-file', (_e, abs) => { if (typeof cb === 'function') cb(abs); }),
+  /** 订阅：文件树目录快照变化（用户在资源管理器手动增删/重命名）→ 回调 {kind:'vault'|'project'} */
+  onVaultTreeChanged: (cb) => ipcRenderer.on('vault:tree-changed', (_e, data) => { if (typeof cb === 'function') cb(data); }),
+  /** 取消订阅：文件树变化监听（多页面切换时避免重复绑定） */
+  offVaultTreeChanged: () => ipcRenderer.removeAllListeners('vault:tree-changed'),
   /** 在系统文件管理器中显示外部临时文件 */
   revealExternal: (absPath) => ipcRenderer.invoke('notes:revealExternal', absPath),
 

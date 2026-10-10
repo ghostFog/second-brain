@@ -241,6 +241,10 @@ globalThis.pluginManager = (function () {
     getEditorProviders: getEditorProviders,
     getEditorExtensions: getEditorExtensions,
     fileExtension: fileExtension,
+    // Provider 默认设置：按后缀持久化用户偏好
+    getProviderPrefs: getProviderPrefs,
+    setProviderPref: setProviderPref,
+    clearProviderPref: clearProviderPref,
   };
 })();
 
@@ -859,6 +863,11 @@ globalThis.PluginAPI = {
   /** 注册编辑器能力 Provider（manifest.editor 声明 + 运行时实现） */
   registerEditorProvider: function (provider) { registerEditorProvider(provider); },
 
+  /** 设置/清除某后缀的默认 Provider（持久化到 localStorage） */
+  setProviderPref: function (ext, providerId) { setProviderPref(ext, providerId); },
+  clearProviderPref: function (ext) { clearProviderPref(ext); },
+  getProviderPrefs: function () { return getProviderPrefs(); },
+
   /** 注册「编辑器主题解析器」（抽象）：宿主在应用 vditor 主题时调用它拿到
    *  { theme:'dark'|'light', extraCss? }；返回 null 表示不干预（回落宿主默认明暗）。
    *  插件只描述「要什么主题」，宿主的 setTheme/样式注入由宿主内部完成——不直接调 vditor。
@@ -968,17 +977,55 @@ function registerEditorProvider(provider) {
   editorProviders.push(provider);
 }
 
+/** Provider 默认设置：按后缀记忆用户选了哪个 Provider（持久化到 localStorage）
+ * 格式 { '.sql': 'code-editor', '.md': 'markdown-editor' }
+ * 宿主在打开文件时先查此表，命中则路由到指定 Provider，未命中则走优先级路由。
+ * 作者: 火 冰 */
+let _providerPrefs = null;
+function getProviderPrefs() {
+  if (_providerPrefs !== null) return _providerPrefs;
+  try { _providerPrefs = JSON.parse(localStorage.getItem('sbEditorProviderPrefs') || '{}'); } catch (_) { _providerPrefs = {}; }
+  if (typeof _providerPrefs !== 'object' || !_providerPrefs) _providerPrefs = {};
+  return _providerPrefs;
+}
+function setProviderPref(ext, providerId) {
+  getProviderPrefs();
+  _providerPrefs[String(ext || '').toLowerCase()] = String(providerId || '');
+  try { localStorage.setItem('sbEditorProviderPrefs', JSON.stringify(_providerPrefs)); } catch (_) {}
+}
+function clearProviderPref(ext) {
+  getProviderPrefs();
+  if (_providerPrefs[String(ext || '').toLowerCase()]) {
+    delete _providerPrefs[String(ext || '').toLowerCase()];
+    try { localStorage.setItem('sbEditorProviderPrefs', JSON.stringify(_providerPrefs)); } catch (_) {}
+  }
+}
+
 /**
- * 取支持某后缀的编辑器 Provider 列表；无精确匹配时返回内置兜底 Provider
+ * 取支持某后缀的编辑器 Provider 列表（按优先级排序）；无精确匹配时返回内置兜底
+ * 优先级：1) 用户显式设置的默认 → 排最前；2) provider.priority 数值越大越前（默认 0）；
+ *          3) fallbackEditorProvider.priority = -999，永远最后。
  * @param {string} ext 文件后缀（含点，如 '.md'）
- * @returns {Object[]}
+ * @returns {Object[]} 排序后的 Provider 数组（至少包含 fallback）
+ * 作者: 火 冰
  */
 function getEditorProviders(ext) {
   const e = String(ext || '').toLowerCase();
   const hits = editorProviders.filter(function (p) {
     return (p.extensions || []).some(function (x) { return x === '*' || String(x).toLowerCase() === e; });
   });
-  return hits.length ? hits : [fallbackEditorProvider];
+  if (!hits.length) return [fallbackEditorProvider];
+
+  // 排序：用户设置优先 → priority 降序
+  const prefs = getProviderPrefs();
+  const prefId = prefs[e];
+  hits.sort(function (a, b) {
+    const aPref = (a.id === prefId) ? 1 : 0;
+    const bPref = (b.id === prefId) ? 1 : 0;
+    if (aPref !== bPref) return bPref - aPref;
+    return (b.priority || 0) - (a.priority || 0);
+  });
+  return hits;
 }
 
 /**

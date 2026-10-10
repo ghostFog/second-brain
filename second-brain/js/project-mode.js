@@ -36,6 +36,7 @@ function sbIsPseudoPath(p) {
 }
 
 /* 统一保存路由：临时文件写回原绝对路径，项目文件走 project:save，其余返回 false 交给知识库。
+ *  非 md 文件 fence 包装方案已废弃，直接写原文。
  * @param {string} path  当前编辑路径
  * @param {string} mdText 全文
  * @returns {Promise<boolean>} true=已由临时/项目分支处理，false=应交由既有知识库保存
@@ -119,13 +120,13 @@ globalThis.sbProject = (function () {
     return await window.noteDesktop.project.openExternal(rel);
   }
 
-  /* 隐藏知识库专属 UI：Ribbon 的 图谱/插件/AI 入口、右侧侧边面板与底板统计、移动端侧面板按钮。
+  /* 隐藏知识库专属 UI：Ribbon 的 图谱/AI 入口（保留 plugins 插件市场）、右侧侧边面板与底板统计、移动端侧面板按钮。
    * 只隐藏 DOM，不改动知识库渲染逻辑。作者: 火 冰 */
   function hideVaultUi() {
-    ['graph', 'plugins', 'ai'].forEach(function (id) {
+    ['graph', 'ai'].forEach(function (id) {
       document.querySelectorAll('.ribbon [data-ribbon-btn="' + id + '"]').forEach(function (el) { el.style.display = 'none'; });
     });
-    const rr = document.querySelectorAll('.ribbon [data-ribbon-btn="graph"],[data-ribbon-btn="plugins"],[data-ribbon-btn="ai"]');
+    const rr = document.querySelectorAll('.ribbon [data-ribbon-btn="graph"],[data-ribbon-btn="ai"]');
     rr.forEach(function (el) { el.style.display = 'none'; });
     const side = document.getElementById('right-panel');   if (side) side.style.display = 'none';
     const sr = document.getElementById('side-resizer');    if (sr) sr.style.display = 'none';
