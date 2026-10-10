@@ -14,6 +14,20 @@
  */
 globalThis.CHANGELOG = [
   {
+    version: '0.2.0',
+    date: '2026-10-10',
+    title: '多编辑器架构 · 代码文件 CodeMirror',
+    items: [
+      '多编辑器 Provider 路由：文件后缀由插件声明，宿主按 getEditorProviders() 排序选择（用户默认 → priority 降序）',
+      'CodeMirror 5 插件（plugins/code-editor/）：支持 .sql/.js/.py/.bat/.json/.yml 等 49 种代码后缀，工具栏含行号开关、自动换行、全选复制',
+      '持久化编辑器偏好：sbEditorProviderPrefs（localStorage）按后缀记忆默认编辑器，状态栏标签点击可切换',
+      '围栏包装代码彻底删除（sbProjFenceWrap/Unwrap/PROJ_CODE_LANGS）：代码文件不再被 ```lang fence 包裹进 vditor',
+      'sbEditorMode 与 sbSplitLayout 解耦：sbEditorMode 只存编辑节点偏好（ir/wysiwyg/preview），分屏布局独立由 sbSplitLayout 记忆，避免下次打开默认进空白 SV',
+      '编辑/预览/分屏 按钮按 Provider 显隐：只有 Markdown Editor (vditor) 才显示模式切换按钮',
+      '项目模式 ribbon 恢复插件市场按钮（hideVaultUi 移除 plugins 隐藏）',
+    ],
+  },
+  {
     version: '0.1.1',
     date: '2026-10-10',
     title: '编辑器修复 · 代码块体验优化',
