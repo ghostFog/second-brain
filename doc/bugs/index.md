@@ -79,6 +79,8 @@
 | [Bug-073](Bug-073.md) | 已修复（测试完成） | 项目窗口「新建目录」建进上一次打开的知识库，且目录区被重绘成知识库树：`doNewFolder/doNewNote/refreshTreeAfterChange` 全走知识库 `noteStore`。修复：新建目录/笔记项目分支直连 `project:createDir/save`，刷新收口 `sbProject.refresh()`；删除/移动/重命名加项目模式守卫；空目录注册为树节点可见。 |
 | [Bug-074](Bug-074.md) | 已修复（测试完成） | 项目窗口点击二进制/未支持后缀文件无法打开（仅提示不可编辑或塞进编辑器乱码）。修复：新增 `project:openExternal`（`shell.openPath`），两条打开路径探测 `binary` 后调系统默认程序打开，不进编辑器。 |
 | [Bug-075](Bug-075.md) | 已修复（测试完成） | 项目窗口打开 .sql 等文本文件编辑区完全空白（页签/字数正常、无报错），且非 md 文本无高亮：`buildVditor` 在 `window.Vditor` 未就绪（启动 clearCache 竞态）时静默放弃且永不重试。修复：Vditor 未就绪 500ms 延迟重试构建（60 次上限）；项目模式非 md 文本按后缀包 ```lang fence 复用代码块 hljs 高亮、`onEdInput` 统一解包；`project:read` 优先按 UTF-16 BOM 解码（文本一律进编辑器）。 |
+| [Bug-076](Bug-076.md) | 已修复（测试完成） | 重新打开知识库（无编辑）`recent.json` 每次被重写（内容相同仅刷 mtime）：启动恢复标签触发 openNote→persistRecentTabs，主进程 `notes:recentSave` 无比对无条件 writeFile。修复：meta-vault 新增 `writeIfChanged` 最小化写入出口，recentSave 改走该出口；`_meta.json` 首开全写经真机两轮快照查明为一次性迁移收敛，非缺陷。 |
+| [Bug-077](Bug-077.md) | 已修复（测试完成） | 加密知识库每次打开全部 `_meta.json` 被重写（仅 updatedAt 变）：解密读函数先取 `encKeyCache.get`（首调 undefined）后 `ensureNoteKey` 才建缓存，首读静默返回 ENC1 密文；与渲染端恢复标签读取竞速，污染边界逐轮不同致指纹每轮变、diff 误判全写。修复：三函数先 ensureNoteKey 再取 ring，真机第二轮零写入。 |
 
 > 注（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——语言选择器(chip)显隐保留为 Bug-011，链接弹框 `docButton` 那条纠正为 Bug-042。
 

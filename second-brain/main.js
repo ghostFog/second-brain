@@ -8,11 +8,13 @@ const { app, BrowserWindow, protocol, ipcMain, dialog, shell, Menu, session, Tra
 const { AsyncLocalStorage } = require('node:async_hooks'); // 多窗口：IPC 请求链内按窗口解析知识库根
 const path = require('path');
 const fs = require('fs');
-const { randomUUID, scrypt, randomBytes, timingSafeEqual, createHash, createCipheriv, createDecipheriv } = require('crypto'); // randomUUID: 上传资源重命名；scrypt/randomBytes/timingSafeEqual: 应用安全（SEC-01/02）密码哈希与校验；createHash/createCipheriv/createDecipheriv: 笔记加密（ENC-02）组合算法与 AES-GCM
+const crypto = require('crypto');
+const { randomUUID, scrypt, randomBytes, timingSafeEqual, createHash, createCipheriv, createDecipheriv } = crypto; // randomUUID: 上传资源重命名；scrypt/randomBytes/timingSafeEqual: 应用安全（SEC-01/02）密码哈希与校验；createHash/createCipheriv/createDecipheriv: 笔记加密（ENC-02）组合算法与 AES-GCM
 const { execFile } = require('child_process'); // Git 同步插件：以非 shell 方式执行 git 命令，避免注入
 const grayMatter = require('gray-matter'); // 解析笔记 frontmatter（获取 id / tags 元数据）
 const { default: SnowflakeId } = require('snowflake-id'); // 雪花算法：生成全局唯一文档 id，方便索引/元数据稳定定位
 const { AiEngine, chunkConfigured } = require('./ai-engine');
+const { createVaultMeta } = require('./meta-vault'); // 知识库元数据增量维护（纯 Node 模块：LCA 祖先链 + 内容 diff 落盘，可独立回归测试）
 
 /* 主进程 console 日志桥接到渲染进程（F12 控制台 / 日志面板可见）：
  * 「打印完整提示词」等主进程调试日志保留终端输出，同时转发给所有窗口 webContents
@@ -1171,8 +1173,12 @@ async function walkNotes(dir, base, out) {
 /* ============================================
  * 知识库元数据（.second-brain）
  * 在知识库目录下维护一个隐藏的 .second-brain 目录，
- * 每个目录一个 _meta.json 记录：笔记个数 / 占用大小 / 每篇笔记属性（id、字数、标签、大小、mtime）。
- * 在新建/保存/删除/移动目录或笔记时同步重建（scheduleMetaRefresh）。
+ * 每个目录一个 _meta.json 记录：笔记个数 / 占用大小 / 每篇笔记属性（id、字数、标签、大小、mtime、内容指纹 fh）。
+ * 增量维护（纯逻辑在 meta-vault.js，可在 node 下做回归断言）：
+ *  - 笔记增删改：只重建其所在目录到根的祖先链；移动笔记（新存+旧删）合并后只追踪到最近公共祖先（LCA）；
+ *  - 反链受牵连的链外对端笔记，仅把其所在目录作为补丁目录单目录重建；
+ *  - 落盘一律走内容 diff：新旧签名一致则不重写（文件 mtime 不变），updatedAt 仅在实际变化时推进；
+ *  - 全库/子树重建（手动按钮、打开库）扫描范围照旧、落盘最小化，资源管理器外部增删改由此检出。
  * 作者: 火 冰
  * ============================================ */
 
@@ -1182,423 +1188,102 @@ const META_DIR = '.second-brain';
 /** 上传资源（图片/附件）的统一隐藏资源目录名（位于知识库根，UUID 重命名落盘） */
 const RESOURCE_DIR = '.resources';
 
-/** 雪花 id 生成器：为新建笔记分配全局唯一文档 id（mid 取 1，进程内单例保证递增唯一）。 */
-const snowflake = new SnowflakeId({ mid: 1 });
-
-/** 从笔记 frontmatter 提取属性：id / tags / 字数（去空白）。
- * @param {string} text 笔记全文
- * @param {string} name 笔记文件名（无 id 时的回退）
- * @param {string} [srcPath] 笔记完整相对路径（透传给 extractOutlinks 解析相对路径链接）
- * @returns {{noteId:string, tags:string[], wordCount:number, attachments:Array, outlinks:Array}}
- * @author 火 冰 */
-function parseNoteMeta(text, name, srcPath) {
-  let d = {};
-  try { d = grayMatter(String(text || '')).data || {}; } catch (e) { /* frontmatter 解析失败按空处理 */ }
-  const idAttr = (typeof d.id === 'string' && d.id.trim()) ? d.id.trim() : '';
-  const rawTags = Array.isArray(d.tags) ? d.tags : [];
-  const wordCount = String(text || '').replace(/\s+/g, '').length;
-  const attachments = extractAttachments(text);
-  const outlinks = extractOutlinks(text, srcPath);
-  return { noteId: idAttr, tags: rawTags.map(String).filter(Boolean), wordCount, attachments, outlinks };
-}
-
-/** 图片扩展名集合（用于区分图片与普通附件） */
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.ico', '.tif', '.tiff']);
-
-/** 从 Markdown 文本中提取附件/图片列表。
- *  识别三种语法:
- *    1. 图片: ![name](note://vault_res/uuid.ext)
- *    2. 附件引言: > [!attach] name note://vault_res/uuid.ext
- *    3. 普通链接附件: [name](note://vault_res/uuid.ext)
- *  @param {string} text 笔记全文
- *  @returns {Array<{name:string, url:string, type:string}>} 附件列表（type 为 'image' 或 'attachment'）
- *  @author 火 冰 */
-function extractAttachments(text) {
-  var result = [];
-  var src = String(text || '');
-  var seen = new Set();
-
-  /* 图片: ![name](note://vault_res/uuid.ext) */
-  var imgRe = /!\[([^\]]*)\]\((note:\/\/vault_res\/[^)\s]+)\)/g;
-  var m;
-  while ((m = imgRe.exec(src)) !== null) {
-    var url = m[2];
-    if (seen.has(url)) continue;
-    seen.add(url);
-    var ext = path.extname(url.split('/').pop() || '').toLowerCase();
-    result.push({ name: m[1] || url.split('/').pop(), url: url, type: 'image' });
-  }
-
-  /* 附件引言: > [!attach] name note://vault_res/uuid.ext */
-  var attachRe = />\s*\[!attach\]\s+(.+?)\s+(note:\/\/vault_res\/[^\s]+)/gi;
-  while ((m = attachRe.exec(src)) !== null) {
-    var url2 = m[2];
-    if (seen.has(url2)) continue;
-    seen.add(url2);
-    result.push({ name: m[1].trim(), url: url2, type: 'attachment' });
-  }
-
-  /* 普通链接附件: [name](note://vault_res/uuid.ext)（排除已被图片匹配的 ![] 语法） */
-  var linkRe = /(?<!\!)\[([^\]]*)\]\((note:\/\/vault_res\/[^)\s]+)\)/g;
-  while ((m = linkRe.exec(src)) !== null) {
-    var url3 = m[2];
-    if (seen.has(url3)) continue;
-    seen.add(url3);
-    var ext3 = path.extname(url3.split('/').pop() || '').toLowerCase();
-    result.push({ name: m[1] || url3.split('/').pop(), url: url3, type: IMAGE_EXTS.has(ext3) ? 'image' : 'attachment' });
-  }
-
-  return result;
-}
-
-/** 以基准目录解析相对路径（./ ../ 同目录 sub/ 等），返回归一后的正斜杠相对路径。
- *  @param {string} baseDir 基准目录相对路径（如 '日记/2024年'，根目录为 ''）
- *  @param {string} rel 待解析的相对路径（如 './09-02.md'、'../08-31.md'、'sibling.md'）
- *  @returns {string} 归一后的路径（如 '日记/08-31.md'）
- *  @author 火 冰 */
-function resolveRelPath(baseDir, rel) {
-  var r = String(rel || '').replace(/^\.\//, '');
-  var parts = baseDir ? String(baseDir).split('/').filter(Boolean) : [];
-  var segs = r.split('/');
-  for (var i = 0; i < segs.length; i++) {
-    if (segs[i] === '..') parts.pop();
-    else if (segs[i] === '.') continue;
-    else if (segs[i]) parts.push(segs[i]);
-  }
-  return parts.join('/');
-}
-
-/** 从 Markdown 文本中提取正向链接（该笔记链接到的其他笔记）。
- *  识别两种语法:
- *    1. Wiki 链接: [[笔记名]] 或 [[笔记名|显示文本]]（按笔记名匹配，不解析相对路径）
- *    2. 相对路径链接: [text](路径.md)（非 note:// 和非 http 开头）；按源笔记所在目录解析为完整路径归一
- *  @param {string} text 笔记全文
- *  @param {string} [srcPath] 源笔记完整相对路径（用于解析相对路径链接，如 '日记/2024年/09-01.md'）
- *  @returns {Array<{path:string, name:string}>} 正向链接列表
- *  @author 火 冰 */
-function extractOutlinks(text, srcPath) {
-  var result = [];
-  var src = String(text || '');
-  var seen = new Set();
-  /* 源笔记所在目录，用于解析相对路径链接 */
-  var baseDir = '';
-  if (srcPath) {
-    var si = String(srcPath).lastIndexOf('/');
-    baseDir = si >= 0 ? String(srcPath).slice(0, si) : '';
-  }
-  var ABS_RE = /^[/\\]/;   // 以 / 或 \ 开头 = 从库根写的完整路径
-
-  /* 判断链接目标是否含路径结构（含分隔符或以 ./ ../ 开头），纯笔记名不含 */
-  function pathLike(p) {
-    return p.indexOf('/') >= 0 || p.indexOf('\\') >= 0 || /^\.\.?[/\\]/.test(p);
-  }
-
-  /* 按源笔记路径归一链接目标：/ 开头视为从库根完整路径；否则按源笔记所在目录解析相对路径 */
-  function normalize(p) {
-    var cleaned = String(p).replace(/^[/\\]+/, '');
-    if (ABS_RE.test(String(p))) return cleaned;
-    return resolveRelPath(baseDir, cleaned);
-  }
-
-  /* Wiki 链接: [[笔记名]] 或 [[笔记名|显示文本]]；纯笔记名保持全局匹配，含路径时按源笔记路径解析 */
-  var wikiRe = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
-  var m;
-  while ((m = wikiRe.exec(src)) !== null) {
-    var target = m[1].trim();
-    var targetPath = target.toLowerCase().endsWith('.md') ? target : target + '.md';
-    var finalPath = pathLike(targetPath) ? normalize(targetPath) : targetPath;
-    if (seen.has(finalPath)) continue;
-    seen.add(finalPath);
-    result.push({ path: finalPath, name: target });
-  }
-
-  /* 相对路径链接: [text](路径.md)（排除 note:// 和 http(s):// 开头）；一律按源笔记路径解析为完整路径归一 */
-  var relRe = /\[([^\]]*)\]\(([^)]+)\)/g;
-  while ((m = relRe.exec(src)) !== null) {
-    var url = m[2].trim();
-    if (/^(note:|https?:|mailto:|tel:|ftp:)/i.test(url)) continue;
-    if (!url.toLowerCase().endsWith('.md')) continue;
-    var resolved = normalize(url);
-    if (seen.has(resolved)) continue;
-    seen.add(resolved);
-    var linkName = resolved.split('/').pop().replace(/\.md$/i, '');
-    result.push({ path: resolved, name: linkName });
-  }
-
-  return result;
-}
-
-/** 从笔记 frontmatter 中移除 `id:` 字段，使 md 文件保持干净（id 改由 .second-brain 元数据追踪）。
- * 仅按行精确剔除 id 键，其它 frontmatter 与正文内容原样保留。
- * @param {string} src 笔记全文
- * @returns {{text:string, removed:boolean}} 处理后的全文 + 是否移除了 id
- * @author 火 冰 */
-function stripMetaId(src) {
-  const s = String(src || '').replace(/^\uFEFF/, '');
-  // 匹配首个 frontmatter 块：开标签 --- / 块体 / 闭标签 --- / 之后全部正文内容
-  const m = s.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*---[ \t]*(?:\r?\n)?([\s\S]*)$/);
-  if (!m) return { text: s, removed: false };
-  const body = m[1];
-  const content = m[2]; // 闭标签后剩余全部（正文等）
-  const filtered = [];
-  let removed = false;
-  // 按行切分 frontmatter，剔除孤立的 id 键行（可带缩进）
-  const lines = body.split(/\r\n|\r|\n/);
-  for (let i = 0; i < lines.length; i++) {
-    if (!removed && /^\s*id\s*:/.test(lines[i])) { removed = true; continue; }
-    filtered.push(lines[i]);
-  }
-  if (!removed) return { text: s, removed: false };
-  // 剔除 id 行后，收发端多余空行作轻量收敛
-  while (filtered.length > 0 && filtered[0] === '') filtered.shift();
-  while (filtered.length > 0 && filtered[filtered.length - 1] === '') filtered.pop();
-  // id 是 frontmatter 唯一字段时，整块删空、直接保留正文，使 md 完全干净
-  if (!filtered.some(function (l) { return l.trim() !== ''; })) return { text: content, removed: true };
-  const text = '---\n' + filtered.join('\n') + '\n---' + (content ? '\n' + content : '\n');
-  return { text, removed: true };
-}
-
-/** 确保笔记拥有唯一稳定雪花 id，但**不写入 md frontmatter**（md 保持干净）。
- * id 由 .second-brain/_meta.json 的 noteId 追踪；新笔记在首次元数据扫描时生成一次，之后复用。
- * @param {string} text 笔记全文（用于提取已存在的 frontmatter id 作为迁移回退）
- * @param {object} gen 雪花 id 生成器（单例）
- * @param {string} prevId 元数据中已有的稳定 id（优先复用）
- * @returns {string} 唯一雪花 id
- * @author 火 冰 */
-function ensureNoteId(text, gen, prevId) {
-  if (prevId) return prevId;
-  try { const d = grayMatter(String(text || '')).data || {}; return (typeof d.id === 'string' && d.id.trim()) ? d.id.trim() : gen.generate(); }
-  catch (e) { return gen.generate(); }
-}
-
-/** 递归扫描 vault（跳过 .second-brain），逐目录生成元数据记录。
- * 每条记录：dir / noteCount(直接 .md 数) / dirCount(直接子目录数) / size(递归占用字节) / totalNotes(递归笔记数)
- *          / notes[](直接笔记属性) / children[](子目录列表 type:'dir'，各带 size、mtime) / updatedAt。
- * @returns {Promise<Map<string, object>>} 目录相对路径('' 表示根) -> 记录
- * @author 火 冰 */
-async function scanVaultMeta() {
-  const records = new Map();
-  await walkDirMeta('', records);
-  /* 第二遍：根据全库正向链接计算反向链接 */
-  try { computeBacklinks(records); } catch (e) { /* 反链计算失败不阻断重建 */ }
-  return records;
-}
-
-/** 从指定目录 dirRel 起始，递归扫描并构建该目录（子树）的元数据记录到 records（可复用：''=全库）。
- *  保留旧记录中的「索引分块覆盖配置」(chunk) / 「稳定雪花 id」(noteId) / 索引时间(indexTime)。
- *  只读入磁盘与旧 _meta.json，不写任何目录镜像（写入由调用方决定）。
- *  @author 火 冰 */
-async function walkDirMeta(dirRel, records) {
-  const root = vaultRoot();
-  const walk = async (dirRel2) => {
-    const abs = dirRel2 ? path.join(root, dirRel2) : root;
-    let items = [];
-    try { items = await fs.promises.readdir(abs, { withFileTypes: true }); } catch (e) { return { bytes: 0, notes: 0 }; }
-    const rec = { dir: dirRel2, noteCount: 0, dirCount: 0, size: 0, totalNotes: 0, totalSize: 0, notes: [], children: [], updatedAt: Date.now() };
-    records.set(dirRel2, rec);
-    const prevOverrides = {};
-    const prevNoteIds = {};
-    const prevIndexTimes = {};
+/** 元数据增量维护器（依赖注入；不依赖 electron，便于独立回归测试）。 */
+const vaultMeta = createVaultMeta({
+  frs: fs,
+  pathx: path,
+  crypto: crypto,
+  grayMatter: grayMatter,
+  SnowflakeId: SnowflakeId,
+  readText: (root, rel) => vaultReadTextByRoot(root, rel), // 解密感知读取（加密库元数据基于明文）
+  // 扫描发现历史 frontmatter 残留 id 时写回清理；加密库密文不可原地改写，跳过
+  onStrippedId: async (root, rel, cleanText) => {
+    if (noteEncEnabled(root)) return;
+    await fs.promises.writeFile(path.join(root, rel), cleanText, 'utf8');
+  },
+  // 临时诊断（Bug-077 深查）：diffWrite 判定写盘的原因落盘，定位后移除
+  onDiag: (msg) => {
     try {
-      const prev = JSON.parse(await fs.promises.readFile(path.join(root, META_DIR, ...(dirRel2 ? dirRel2.split('/') : []), '_meta.json'), 'utf8'));
-      if (prev && Array.isArray(prev.notes)) prev.notes.forEach(function (n) { if (n && n.chunk) prevOverrides[n.name] = n.chunk; if (n && n.noteId) prevNoteIds[n.name] = n.noteId; if (n && n.indexTime) prevIndexTimes[n.name] = n.indexTime; });
-    } catch (e) { /* 无旧记录 */ }
-    let subBytes = 0, subNotes = 0;
-    const dirKids = [];   // children 只记录子目录
-    for (const it of items) {
-      if (it.name.startsWith('.')) continue;                                              // 跳过所有隐藏目录/文件（.git/.obsidian/.second-brain/.resources 等），不记录到元数据
-      const childAbs = path.join(abs, it.name);
-      const childRel = (dirRel2 ? dirRel2 + '/' : '') + it.name;
-      if (it.isDirectory()) {
-        rec.dirCount++;
-        const r = await walk(childRel);
-        subBytes += r.bytes;
-        subNotes += r.notes;
-        let st = null; try { st = await fs.promises.stat(childAbs); } catch (e) { /* 忽略 */ }
-        dirKids.push({ name: it.name, type: 'dir', size: (records.get(childRel) || {}).totalSize || 0, mtime: st ? st.mtimeMs : 0 });
-      } else if (it.isFile() && it.name.toLowerCase().endsWith('.md')) {
-        let st = null;
-        try { st = await fs.promises.stat(childAbs); } catch (e) { continue; }
-        let text = '';
-        try { text = await vaultReadTextByRoot(root, childRel); } catch (e) { /* 读失败仅记录元信息 */ }
-        const noteId = ensureNoteId(text, snowflake, prevNoteIds[it.name]);
-        const clean = stripMetaId(text);
-        if (clean.removed) {
-          // 加密库：密文不可原地改写（写回会破坏加密内容），仅在内存中剔除残留 id 行供元数据解析
-          if (!noteEncEnabled(root)) { try { await fs.promises.writeFile(childAbs, clean.text, 'utf8'); } catch (e) { /* 清理失败不阻断 */ } }
-          text = clean.text;
-        }
-        const pm = parseNoteMeta(text, it.name, childRel);
-        rec.notes.push({ name: it.name, path: childRel, noteId: noteId, wordCount: pm.wordCount, tags: pm.tags, size: st.size, created: st.birthtimeMs, mtime: st.mtimeMs, chunk: prevOverrides[it.name] || undefined, indexTime: prevIndexTimes[it.name] || Date.now(), attachments: pm.attachments || [], outlinks: pm.outlinks || [] });
-        rec.noteCount++;
-        rec.size += st.size;
-      }
-    }
-    rec.size += subBytes;         // 占用大小 = 目录下全部文件递归合计
-    rec.totalNotes = rec.noteCount + subNotes;   // 笔记个数 = 直接 + 子孙
-    rec.totalSize = rec.size;
-    dirKids.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); });
-    rec.children = dirKids;
-    return { bytes: rec.size, notes: rec.totalNotes };
-  };
-  await walk(dirRel);
-}
-
-/** 根据正向链接（outlinks）计算反向链接（backlinks）并回填到每篇笔记。
- *  遍历所有笔记的 outlinks，将 (源笔记 → 目标笔记) 的关系反转为 (目标笔记 → 源笔记)。
- *  @param {Map<string, object>} records scanVaultMeta 的产物
- *  @author 火 冰 */
-function computeBacklinks(records) {
-  const data = Array.isArray(records) ? records : Array.from(records.values());
-  const srcSet = new Set();
-  for (const rec of data) if (rec && Array.isArray(rec.notes)) rec.notes.forEach(function (n) { srcSet.add(n); });
-  computeBacklinksFor(records, srcSet);
-}
-
-/** 作用域反链回填：只为 records 中每篇笔记计算 backlinks（目标都在 records 内），
- *  反链「来源」取自 srcSet（可扩展到全库来源），这样重命名某目录后，
- *  外部目录指向该目录内笔记的反链也能同步更新，且不触碰外部目录的记录。
- *  @author 火 冰 */
-function computeBacklinksFor(records, srcSet) {
-  const data = Array.isArray(records) ? records : Array.from(records.values());
-  const targets = new Map();
-  for (const rec of data) {
-    if (!rec || !Array.isArray(rec.notes)) continue;
-    for (const t of rec.notes) { t.backlinks = []; targets.set(t.path, t); targets.set(t.name, t); }
-  }
-  for (const src of srcSet) {
-    if (!src || !Array.isArray(src.outlinks)) continue;
-    for (const link of src.outlinks) {
-      const target = targets.get(link.path) || targets.get(link.name + '.md') || targets.get(link.name);
-      if (target && target.path !== src.path) {
-        // 去重：旧路径缓存来源与最新扫描来源可能指向同一实际笔记，避免反链重复
-        if (!target.backlinks.some(function (b) { return b.path === src.path; })) {
-          target.backlinks.push({ path: src.path, name: src.name.replace(/\.md$/i, '') });
-        }
-      }
-    }
-  }
-}
-
-/** 加载全库笔记 outlinks 快照（只读 .second-brain 下各目录 _meta.json 缓存，不重扫 md），
- *  并叠加当前已在 records 中最新扫描的笔记（其 outlinks 为权威来源），供作用域反链回填使用。
- *  @returns {Promise<Set<object>>} 笔记对象集合
- *  @author 火 冰 */
-async function loadCachedSourceSet(records) {
-  const srcSet = new Set();
-  for (const rec of Array.from(records.values())) if (rec && Array.isArray(rec.notes)) rec.notes.forEach(function (n) { srcSet.add(n); });
-  const root = vaultRoot();
-  const walk = async (dirRel) => {
-    const metaAbs = path.join(root, META_DIR, ...(dirRel ? dirRel.split('/') : []), '_meta.json');
-    let rec = null; try { rec = JSON.parse(await fs.promises.readFile(metaAbs, 'utf8')); } catch (e) { /* 无记录 */ }
-    if (rec && Array.isArray(rec.notes)) rec.notes.forEach(function (n) { srcSet.add(n); });
-    if (rec && Array.isArray(rec.children)) for (const c of rec.children) if (c.type === 'dir') await walk(dirRel ? dirRel + '/' + c.name : c.name);
-  };
-  await walk('');
-  return srcSet;
-}
-
-/** 作用域写入：仅把 records 中（某目录子树）的镜像 _meta.json 落盘，并从 startRel 镜像起清理子树内已不存在的残留，不动其它目录镜像。
- *  @author 火 冰 */
-async function writeDirMeta(records, startRel) {
-  const metaRoot = path.join(vaultRoot(), META_DIR);
-  for (const [dir, rec] of Array.from(records.entries())) {
-    const trim = dir ? (dir.split('/').map(function (s) { return s.trim(); }).filter(Boolean).join('/')) : '';
-    const mirrorAbs = path.join(metaRoot, ...(trim ? trim.split('/') : []));
-    try {
-      await fs.promises.mkdir(mirrorAbs, { recursive: true });
-      await fs.promises.writeFile(path.join(mirrorAbs, '_meta.json'), JSON.stringify(rec, null, 2), 'utf8');
-    } catch (e) { /* 单个目录元数据写入失败不阻断 */ }
-  }
-  if (startRel) await pruneDirMeta(metaRoot, records, startRel);
-}
-
-/** 仅从 startRel 镜像子树开始，清理磁盘上已不存在的残留目录镜像（只清理该子树内）。
- *  不会触碰 startRel 之外的任何镜像目录。根级（''）不清理。作者: 火 冰 */
-async function pruneDirMeta(metaRoot, records, startRel) {
-  if (!startRel) return;
-  const startAbs = path.join(metaRoot, ...startRel.split('/'));
-  const walk = async (mirrorAbs, rel) => {
-    let items = []; try { items = await fs.promises.readdir(mirrorAbs, { withFileTypes: true }); } catch (e) { return; }
-    for (const it of items) {
-      const abs = path.join(mirrorAbs, it.name);
-      const childRel = rel ? rel + '/' + it.name : it.name;
-      if (it.isDirectory()) {
-        if (records.has(childRel)) await walk(abs, childRel);
-        else { try { await fs.promises.rm(abs, { recursive: true, force: true }); } catch (e) { /* 忽略 */ } }
-      } else if (it.isFile() && it.name === '_meta.json') {
-        if (!records.has(rel)) { try { await fs.promises.rm(abs, { force: true }); } catch (e) { /* 忽略 */ } }
-      }
-    }
-  };
-  await walk(startAbs, startRel);
-}
-
-/** 重建指定目录子树的元数据（不重建全库）：仅索引该目录(及其祖先父级以更新 children)的笔记信息，
- *  并同步调整与其关联的反向链接（来自全库既有 outlinks 缓存）。
- *  scopeParent=true（目录重命名场景）时同时重建其父目录记录以刷新 children 子目录列表；
- *  scopeParent=false（文件重命名场景）时只重建该目录本身。
- *  返回 { dirs, notes }。作者: 火 冰 */
-vaultHandle('notes:refreshDirMeta', async (_e, rel, scopeParent) => {
-  await ensureVault();
-  const clean = String(rel || '').trim().replace(/^[\\/]+|[\\/]+$/g, '').replace(/\\/g, '/');
-  const startRel = scopeParent && clean.includes('/') ? clean.slice(0, clean.lastIndexOf('/')) : clean;
-  const records = new Map();
-  await walkDirMeta(startRel, records);
-  // 反链：以全库既有 outlinks 缓存为来源，只对目标位于本(子)树内的笔记回填 backlinks
-  const srcSet = await loadCachedSourceSet(records);
-  computeBacklinksFor(records, srcSet);
-  await writeDirMeta(records, startRel);
-  let notes = 0; for (const rec of records.values()) if (rec.notes) notes += rec.notes.length;
-  return { dirs: records.size, notes: notes };
+      const ts = new Date().toISOString();
+      fs.appendFileSync(path.join(app.getPath('userData'), 'logs', 'meta-diag.log'), ts + ' ' + msg + '\n', 'utf8');
+    } catch (e) { /* 诊断失败忽略 */ }
+  },
 });
 
-/** 将元数据记录逐目录写入 .second-brain/<dir>/_meta.json，并清理不对应现存目录的镜像残留。
- * @param {Map<string, object>} records scanVaultMeta 的产物
- * @returns {Promise<void>}
+/* ---- 去抖合并调度（按知识库根分组；setTimeout 回调脱离 IPC 的 AsyncLocalStorage，故显式捕获 root） ---- */
+
+/** 元数据扫描前置门（Bug-077 根治）：加密库密钥未就绪（锁屏未解锁/笔记密码未输入，M3 解不出 keyring）时
+ *  禁止任何元数据扫描落盘——此时解密读只会拿到 ENC1 密文（encIsFileEncrypted 在无 key 时返回 false），
+ *  用密文计算指纹/字数/outlinks 会产生「密文版」镜像覆盖正确记录，且每次启动都抖动重写；
+ *  解锁成功后由 scheduleMetaFull 补跑一次全库重建收敛。
+ * @param {string} root 库根绝对路径
+ * @returns {boolean} true=密钥就绪可扫描；false=必须跳过本次扫描
  * @author 火 冰 */
-async function writeVaultMeta(records) {
+function metaScanReady(root) {
+  return !(noteEncEnabled(root) && encNeedsUnlock(root));
+}
+
+/** 笔记/目录变更挂起集合：root -> { notes:Set, dirs:Set, timer }。
+ *  移动笔记 = read→save(新路径)→delete(旧路径) 两次 IPC，同 tick 内合并为一次刷新，
+ *  两个所在目录的 LCA 之上不再扫描/写入。 */
+const metaTouchPending = new Map();
+const META_TOUCH_DEBOUNCE_MS = 50;
+
+/** 排程一次增量元数据刷新（异步、失败不阻塞主流程）。
+ * @param {string[]} [noteRels] 变化的笔记相对路径（含删除/移动的新旧路径）
+ * @param {string[]} [dirRels] 变化的目录相对路径（新建目录）
+ * @author 火 冰 */
+function scheduleMetaTouch(noteRels, dirRels) {
   const root = vaultRoot();
-  const metaRoot = path.join(root, META_DIR);
-  for (const [dir, rec] of records) {
-    const trim = dir ? (dir.split('/').map(function (s) { return s.trim(); }).filter(Boolean).join('/')) : '';
-    const mirrorAbs = path.join(metaRoot, ...(trim ? trim.split('/') : []));
-    try {
-      await fs.promises.mkdir(mirrorAbs, { recursive: true });
-      await fs.promises.writeFile(path.join(mirrorAbs, '_meta.json'), JSON.stringify(rec, null, 2), 'utf8');
-    } catch (e) { /* 单个目录元数据写入失败不阻断整体重建 */ }
-  }
-  try { await pruneMeta(metaRoot, records, ''); } catch (e) { /* 清理残留镜像失败不阻断 */ }
+  let pend = metaTouchPending.get(root);
+  if (!pend) { pend = { notes: new Set(), dirs: new Set(), timer: null }; metaTouchPending.set(root, pend); }
+  (noteRels || []).forEach(function (r) { if (r) pend.notes.add(r); });
+  (dirRels || []).forEach(function (r) { if (r) pend.dirs.add(r); });
+  if (pend.timer) clearTimeout(pend.timer);
+  pend.timer = setTimeout(function () {
+    metaTouchPending.delete(root);
+    if (!metaScanReady(root)) return; // 加密库密钥未就绪：跳过（密文指纹会污染镜像），解锁后全库重建兜底
+    vaultMeta.touch(root, Array.from(pend.notes), Array.from(pend.dirs))
+      .catch(function () { /* 增量刷新失败不阻塞主流程 */ });
+  }, META_TOUCH_DEBOUNCE_MS);
 }
 
-/** 清理 .second-brain 中不对应现存目录的镜像（目录被改名/删除/移动后同步移除残留记录文件）。
+/** 全库 diff 重建的挂起计时器：root -> timer（打开知识库时后台构建，多窗口同库合并）。 */
+const metaFullPending = new Map();
+const META_FULL_DEBOUNCE_MS = 100;
+
+/** 排程一次全库扫描 + diff 落盘（检测资源管理器外部变更；无变化目录不重写）。
  * @author 火 冰 */
-async function pruneMeta(metaRoot, records, baseRel) {
-  let items = [];
-  try { items = await fs.promises.readdir(metaRoot, { withFileTypes: true }); } catch (e) { return; }
-  for (const it of items) {
-    const abs = path.join(metaRoot, it.name);
-    const rel = baseRel ? baseRel + '/' + it.name : it.name;
-    if (it.isDirectory()) {
-      if (records.has(rel)) await pruneMeta(abs, records, rel);   // 目录仍存在 → 递归清理其子树
-      else await fs.promises.rm(abs, { recursive: true, force: true });  // 目录已不存在 → 删除整个镜像
-    } else if (it.isFile() && it.name === '_meta.json') {
-      if (!records.has(baseRel)) await fs.promises.rm(abs, { force: true }); // 根/子目录镜像多余 → 删除
-    }
-  }
+function scheduleMetaFull() {
+  const root = vaultRoot();
+  const oldTimer = metaFullPending.get(root);
+  if (oldTimer) clearTimeout(oldTimer);
+  const timer = setTimeout(function () {
+    metaFullPending.delete(root);
+    if (!metaScanReady(root)) return; // 加密库密钥未就绪：禁止用 ENC1 密文扫描覆盖镜像（Bug-077），解锁后补跑
+    vaultMeta.rebuildAll(root).catch(function () { /* 全库刷新失败不阻塞 */ });
+  }, META_FULL_DEBOUNCE_MS);
+  metaFullPending.set(root, timer);
 }
 
-/** 后台重建 .second-brain 元数据（异步、失败不阻塞主流程）。 */
-function scheduleMetaRefresh() {
-  scanVaultMeta().then(writeVaultMeta).catch(function () { /* 元数据刷新失败不阻塞 */ });
-}
+/* 作用域重建某目录子树的元数据（属性面板/重命名后即时刷新、右键目录「重建笔记数据」）：
+ * 子树全扫 + 到根祖先链 + 链外反链对端补丁，diff 落盘并清理子树残留镜像。返回 { dirs, notes, written }。 */
+vaultHandle('notes:refreshDirMeta', async (_e, rel, _scopeParent) => {
+  await ensureVault();
+  const root = vaultRoot();
+  if (!metaScanReady(root)) return { dirs: 0, notes: 0, written: [], locked: true }; // 密钥未就绪：拒绝密文扫描
+  const clean = String(rel || '').trim().replace(/^[\\/]+|[\\/]+$/g, '').replace(/\\/g, '/');
+  return await vaultMeta.rebuildSubtree(root, clean);
+});
 
-/* 手动重建元数据（返回概览） */
+/* 手动全库重建元数据（空白区「重建笔记数据」）：全库扫描但只写有差异的目录。
+ * 返回 { dirs, notes, written }：written 为实际发生变化而写入的目录相对路径数组
+ * （无外部变更时为空数组，不重写任何 _meta.json，文件 mtime 不变）。 */
 vaultHandle('notes:refreshMeta', async () => {
   await ensureVault();
-  const records = await scanVaultMeta();
-  await writeVaultMeta(records);
-  return { dirs: records.size, updatedAt: Date.now() };
+  const root = vaultRoot();
+  if (!metaScanReady(root)) return { dirs: 0, notes: 0, written: [], locked: true }; // 密钥未就绪：拒绝密文扫描
+  return await vaultMeta.rebuildAll(root);
 });
 
 /* 读取某篇笔记所在目录的元数据记录 + 该笔记自身属性；缺失时自动重建后重读。
@@ -1612,9 +1297,8 @@ vaultHandle('notes:fileMeta', async (_e, rel) => {
   const metaAbs = path.join(vaultRoot(), META_DIR, ...(dir ? dir.split('/') : []), '_meta.json');
   const readRecord = async () => { try { return JSON.parse(await fs.promises.readFile(metaAbs, 'utf8')); } catch (e) { return null; } };
   let rec = await readRecord();
-  if (!rec) { // 记录缺失（首次进入或目录操作后）：同步重建后重读
-    const records = await scanVaultMeta();
-    await writeVaultMeta(records);
+  if (!rec && metaScanReady(vaultRoot())) { // 记录缺失且密钥就绪才全库构建（未就绪时密文会污染镜像，解锁后重取即可）
+    await vaultMeta.rebuildAll(vaultRoot());
     rec = await readRecord();
   }
   const note = rec && Array.isArray(rec.notes) ? (rec.notes.find(function (n) { return n.name === name; }) || null) : null;
@@ -1629,9 +1313,8 @@ vaultHandle('notes:dirMeta', async (_e, dir) => {
   const metaAbs = path.join(vaultRoot(), META_DIR, ...(clean ? clean.split('/') : []), '_meta.json');
   const readRecord = async () => { try { return JSON.parse(await fs.promises.readFile(metaAbs, 'utf8')); } catch (e) { return null; } };
   let rec = await readRecord();
-  if (!rec) { // 记录缺失（首次进入或变更后）：同步重建后重读
-    const records = await scanVaultMeta();
-    await writeVaultMeta(records);
+  if (!rec && metaScanReady(vaultRoot())) { // 记录缺失且密钥就绪才全库构建（未就绪时密文会污染镜像，解锁后重取即可）
+    await vaultMeta.rebuildAll(vaultRoot());
     rec = await readRecord();
   }
   // 附加目录实体在磁盘上的创建/修改时间（'' 为根目录→对库根 stat）
@@ -1707,8 +1390,9 @@ vaultHandle('notes:recentSave', async (_e, paths) => {
     else if (paths && typeof paths === 'object') { tabs = Array.isArray(paths.tabs) ? paths.tabs : []; pinned = Array.isArray(paths.pinned) ? paths.pinned : []; }
     tabs = tabs.filter(function (p) { return typeof p === 'string' && p.trim(); });
     pinned = pinned.filter(function (p) { return typeof p === 'string' && p.trim(); });
-    await fs.promises.mkdir(path.dirname(recentMetaFile()), { recursive: true });
-    await fs.promises.writeFile(recentMetaFile(), JSON.stringify({ tabs, pinned }, null, 2), 'utf8');
+    // 最小化写入：打开库恢复标签也会经 openNote→persistRecentTabs 触发本 IPC，
+    // 内容与磁盘一致时跳过（mtime 不变），避免每开一次库 recent.json 就被重写（Bug-076）
+    await vaultMeta.writeIfChanged(recentMetaFile(), JSON.stringify({ tabs, pinned }, null, 2));
   } catch (e) { /* 记录保存失败不阻断 */ }
 });
 
@@ -1777,11 +1461,19 @@ vaultHandle('notes:read', async (_e, rel) => {
   return await vaultReadText(rel);
 });
 
-/* 保存单篇笔记（自动建父目录）；保存后增量更新该笔记的索引块 */
+/* 保存单篇笔记（自动建父目录）；保存后增量更新该笔记的索引块。
+ * 内容与磁盘现存明文一致时跳过：不写文件、不更新 AI 索引、不刷新元数据
+ * （自动保存/失焦同步/移动前落盘等场景会重复提交相同内容）。
+ * @returns {Promise<boolean>} true=实际写入；false=内容无变化已跳过
+ * @author 火 冰 */
 vaultHandle('notes:save', async (_e, rel, content) => {
-  await vaultWriteText(rel, content);
+  const next = content == null ? '' : String(content);
+  let prev = null;
+  try { prev = await vaultReadText(rel); } catch (e) { prev = null; /* 文件不存在 → 首次写入 */ }
+  if (prev != null && prev === next) return false;
+  await vaultWriteText(rel, next);
   aiEngine.updateNote(rel).catch(function () { /* 单篇增量索引更新失败不阻塞保存 */ });
-  scheduleMetaRefresh();
+  scheduleMetaTouch([rel]); // 仅该笔记所在目录到根的祖先链增量刷新
   return true;
 });
 
@@ -1801,7 +1493,7 @@ vaultHandle('notes:create', async (_e, name, dir) => {
     await vaultWriteText(rel, '');
   }
   aiEngine.updateNote(rel).catch(function () { /* 新建笔记后续索引更新失败不阻塞 */ });
-  scheduleMetaRefresh();
+  scheduleMetaTouch([rel]); // 新笔记：仅所在目录到根的祖先链增量刷新
   return rel;
 });
 
@@ -1812,7 +1504,7 @@ vaultHandle('notes:createDir', async (_e, dir) => {
   if (!clean) throw new Error('目录名不能为空');
   const rel = clean.replace(/\\/g, '/');
   await fs.promises.mkdir(resolveVaultPath(rel), { recursive: true });
-  scheduleMetaRefresh();
+  scheduleMetaTouch([], [rel]); // 新目录：自身镜像 + 到根祖先链增量刷新
   return rel;
 });
 
@@ -1826,7 +1518,7 @@ vaultHandle('notes:delete', async (_e, rel) => {
   try {
     if (fs.existsSync(abs)) {
       const text = await vaultReadText(rel);
-      const attachments = extractAttachments(text);
+      const attachments = vaultMeta.parseAttachments(text);
       const resDir = path.join(vaultRoot(), RESOURCE_DIR);
       for (var i = 0; i < attachments.length; i++) {
         var m = String(attachments[i].url).match(/^note:\/\/vault_res\/([^?#]+)/);
@@ -1840,7 +1532,7 @@ vaultHandle('notes:delete', async (_e, rel) => {
   if (fs.existsSync(abs)) { await fs.promises.unlink(abs); }
   encListRemove(vaultRoot(), rel); // 删除笔记时同步从已加密文件列表移除（笔记加密）
   aiEngine.removeNote(rel).catch(function () { /* 移除索引失败不阻塞删除 */ });
-  scheduleMetaRefresh();
+  scheduleMetaTouch([rel]); // 仅该笔记所在目录到根的祖先链增量刷新
   return true;
 });
 
@@ -1892,7 +1584,8 @@ vaultHandle('notes:openExternal', async (_e, url) => {
   return true;
 });
 
-/* 删除上传的资源文件（图片/附件）：从 .resources 目录物理删除，并刷新元数据。
+/* 删除上传的资源文件（图片/附件）：从 .resources 目录物理删除。
+ * .resources 为隐藏目录，不进入 _meta.json 统计，故无需刷新元数据。
  * @param {string} url note://vault_res/uuid.ext 资源地址或存储名
  * @returns {Promise<boolean>} 是否删除成功
  * @author 火 冰 */
@@ -1907,7 +1600,6 @@ vaultHandle('notes:deleteResource', async (_e, url) => {
   try {
     if (fs.existsSync(abs)) await fs.promises.unlink(abs);
   } catch (e) { /* 删除失败不阻断 */ }
-  scheduleMetaRefresh();
   return true;
 });
 
@@ -1957,7 +1649,8 @@ vaultHandle('notes:moveDir', async (_e, oldDir, newParent) => {
     aiEngine.updateNote(n.path).catch(function () {});
   }
   encRebuildList(vaultRoot()).catch(function () {}); // 目录移动/重命名后重建已加密文件列表（笔记加密）
-  scheduleMetaRefresh();
+  // 元数据：noteId/chunk 覆盖项随路径映射保留，新子树全扫、双父链 LCA 截断、链外反链对端补丁、diff 落盘
+  await vaultMeta.renameDirTree(vaultRoot(), oldClean, dstRel);
   return { dir: dstRel, moved: files.length };
 });
 
@@ -2003,7 +1696,8 @@ vaultHandle('notes:renameDir', async (_e, oldDir, newName) => {
     aiEngine.updateNote(n.path).catch(function () {});
   }
   encRebuildList(vaultRoot()).catch(function () {}); // 目录移动/重命名后重建已加密文件列表（笔记加密）
-  scheduleMetaRefresh();
+  // 元数据：noteId/chunk 覆盖项随路径映射保留，新子树全扫、双父链 LCA 截断、链外反链对端补丁、diff 落盘
+  await vaultMeta.renameDirTree(vaultRoot(), oldClean, dstRel);
   return { dir: dstRel, moved: files.length };
 });
 
@@ -2021,7 +1715,8 @@ vaultHandle('notes:removeDir', async (_e, dir) => {
   for (const n of files) aiEngine.removeNote(n.path).catch(function () {});
   await fs.promises.rm(abs, { recursive: true, force: true });
   encRebuildList(vaultRoot()).catch(function () {}); // 删除目录后重建已加密文件列表（笔记加密）
-  scheduleMetaRefresh();
+  // 元数据：删除镜像子树 + 旧父目录链到根重建 + 链外反链对端补丁，diff 落盘
+  await vaultMeta.removeDirTree(vaultRoot(), clean);
   return files.length;
 });
 
@@ -2042,7 +1737,7 @@ vaultHandle('vault:get', async (event) => {
   }
   // 知识库窗口
   const p = vaultRoot();
-  scheduleMetaRefresh(); // 打开知识库时后台构建全库（当前目录及全部子目录）的属性数据
+  scheduleMetaFull(); // 打开知识库：后台全库扫描 + diff 落盘（检测资源管理器外部变更，无变化不重写）
   const binding = windowVaultBinding(event);
   // 优先从 vaultHistory 中查找自定义别名
   const key = String(binding || p).toLowerCase();
@@ -3277,6 +2972,8 @@ ipcMain.handle('app:unlock', async (event, pwd) => {
     appUnlocked = true;
     encAppPwdPlain = pwd; // 解锁后应用密码明文进内存作为盐（笔记加密密码组合解密的盐）；启动后未解锁时盐=固定盐，符合「不第一时间解密」
     if (event && event.sender) secWinUnlocked.set(event.sender.id, true); // 窗口级解锁
+    // 盐就绪后补跑元数据全库重建：启动时被 metaScanReady 拦下的加密库需用明文收敛一次（Bug-077）
+    try { scheduleMetaFull(); } catch (e) { /* 无打开的库时忽略 */ }
   }
   return ok;
 });
@@ -3925,6 +3622,10 @@ async function vaultReadTextByRoot(root, rel) {
   const abs = path.join(root, relN);
   const raw = await fs.promises.readFile(abs, 'utf8');
   if (noteEncEnabled(root) && encIsFileEncrypted(root, relN)) {
+    // Bug-077：必须先 ensureNoteKey（首调时才建立 keyring 缓存）再取 ring，
+    // 否则进程首次读到的加密笔记会因 ring=undefined 被静默当成密文返回（指纹/字数全部错误，
+    // 且与渲染端读取竞速时污染范围逐次不同，导致每次打开库元数据都被误判变化而全量重写）
+    ensureNoteKey(root);
     const ring = encKeyCache.get(String(root).toLowerCase());
     const kid = encLoadList(root, ensureNoteKey(root)).get(relN) || '';
     return decryptNoteTextAny(raw, ring, kid);
@@ -3942,6 +3643,7 @@ function vaultReadTextSync(root, rel) {
   const abs = path.join(root, relN);
   const raw = fs.readFileSync(abs, 'utf8');
   if (noteEncEnabled(root) && encIsFileEncrypted(root, relN)) {
+    ensureNoteKey(root); // Bug-077：先建 keyring 缓存再取 ring，避免首调返回密文
     const ring = encKeyCache.get(String(root).toLowerCase());
     const kid = encLoadList(root, ensureNoteKey(root)).get(relN) || '';
     return decryptNoteTextAny(raw, ring, kid);
@@ -3957,6 +3659,7 @@ async function vaultReadText(rel) {
   const relN = normRel(rel);
   const raw = await fs.promises.readFile(resolveVaultPath(relN), 'utf8');
   if (noteEncEnabled(vaultRoot()) && encIsFileEncrypted(vaultRoot(), relN)) {
+    ensureNoteKey(vaultRoot()); // Bug-077：先建 keyring 缓存再取 ring，避免首调返回密文
     const ring = encKeyCache.get(String(vaultRoot()).toLowerCase());
     const kid = encLoadList(vaultRoot(), ensureNoteKey(vaultRoot())).get(relN) || '';
     return decryptNoteTextAny(raw, ring, kid);
@@ -4088,7 +3791,11 @@ vaultHandle('app:encVerify', async (_e, data) => {
   if (!listC) return { ok: false, reason: 'no_config' };
   const k = String(root).toLowerCase();
   const autoKey = tryAutoNoteKey(root);
-  if (autoKey) { encEnabledCache.set(k, true); return { ok: true, auto: true }; }
+  if (autoKey) {
+    encEnabledCache.set(k, true);
+    try { scheduleMetaFull(); } catch (e) { /* 调度失败不阻断解锁 */ } // 密钥就绪：补跑启动期被跳过的元数据重建
+    return { ok: true, auto: true };
+  }
   const input = String((data && data.pwd) || '');
   if (!input) return { ok: false, reason: 'need_input' };
   const key = deriveNoteKey(input);                       // 输入笔记密码 I1 → 真正的笔记密钥 M2
@@ -4102,6 +3809,7 @@ vaultHandle('app:encVerify', async (_e, data) => {
   encMainKeyCache.set(k, kid);
   encEnabledCache.set(k, true);
   encListCache.set(k, list);
+  try { scheduleMetaFull(); } catch (e) { /* 调度失败不阻断解锁 */ } // 密钥就绪：补跑启动期被跳过的元数据重建
   return { ok: true };
 });
 

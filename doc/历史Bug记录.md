@@ -87,6 +87,8 @@
 | Bug-073 | 已修复（测试完成） | 项目窗口「新建目录」建进上一次打开的知识库，且目录区被重绘成知识库树：`doNewFolder/doNewNote/refreshTreeAfterChange` 全走知识库 `noteStore`。修复：新建目录/笔记项目分支直连 `project:createDir/save`，刷新收口 `sbProject.refresh()`；删除/移动/重命名加项目模式守卫；空目录注册为树节点可见。 | [查看](bugs/Bug-073.md) |
 | Bug-074 | 已修复（测试完成） | 项目窗口点击二进制/未支持后缀文件无法打开（仅提示「二进制文件不可编辑」或塞进编辑器乱码），无系统默认程序打开途径。修复：新增 `project:openExternal`（`shell.openPath`），`sbProjectOpenNote`/`openNote` 探测 `binary` 后调系统默认程序打开并撤销幽灵页签。 | [查看](bugs/Bug-074.md) |
 | Bug-075 | 已修复（测试完成） | 项目窗口打开 .sql 等文本文件编辑区完全空白（页签/字数正常、无报错），且非 md 文本无高亮：`buildVditor` 在 `window.Vditor` 未就绪（启动 clearCache 竞态）时静默放弃且永不重试。修复：Vditor 未就绪 500ms 延迟重试构建（60 次上限）；项目模式非 md 文本按后缀包 ```lang fence 复用代码块 hljs 高亮、`onEdInput` 统一解包；`project:read` 优先按 UTF-16 BOM 解码。 | [查看](bugs/Bug-075.md) |
+| Bug-076 | 已修复（测试完成） | 重新打开知识库（无编辑）`recent.json` 每次被重写（内容相同仅刷 mtime，同步盘误传输）：`openNote`（含启动恢复标签）每次调 persistRecentTabs，主进程 `notes:recentSave` 无内容比对无条件 writeFile。修复：meta-vault 新增 `writeIfChanged`（相同跳过保 mtime），recentSave 改走该出口；`_meta.json` 首开全写经查明为 fh 迁移+历史 id 清理的一次性收敛，二轮起零写入。 | [查看](bugs/Bug-076.md) |
+| Bug-077 | 已修复（测试完成） | 加密知识库每次打开（无编辑）6 个 `_meta.json` 全被重写（仅 updatedAt 变）：三个解密读函数先 `encKeyCache.get`（首调为 undefined）后 `ensureNoteKey` 才建缓存，首读经 `decryptNoteTextAny` 静默返回 ENC1 密文；与渲染端恢复标签的读取竞速，每轮污染边界不同→指纹每轮变→diff 误判全写。修复：三函数改为先 ensureNoteKey 再取 ring；真机二轮验证零写入。另确认 11:42 旧安装包（10-10 打包、无 meta-vault）是独立污染源，需重新打包覆盖安装。 | [查看](bugs/Bug-077.md) |
 
 > 说明（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——代码块语言选择器(chip)显隐保留为 Bug-011，编辑器链接弹框 `docButton` 那条纠正为 Bug-042。
 

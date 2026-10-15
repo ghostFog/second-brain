@@ -360,13 +360,8 @@
         if (edCurrent === path) edCurrent = newPath;
         renderFileTree(edNotes); renderTabs(); renderArticle(); persistRecentTabs();
         showToast('已重命名为「' + v + '」');
-        // 只作用域重建该笔记所在目录的数据并同步关联反链（不改全库），保证该笔记属性即时刷新
-        const parentDir = newPath.includes('/') ? newPath.slice(0, newPath.lastIndexOf('/')) : '';
-        if (window.noteDesktop && window.noteDesktop.refreshDirMeta) {
-          try { await noteStore.refreshDirMeta(parentDir, false); } catch (_) { /* 重建失败不影响重命名 */ }
-        } else {
-          rebuildMeta();
-        }
+        // 元数据无需前端重建：noteStore.move=保存新路径+删除旧路径，主进程两次增量 touch
+        // 经去抖合并为一次，只刷新旧/新目录的公共祖先链（LCA）+ 反链对端，diff 落盘。
       } catch (err) {
         showToast('重命名失败：' + ((err && err.message) || err));
         restore();
@@ -449,17 +444,12 @@
         showToast('已重命名为「' + newDir + '」');
         edSel = { type: 'folder', path: newDir };
         renderFileTree(edNotes); renderFileProps();
-        // 只作用域重建该目录(及其父级以刷新 children 子目录列表)的笔记数据并同步关联反链，不再全库重建
+        // 元数据由主进程 notes:renameDir 同步完成（renameDirTree：新子树全扫 + 新旧父链
+        // LCA 截断 + 链外反链对端补丁 + diff 落盘），前端无需二次重建；仅刷新文件树 UI。
         if (window.noteDesktop && window.noteDesktop.refreshDirMeta) {
-          try {
-            const r = await noteStore.refreshDirMeta(newDir, true);
-            try { await refreshTreeAfterChange(); } catch (_) { /* 忽略 */ }
-            showToast('已重建「' + newDir + '」笔记数据' + (r && r.notes ? '（' + r.notes + ' 篇）' : ''));
-          } catch (err) {
-            showToast('笔记数据重建失败（不影响重命名）：' + ((err && err.message) || err));
-          }
+          try { await refreshTreeAfterChange(); } catch (_) { /* UI 刷新失败可忽略 */ }
         } else {
-          rebuildMeta(newDir);
+          rebuildMeta(newDir); // 网页版无主进程维护，走原有兜底
         }
       } catch (err) {
         showToast('重命名失败：' + ((err && err.message) || err));

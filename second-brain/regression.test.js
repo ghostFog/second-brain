@@ -8,12 +8,19 @@
  *   Bug-021: 复制代码在 Clipboard API 被拒绝时回退 execCommand，不静默失败（Electron/note:// 常见）
  *   Bug-024: code-highlight 代码块悬浮复制按钮在 Clipboard 被拒时回退 execCommand，不静默失败
  *   ED-MD-vditor: 迁移 vditor 后 .md Provider 注册/去重、vdSetMode 映射、vdSetValue/vdGetValue 往返
+ *   ED-35: 元数据指纹 diff（fh 不依赖 mtime）、笔记增删改只写祖先链、移动只追踪到 LCA、
+ *          链外反链对端补丁、外部新增/修改最小化检出、目录改名 noteId 沿用
  * 运行: npm test（即 node regression.test.js），失败时退出码为 1
  */
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
+const matter = require('gray-matter');
 const { JSDOM } = require('jsdom');
+const { default: SnowflakeId } = require('snowflake-id');
+const { createVaultMeta } = require('./meta-vault');
 
 let pass = 0, fail = 0;
 /* 断言计数并输出
@@ -2227,3 +2234,260 @@ function testProjectCodeFileHighlight() {
     'Bug-075-5: project:read 优先按 UTF-16 BOM 解码文本');
 }
 testProjectCodeFileHighlight();
+
+/* ---- ED-35: 知识库元数据增量维护（meta-vault.js，临时库端到端） ----
+ * 直接 require 纯 Node 模块，注入真实 fs/path/crypto + gray-matter + SnowflakeId，
+ * 在 os.tmpdir() 建临时知识库验证：指纹 diff、祖先链增量、移动 LCA、链外反链补丁、
+ * 资源管理器外部变更检出（含 mtime 不变仅内容变）、目录改名 noteId 沿用。
+ * 作者: 火 冰 */
+
+/** 创建临时知识库根 + 注入真实依赖的元数据维护器（readText 按明文直读，与非加密库一致）。
+ * @returns {{root:string, vm:object}}
+ * @author 火 冰 */
+function makeMetaVault() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-meta-'));
+  const vm = createVaultMeta({
+    frs: fs, pathx: path, crypto: crypto, grayMatter: matter, SnowflakeId: SnowflakeId,
+    readText: async function (r, rel) { return await fs.promises.readFile(path.join(r, rel), 'utf8'); },
+  });
+  return { root: root, vm: vm };
+}
+
+/** 写入一篇笔记（自动建父目录）。
+ * @author 火 冰 */
+async function putNote(root, rel, text) {
+  const abs = path.join(root, rel);
+  await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+  await fs.promises.writeFile(abs, text == null ? '' : text, 'utf8');
+}
+
+/** 删除/移动库内相对路径实体（模拟资源管理器/应用文件操作）。
+ * @author 火 冰 */
+async function removeRel(root, rel) { await fs.promises.rm(path.join(root, rel), { recursive: true, force: true }); }
+async function moveRel(root, from, to) {
+  const toAbs = path.join(root, to);
+  await fs.promises.mkdir(path.dirname(toAbs), { recursive: true });
+  await fs.promises.rename(path.join(root, from), toAbs);
+}
+
+/** 读取某目录镜像记录。
+ * @author 火 冰 */
+function readMeta(root, dir) {
+  return JSON.parse(fs.readFileSync(
+    path.join(root, '.second-brain', ...(dir ? dir.split('/') : []), '_meta.json'), 'utf8'));
+}
+
+/** 镜像文件是否存在。
+ * @author 火 冰 */
+function metaExists(root, dir) {
+  return fs.existsSync(path.join(root, '.second-brain', ...(dir ? dir.split('/') : []), '_meta.json'));
+}
+
+/** 采集若干目录镜像的 mtime（不存在记 null）。
+ * @returns {Object<string, number|null>}
+ * @author 火 冰 */
+function snapshotMtimes(root, dirs) {
+  const out = {};
+  dirs.forEach(function (d) {
+    const p = path.join(root, '.second-brain', ...(d ? d.split('/') : []), '_meta.json');
+    try { out[d] = fs.statSync(p).mtimeMs; } catch (e) { out[d] = null; }
+  });
+  return out;
+}
+
+/** 在记录中按文件名找笔记条目。
+ * @author 火 冰 */
+function findNote(rec, name) {
+  return (rec.notes || []).find(function (n) { return n.name === name; }) || null;
+}
+
+/** 延迟 ms（用于区分文件 mtime）。
+ * @author 火 冰 */
+function sleepMs(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
+
+/** ED-35 元数据增量回归主流程。
+ * @author 火 冰 */
+async function testMetaVaultIncremental() {
+  console.log('\n[ED-35] meta-vault 增量元数据维护');
+  const { root, vm } = makeMetaVault();
+  try {
+    /* 布局：root.md / a/s/x.md / a/t.md / b/u.md / c/y.md(链接 x) / d/q.md / keep/k.md / 空目录 e */
+    await putNote(root, 'root.md', '# 根笔记\n');
+    await putNote(root, 'a/s/x.md', '# 深层笔记 X\n内容 A。\n');
+    await putNote(root, 'a/t.md', '# T\n');
+    await putNote(root, 'b/u.md', '# U\n');
+    await putNote(root, 'c/y.md', '# Y\n见 [[x]]。\n');
+    await putNote(root, 'd/q.md', '# Q\n另一目录的普通笔记\n');
+    await putNote(root, 'keep/k.md', '# K\n保持不变的对照笔记 AAAA\n');
+    await fs.promises.mkdir(path.join(root, 'e'), { recursive: true });
+
+    /* 1) 首次全库构建：现存全部目录都写镜像 */
+    const r1 = await vm.rebuildAll(root);
+    const allDirs = ['', 'a', 'a/s', 'b', 'c', 'd', 'e', 'keep'];
+    assert(r1.written.slice().sort().join('|') === allDirs.slice().sort().join('|'),
+      'ED-35-1a: 首次全库构建写入全部现存目录（实际 ' + r1.written.length + ' 个）');
+    const idDeepX = findNote(readMeta(root, 'a/s'), 'x.md').noteId;
+    assert(!!idDeepX, 'ED-35-1b: 新笔记获得稳定雪花 noteId');
+
+    /* 2) 无变化二次全库构建：written 为空且任何镜像 mtime 不变 */
+    await sleepMs(30);
+    const beforeIdle = snapshotMtimes(root, allDirs);
+    const r2 = await vm.rebuildAll(root);
+    const afterIdle = snapshotMtimes(root, allDirs);
+    assert(r2.written.length === 0, 'ED-35-2a: 无变化全库重建不写任何目录（written=[]）');
+    assert(allDirs.every(function (d) { return beforeIdle[d] === afterIdle[d]; }),
+      'ED-35-2b: 无变化时全部 _meta.json 的 mtime 保持不变');
+
+    /* 3) 改一篇深层笔记（新增指向链外笔记 u 的链接）：祖先链 + 反链对端 b 写入，其余目录不动 */
+    await sleepMs(30);
+    const beforeTouch = snapshotMtimes(root, allDirs);
+    await putNote(root, 'a/s/x.md', '# 深层笔记 X\n内容 B（已修改），见 [[u]]。\n');
+    const t1 = await vm.touch(root, ['a/s/x.md']);
+    assert(t1.written.slice().sort().join('|') === ['', 'a', 'a/s', 'b'].sort().join('|'),
+      'ED-35-3a: 改深层笔记写祖先链目录 + 链外反链对端目录 b（实际 ' + JSON.stringify(t1.written) + '）');
+    const untouched = ['c', 'd', 'e', 'keep'];
+    assert(untouched.every(function (d) { return beforeTouch[d] === snapshotMtimes(root, [d])[d]; }),
+      'ED-35-3b: 链外无关目录（含仅作来源发现的 c）镜像 mtime 不变（无 diff 不写盘）');
+    const xAfter = findNote(readMeta(root, 'a/s'), 'x.md');
+    assert(xAfter.noteId === idDeepX && xAfter.fh && xAfter.fh.length === 16,
+      'ED-35-3c: 修改后 noteId 沿用，且记录含 16 位内容指纹 fh');
+    const uAfter = findNote(readMeta(root, 'b'), 'u.md');
+    assert((uAfter.backlinks || []).some(function (x) { return x.path === 'a/s/x.md'; }),
+      'ED-35-3d: 链外对端笔记 u 的 backlinks 收录变化笔记（实际 ' + JSON.stringify(uAfter.backlinks) + '）');
+    const t1b = await vm.touch(root, ['a/s/x.md']);
+    assert(t1b.written.length === 0, 'ED-35-3e: 无新变化的重复 touch 不写盘');
+
+    /* 4) 移动笔记 a/s→b：新旧两次 touch 合并只追踪到 LCA（根）；反链跟随到新位置 */
+    await sleepMs(30);
+    const beforeMove = snapshotMtimes(root, allDirs);
+    await moveRel(root, 'a/s/x.md', 'b/x.md');
+    const t2 = await vm.touch(root, ['b/x.md', 'a/s/x.md']); // 应用内移动=保存新路径+删除旧路径
+    assert(t2.written.slice().sort().join('|') === ['', 'a', 'a/s', 'b'].sort().join('|'),
+      'ED-35-4a: 移动笔记只追踪到 LCA（写 a/s、a、b、根，不波及其它目录；实际 ' + JSON.stringify(t2.written) + '）');
+    assert(!findNote(readMeta(root, 'a/s'), 'x.md'), 'ED-35-4b: 旧目录镜像中已无移走的笔记');
+    const movedX = findNote(readMeta(root, 'b'), 'x.md');
+    assert(!!movedX, 'ED-35-4c: 新目录镜像收录移入笔记');
+    const bl = (movedX.backlinks || []).map(function (x) { return x.path; });
+    assert(bl.indexOf('c/y.md') !== -1, 'ED-35-4d: 移动后链接来源 c/y.md 的反链跟随到新位置（实际 ' + JSON.stringify(bl) + '）');
+    const uAfterMove = findNote(readMeta(root, 'b'), 'u.md');
+    assert((uAfterMove.backlinks || []).some(function (x) { return x.path === 'b/x.md'; }),
+      'ED-35-4e: 对端 u 的反链来源路径同步为移动后的新路径');
+    assert(['c', 'd', 'e', 'keep'].every(function (d) { return beforeMove[d] === snapshotMtimes(root, [d])[d]; }),
+      'ED-35-4f: 无关目录 c/d/e/keep 镜像不重写');
+    const r3 = await vm.rebuildAll(root);
+    assert(r3.written.length === 0, 'ED-35-4g: 移动并增量维护后全库重建稳定无补写');
+
+    /* 5) 资源管理器外部新增：不经应用直接落盘，全库重建检出且只写差异目录 */
+    await putNote(root, 'ext/new.md', '# 外部新建\n');
+    const r4 = await vm.rebuildAll(root);
+    assert(r4.written.indexOf('ext') !== -1 && r4.written.indexOf('') !== -1,
+      'ED-35-5a: 外部新增目录/笔记被检出（写 ext 与根，实际 ' + JSON.stringify(r4.written) + '）');
+    assert(r4.written.indexOf('keep') === -1 && r4.written.indexOf('b') === -1,
+      'ED-35-5b: 外部新增不波及其它无变化目录');
+
+    /* 6) 外部修改但 mtime 被还原（复制保留时间戳）：fh 内容指纹仍能检出 */
+    const keepMetaBefore = readMeta(root, 'keep');
+    const oldFh = findNote(keepMetaBefore, 'k.md').fh;
+    const kAbs = path.join(root, 'keep/k.md');
+    const oldStat = await fs.promises.stat(kAbs);
+    await fs.promises.writeFile(kAbs, '# K\n保持不变的对照笔记 BBBB\n', 'utf8'); // 与原文等长
+    await fs.promises.utimes(kAbs, oldStat.atime, oldStat.mtime); // 强制还原时间戳
+    const r5 = await vm.rebuildAll(root);
+    assert(r5.written.indexOf('keep') !== -1, 'ED-35-6a: mtime 不变仅内容变化时，fh 指纹仍检出差异');
+    const kRec = findNote(readMeta(root, 'keep'), 'k.md');
+    assert(kRec.fh !== oldFh && Math.abs(kRec.mtime - oldStat.mtimeMs) < 1,
+      'ED-35-6b: 新指纹生效，且记录的 mtime 为还原后的旧值');
+
+    /* 7) 子树重建：外部在 a/s 下加文件，只重建该子树+祖先链，不碰 keep */
+    await sleepMs(30);
+    const m7 = snapshotMtimes(root, ['keep', 'c']);
+    await putNote(root, 'a/s/ext2.md', '# 子树外部新增\n');
+    const s1 = await vm.rebuildSubtree(root, 'a/s');
+    assert(s1.written.indexOf('a/s') !== -1 && s1.written.indexOf('a') !== -1 && s1.written.indexOf('') !== -1,
+      'ED-35-7a: 子树重建写入子树目录与祖先链（实际 ' + JSON.stringify(s1.written) + '）');
+    assert(!!findNote(readMeta(root, 'a/s'), 'ext2.md'), 'ED-35-7b: 子树内外部新增笔记被收录');
+    assert(s1.written.indexOf('keep') === -1 && s1.written.indexOf('c') === -1,
+      'ED-35-7c: 子树重建不写链外目录');
+    assert(m7['keep'] === snapshotMtimes(root, ['keep'])['keep'], 'ED-35-7d: 链外目录镜像 mtime 不变');
+
+    /* 8) 目录改名 d→f：noteId 随覆盖映射沿用、旧镜像清除、新镜像建立，再全库重建稳定 */
+    const oldDNoteId = findNote(readMeta(root, 'd'), 'q.md').noteId;
+    await moveRel(root, 'd', 'f');
+    const g1 = await vm.renameDirTree(root, 'd', 'f');
+    assert(!metaExists(root, 'd'), 'ED-35-8a: 旧目录镜像子树已清除');
+    assert(metaExists(root, 'f'), 'ED-35-8b: 新目录镜像已建立');
+    assert(findNote(readMeta(root, 'f'), 'q.md').noteId === oldDNoteId,
+      'ED-35-8c: 目录改名后笔记 noteId 沿用（覆盖项按路径映射）');
+    assert(g1.written.indexOf('f') !== -1 && g1.written.indexOf('') !== -1
+      && g1.written.indexOf('keep') === -1,
+      'ED-35-8d: 只写新子树/父链，不碰无关目录（实际 ' + JSON.stringify(g1.written) + '）');
+    const g2 = await vm.rebuildAll(root);
+    assert(g2.written.length === 0, 'ED-35-8e: 目录改名增量维护后全库重建稳定无补写');
+
+    /* 9) 删除目录：镜像子树移除，父链重建，悬空反链来源消失，统计收缩 */
+    await removeRel(root, 'b'); // b/u.md、b/x.md 被删；c/y.md 的 [[x]] 从此悬空
+    const d1 = await vm.removeDirTree(root, 'b');
+    assert(!metaExists(root, 'b'), 'ED-35-9a: 被删目录镜像子树已移除');
+    assert(d1.written.indexOf('') !== -1 && d1.written.indexOf('c') === -1,
+      'ED-35-9b: 删除后只重建父链（根）；对端 c 记录无 diff 不重写（实际 ' + JSON.stringify(d1.written) + '）');
+    const rootRec = readMeta(root, '');
+    assert(!(rootRec.children || []).some(function (x) { return x.name === 'b'; }),
+      'ED-35-9c: 根记录 children 不再含已删目录');
+    assert(rootRec.totalNotes === 7,
+      'ED-35-9d: 根记录递归笔记总数随删除收缩为 7（实际 ' + rootRec.totalNotes + '）');
+    const d2 = await vm.rebuildAll(root);
+    assert(d2.written.length === 0, 'ED-35-9e: 删除目录增量维护后全库重建稳定无补写');
+
+    /* 10) Bug-076：recent.json 等状态文件最小化写入——不存在则建、内容相同跳过（mtime 不变）、不同才写 */
+    {
+      const st = makeMetaVault();
+      try {
+        const sf = path.join(st.root, '.second-brain', 'recent.json');
+        const payload = JSON.stringify({ tabs: ['a.md'], pinned: [] }, null, 2);
+        const w1 = await st.vm.writeIfChanged(sf, payload);
+        assert(w1 === true && fs.existsSync(sf), 'Bug-076-1: 目标不存在时创建文件并返回 true');
+        const mt1 = (await fs.promises.stat(sf)).mtimeMs;
+        await new Promise(function (r) { setTimeout(r, 15); });
+        const w2 = await st.vm.writeIfChanged(sf, payload);
+        const mt2 = (await fs.promises.stat(sf)).mtimeMs;
+        assert(w2 === false, 'Bug-076-2: 内容相同返回 false 跳过写入');
+        assert(mt2 === mt1, 'Bug-076-3: 跳过写入时文件 mtime 保持不变');
+        const w3 = await st.vm.writeIfChanged(sf, JSON.stringify({ tabs: ['b.md'], pinned: [] }, null, 2));
+        assert(w3 === true && JSON.parse(fs.readFileSync(sf, 'utf8')).tabs[0] === 'b.md',
+          'Bug-076-4: 内容不同正常写入并返回 true');
+      } finally {
+        await fs.promises.rm(st.root, { recursive: true, force: true });
+      }
+    }
+    // 源码防回退：main.js 的 notes:recentSave 必须经 writeIfChanged 保存（打开库恢复标签也会触发）
+    const mainSrc = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+    assert(/notes:recentSave'[\s\S]{0,900}?writeIfChanged\(recentMetaFile/.test(mainSrc),
+      'Bug-076-5: main.js notes:recentSave 走 vaultMeta.writeIfChanged 最小化写入');
+    // Bug-077 防回退：三个解密读函数必须「先 ensureNoteKey 建 keyring 缓存，再 encKeyCache.get 取 ring」，
+    // 否则进程首个加密笔记读取拿到 ring=undefined → decryptNoteTextAny 静默返回 ENC1 密文，
+    // 与渲染端读取竞速时污染元数据指纹，导致每次打开知识库全量重写 _meta.json
+    ['async function vaultReadTextByRoot', 'function vaultReadTextSync', 'async function vaultReadText'].forEach(function (sig) {
+      const idx = mainSrc.indexOf(sig);
+      assert(idx >= 0, 'Bug-077: 定位函数 ' + sig);
+      const body = mainSrc.slice(idx, idx + 700);
+      const iEnsure = body.indexOf('ensureNoteKey(');
+      const iGet = body.indexOf('encKeyCache.get');
+      assert(iEnsure >= 0 && iGet >= 0 && iEnsure < iGet,
+        'Bug-077: ' + sig + ' 必须先 ensureNoteKey 再 encKeyCache.get（避免首调返回密文）');
+    });
+  } finally {
+    await fs.promises.rm(root, { recursive: true, force: true });
+  }
+}
+
+/* 异步端到端测试结束后统一汇总全部断言并设置退出码（同步断言此前已执行完毕）。
+ * 作者: 火 冰 */
+testMetaVaultIncremental().then(function () {
+  console.log('\n========================================');
+  console.log('回归断言汇总: 通过 ' + pass + ' / 失败 ' + fail);
+  console.log('========================================');
+  process.exitCode = fail ? 1 : 0;
+}).catch(function (err) {
+  console.error('ED-35 测试执行异常:', err);
+  process.exitCode = 1;
+});

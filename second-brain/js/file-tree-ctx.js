@@ -261,25 +261,33 @@ function buildOpenChildren(path) {
   return children;
 }
 
-/** 重建数据库元数据（全库扫描，覆盖所有目录的 _meta.json）。
- *  @param {string} dir 目标目录相对路径（空串表示根目录）；当前实现为全库重建，
- *         确保子孙目录与祖先目录数据全部修正。
+/** 重建笔记元数据（指纹对比，仅差异目录写盘）。
+ *  @param {string} dir 目标目录相对路径：空串=全库重建；非空=仅重建该目录子树。
+ *         资源管理器手动新增/修改/删除文件后，用本按钮对比检测、最小化写入。
  *  @author 火 冰 */
 async function rebuildMeta(dir) {
   // 项目模式守卫：重建的是知识库元数据，与项目无关
   if (sbIsProjectMode()) { showToast('项目模式不使用笔记元数据，无需重建'); return; }
   const bridge = window.noteDesktop;
-  if (!bridge || !bridge.refreshMeta) {
+  const scope = String(dir || '');
+  const canSub = !!(bridge && bridge.refreshDirMeta);
+  const canAll = !!(bridge && bridge.refreshMeta);
+  if (!canSub && !canAll) {
     if (typeof showToast === 'function') showToast('该功能仅桌面版可用');
     return;
   }
-  if (typeof showToast === 'function') showToast('正在重建笔记数据…');
+  if (typeof showToast === 'function') showToast('正在检测笔记数据…');
   try {
-    const result = await bridge.refreshMeta();
+    // 有具体目录则只重建该子树，否则全库重建（均为对比检测，无变化不写盘）
+    const result = (scope && canSub) ? await bridge.refreshDirMeta(scope, false) : await bridge.refreshMeta();
     /* 刷新文件树 UI */
     try { await refreshTreeAfterChange(); } catch (_) { /* 忽略 */ }
     if (typeof showToast === 'function') {
-      showToast('笔记数据已重建' + (result && result.dirs ? '（' + result.dirs + ' 个目录）' : ''));
+      const changed = result && Array.isArray(result.written) ? result.written.length : 0;
+      const scanned = result && result.dirs ? result.dirs : 0;
+      showToast(changed
+        ? '笔记数据已更新（' + changed + ' 个目录 / 共检测 ' + scanned + ' 个）'
+        : '笔记数据无变化（共检测 ' + scanned + ' 个目录）');
     }
   } catch (_) {
     if (typeof showToast === 'function') showToast('重建失败');

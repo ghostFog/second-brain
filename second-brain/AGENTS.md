@@ -33,6 +33,7 @@
 - plugins/ —— 插件目录（markdown-editor / minimal-theme 等）
 - main.js —— Electron 主进程（窗口、note:// 协议、IPC）；preload.js 暴露 window.noteDesktop
 - ai-engine.js —— AI 引擎（主进程，本地 ONNX 嵌入/重排序）
+- meta-vault.js —— 知识库元数据维护（纯 Node 模块，main.js 注入依赖）：内容指纹 diff 最小化写入、祖先链增量、移动 LCA 追踪
 - css/ —— base.css（Design Token）+ app.css（组件样式）
 - regression.test.js / smoke-*.test.js —— 回归断言门禁与冒烟测试
 

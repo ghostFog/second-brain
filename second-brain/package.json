@@ -26,6 +26,7 @@
                                 "main.js",
                                 "preload.js",
                                 "ai-engine.js",
+                                "meta-vault.js",
                                 "index.html",
                                 "css/**/*",
                                 "js/**/*",
