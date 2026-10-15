@@ -52,6 +52,18 @@
     return await window.noteDesktop.git.run({ cwd: vaultPath, args: args });
   }
 
+  /* 幂等关闭 git 路径转义（core.quotepath=false，保证中文文件名在 status 中可读）。
+   * git config 即使写入与现值相同的内容也会重写整个 .git/config 并更新 mtime，
+   * 状态轮询每 30 秒无条件写会持续触发同步盘上传，故先 --get 读现值，仅在不是 false 时才写一次。
+   * @author 火 冰 */
+  async function ensureQuotepath() {
+    try {
+      const cur = await git(['config', '--get', 'core.quotepath']);
+      if (cur.exit === 0 && String(cur.stdout || '').trim() === 'false') return; // 已是目标值：只读不写
+      await git(['config', 'core.quotepath', 'false']);
+    } catch (e) { /* 探测/设置失败不阻塞调用方流程 */ }
+  }
+
   /* 更新状态栏式提示：显示当前分支等（无独立状态栏，用 toast 提示） */
   async function statusToast() {
     const p = await refreshVault();
@@ -818,7 +830,7 @@
       const s = p ? await probe() : null;
       if (!s || !s.installed) { clearTreeColoring(); return; }
       if (!s.isRepo) { clearTreeColoring(); return; }
-      await git(['config', 'core.quotepath', 'false']);
+      await ensureQuotepath(); // 幂等：仅现值非 false 时才写，避免轮询每 30 秒重写 .git/config
       await applyTreeColoring();
     } catch (e) { /* 静默降级 */ }
     finally { statusBusy = false; }
@@ -861,7 +873,7 @@
     const s = await probe();
     if (s && s.installed && s.isRepo) {
       if (s.remote) window.__gsRemote = s.remote;
-      await git(['config', 'core.quotepath', 'false']);
+      await ensureQuotepath(); // 幂等：已配置则不写，避免每次开库重写 .git/config
     }
     startTimer();
     startStatusTimer(); // 常驻状态条 + 目录树着色轮询
