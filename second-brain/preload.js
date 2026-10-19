@@ -52,6 +52,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   readNote: (relPath) => ipcRenderer.invoke('notes:read', relPath),
   /** 保存单篇笔记：relPath 相对路径 + 全文 */
   saveNote: (relPath, content) => ipcRenderer.invoke('notes:save', relPath, content),
+  /** ED-61 全文搜索：{q, limit?} → [{path,title,snippet}]（主进程解密后匹配，锁屏期返回空） */
+  searchNotes: (q, limit) => ipcRenderer.invoke('notes:searchText', { q: q, limit: limit }),
   /** 新建笔记：dir 为目标目录（可选），返回规范化相对路径 */
   createNote: (name, dir) => ipcRenderer.invoke('notes:create', name, dir),
   /** 新建目录：dir 为相对路径，返回规范化的相对路径 */
@@ -177,7 +179,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   writeFileExternal: (absPath, content) => ipcRenderer.invoke('notes:writeFileExternal', { absPath: absPath, content: content }),
   /** 订阅：系统「打开方式」传入的外部文件（OS 右键→打开方式→第二脑）→ 回调绝对路径，作为临时文件打开 */
   onOpenFile: (cb) => ipcRenderer.on('open-file', (_e, abs) => { if (typeof cb === 'function') cb(abs); }),
-  /** 订阅：文件树目录快照变化（用户在资源管理器手动增删/重命名）→ 回调 {kind:'vault'|'project'} */
+  /** 订阅：文件树目录快照变化（ED-60：用户在资源管理器手动增删/重命名，10s 内检出）
+   *  → 回调 {kind:'vault'|'project', added:string[], removed:string[], modified:string[]}（相对路径明细） */
   onVaultTreeChanged: (cb) => ipcRenderer.on('vault:tree-changed', (_e, data) => { if (typeof cb === 'function') cb(data); }),
   /** 取消订阅：文件树变化监听（多页面切换时避免重复绑定） */
   offVaultTreeChanged: () => ipcRenderer.removeAllListeners('vault:tree-changed'),

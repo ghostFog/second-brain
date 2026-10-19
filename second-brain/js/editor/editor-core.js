@@ -17,6 +17,7 @@
   let edOpenTabs = [];       // 打开中的标签 path 列表（自然顺序，含锁定）
   let edPinned = new Set();  // 已锁定（固定）标签 path 集合：固定显示在 tab 栏左端固定区、无关闭按钮
   let edDirty = new Set();   // 有未保存更改的标签 path 集合（用于「关闭所有未修改」等判定）
+  let edMissing = new Set(); // 文件已在应用外被删除/移走的打开标签 path 集合（ED-60：标签标失，内容保留可保存恢复）
   let edDragFrom = null;     // tab 拖拽：当前被拖动的 path
   let edDragTarget = null;   // tab 拖拽：当前悬浮的目标 path
   let edBlockSel = null;     // 所见即所得：当前被选中的顶层块元素（pre/blockquote/table/hr）——保留（editor-md.js 死代码仍引用，vditor 接管后不再生效）

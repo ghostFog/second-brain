@@ -14,6 +14,22 @@
  */
 globalThis.CHANGELOG = [
   {
+    version: '0.3.0',
+    date: '2026-10-19',
+    title: '外部变更自动感知 · 元数据自写闭环',
+    items: [
+      'ED-60 外部文件变更自动感知：主进程 10s 快照监控检出资源管理器手动增删改，自动刷新文件树',
+      '打开标签外部修改联动：干净文档自动同步、脏文档保留用户版本不被覆盖、删除标签标记丢失态（保存可恢复）',
+      '加密库锁屏期守卫：密钥未就绪时元数据扫描跳过，解锁后首个周期自动补检出，避免锁屏期密文污染',
+      'Bug-076 recent.json 幂等写入：writeIfChanged 严格比对新旧内容，相同跳过，解决每开库必写',
+      'Bug-077 首读密钥竞态：解密函数先 ensureNoteKey 再取密钥缓存，消除 ENC1 密文被当明文扫描导致的字数/指纹漂移',
+      'Bug-078 git-sync 状态轮询每 30s 重写 .git/config：core.quotepath 改幂等设置（先 --get 读现值，已是 false 则只读不写）',
+      '元数据 scheduleMetaTouch 支持显式 root 第三参：treeWatchTick 无 IPC 上下文时正确指定库根',
+      'ED-60 手动刷新按钮补齐：文件树右上角 #file-tree-refresh 补 JS click 绑定（此前 HTML 存在但无绑定，点了没反应），走统一 refreshTreeAfterChange 收口（知识库+项目模式双覆盖）',
+      'ED-61 文件树搜索升级为全文搜索 + 下拉建议：主进程 notes:searchText IPC（walkNotes + vaultReadTextSync 解密读，标题/正文双命中，标题优先早命中排序，命中 10 条早停，加密库锁屏守卫）；vaultRootForEvent 同时覆盖 winVaults + winProjects 双路，项目模式也能拿到正确根目录；渲染端 300ms 防抖 + CSS top:100% 紧贴搜索框底边的 absolute 下拉浮层，snippet 前后各 50 字符，mark 关键词高亮，点击直接 openNote',
+    ],
+  },
+  {
     version: '0.2.0',
     date: '2026-10-10',
     title: '多编辑器架构 · 代码文件 CodeMirror',

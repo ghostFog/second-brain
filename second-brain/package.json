@@ -1,6 +1,6 @@
 {
     "name":  "second-brain",
-    "version":  "0.2.0",
+    "version":  "0.3.0",
     "description":  "第二脑 桌面版 — 辅助个人成长",
     "main":  "main.js",
     "scripts":  {

@@ -145,33 +145,64 @@ const winProjects = new Map();
  * 作者: 火 冰
  * ============================================ */
 const TREE_WATCH_INTERVAL_MS = 10000;   // 10s 一次
-const treeSnapshots = new Map();        // windowId → 上次签名
+const treeSnapshots = new Map();        // windowId → 上次快照项 [{p,m,isFolder}]
 let treeWatchTimer = null;
 
-/** 生成知识库目录快照签名：walkNotes 得到的 {path, mtime} 拼接排序字符串
+/** 生成知识库目录快照项：walkNotes 得到的笔记 + 空目录（ED-60）。
+ * 空目录项 walkNotes 给的 mtime 是扫描时刻 Date.now()，直接用会导致每轮签名都变、
+ * 每 10s 误报一次变更，故这里对空目录重新 stat 取真实目录 mtime。
  * @param {string} root 知识库根路径
- * @returns {Promise<string>} 快照签名（空串表示扫描失败）
+ * @returns {Promise<Array<{p:string,m:number,isFolder?:boolean}>>} 快照项（按路径排序；空数组表示扫描失败/空库）
  * @author 火 冰 */
 async function snapshotVault(root) {
-  if (!root || !fs.existsSync(root)) return '';
+  if (!root || !fs.existsSync(root)) return [];
   const out = [];
   await walkNotes(root, '', out);
-  return out.map(n => n.path + '@' + n.mtime).sort().join('|');
+  const items = [];
+  for (const n of out) {
+    let m = n.mtime || 0;
+    if (n.isFolder) {
+      try { m = (await fs.promises.stat(path.join(root, n.path))).mtimeMs; }
+      catch (_) { m = 0; } // 目录刚被删等竞态：稳定值 0，下一轮自然落入 removed
+    }
+    items.push({ p: n.path, m: m, isFolder: !!n.isFolder });
+  }
+  items.sort((a, b) => (a.p < b.p ? -1 : a.p > b.p ? 1 : 0));
+  return items;
 }
 
-/** 生成项目目录快照签名：walkProject 同样处理
+/** 生成项目目录快照项：walkProject 同样处理
  * @param {string} root 项目根路径
- * @returns {Promise<string>} 快照签名
+ * @returns {Promise<Array<{p:string,m:number}>>} 快照项
  * @author 火 冰 */
 async function snapshotProject(root) {
-  if (!root || !fs.existsSync(root)) return '';
+  if (!root || !fs.existsSync(root)) return [];
   const items = await walkProject(root);
-  return items.map(n => (n.rel || '') + '@' + (n.mtime || 0)).sort().join('|');
+  return items.map(n => ({ p: n.rel || '', m: n.mtime || 0 }))
+    .sort((a, b) => (a.p < b.p ? -1 : a.p > b.p ? 1 : 0));
 }
 
-/** 全局扫描：遍历所有窗口，对比快照，变化时推送 vault:tree-changed
- * 10s 一次的轻量操作：walkNotes/walkProject 本身就是全量扫磁盘，
- * 签名拼接只是 O(n) 字符串操作。日志仅在变化时输出，避免刷屏。
+/** 对比两个快照项，输出 added/removed/modified 路径（ED-60 明细，供渲染端做打开标签联动）。
+ * @param {Array<{p:string,m:number}>} prev 上一轮快照
+ * @param {Array<{p:string,m:number}>} cur 本轮快照
+ * @returns {{added:string[],removed:string[],modified:string[]}}
+ * @author 火 冰 */
+function diffSnapshot(prev, cur) {
+  const oldMap = new Map(prev.map(x => [x.p, x.m]));
+  const newMap = new Map(cur.map(x => [x.p, x.m]));
+  const added = [], removed = [], modified = [];
+  for (const [p, m] of newMap) {
+    if (!oldMap.has(p)) added.push(p);
+    else if (oldMap.get(p) !== m) modified.push(p);
+  }
+  for (const p of oldMap.keys()) if (!newMap.has(p)) removed.push(p);
+  return { added, removed, modified };
+}
+
+/** 全局扫描：遍历所有窗口，对比快照，变化时推送 vault:tree-changed（ED-60 带变更明细）。
+ * 知识库额外联动元数据增量维护（外部增删改与应用内操作走同一条 touch 祖先链）。
+ * 加密库锁屏期（密钥未就绪）：不推送、不推进基线、不触元数据——避免密文污染，
+ * 基线停在解锁前状态，解锁后首个周期自然一次性补检出。
  * @author 火 冰 */
 async function treeWatchTick() {
   const targets = [];
@@ -188,16 +219,28 @@ async function treeWatchTick() {
   }
   for (const t of targets) {
     try {
-      const sig = t.kind === 'vault' ? await snapshotVault(t.root) : await snapshotProject(t.root);
+      // 加密库密钥未就绪（锁屏/未输入笔记密码）：本轮完全跳过，基线保持不动，解锁后补检出
+      if (t.kind === 'vault' && !metaScanReady(t.root)) continue;
+      const items = t.kind === 'vault' ? await snapshotVault(t.root) : await snapshotProject(t.root);
       const prev = treeSnapshots.get(t.wcId);
-      if (prev !== undefined && prev !== sig) {
-        const w = BrowserWindow.fromId(t.wcId);
-        if (w && !w.isDestroyed()) {
-          w.webContents.send('vault:tree-changed', { kind: t.kind });
-          appendLog({ level: 'debug', msg: '[tree-watch] ' + t.kind + ' changed: ' + t.root });
+      if (prev !== undefined) {
+        const d = diffSnapshot(prev, items);
+        if (d.added.length || d.removed.length || d.modified.length) {
+          const w = BrowserWindow.fromId(t.wcId);
+          if (w && !w.isDestroyed()) {
+            w.webContents.send('vault:tree-changed', Object.assign({ kind: t.kind }, d));
+            appendLog({ level: 'debug', msg: '[tree-watch] ' + t.kind + ' changed: ' + t.root
+              + ' +' + d.added.length + ' -' + d.removed.length + ' ~' + d.modified.length });
+          }
+          // 知识库：外部变更经同一条去抖祖先链同步 .second-brain 镜像（setInterval 无 IPC 上下文，显式传 root）
+          if (t.kind === 'vault') {
+            const mdRels = d.added.concat(d.removed, d.modified)
+              .filter(function (p) { const x = items.find(function (it) { return it.p === p; }); return !x || !x.isFolder; });
+            if (mdRels.length) scheduleMetaTouch(mdRels, [], t.root);
+          }
         }
       }
-      treeSnapshots.set(t.wcId, sig);
+      treeSnapshots.set(t.wcId, items);
     } catch (_) { /* 忽略单窗口快照异常，不中断全局扫描 */ }
   }
   // 清理已关闭窗口的快照
@@ -231,8 +274,13 @@ function winFromEvent(event) {
 /* 发起窗口绑定的知识库：null=跟随默认库，非 null=显式库根（不存在返回默认库根） */
 function vaultRootForEvent(event) {
   const win = winFromEvent(event);
-  const vp = win ? winVaults.get(win.webContents.id) : undefined;
+  if (!win) return defaultVaultRoot();
+  // 知识库模式：绑定值（null/路径）
+  const vp = winVaults.get(win.webContents.id);
   if (vp !== undefined) return vp || defaultVaultRoot();
+  // 项目模式：优先返回项目根；否则回退默认知识库
+  const pp = winProjects.get(win.webContents.id);
+  if (pp) return pp;
   return defaultVaultRoot();
 }
 
@@ -1233,8 +1281,9 @@ const META_TOUCH_DEBOUNCE_MS = 50;
  * @param {string[]} [noteRels] 变化的笔记相对路径（含删除/移动的新旧路径）
  * @param {string[]} [dirRels] 变化的目录相对路径（新建目录）
  * @author 火 冰 */
-function scheduleMetaTouch(noteRels, dirRels) {
-  const root = vaultRoot();
+function scheduleMetaTouch(noteRels, dirRels, explicitRoot) {
+  // setInterval/treeWatchTick 回调脱离 IPC 的 AsyncLocalStorage，vaultRoot() 会取错库，故允许显式传 root（ED-60）
+  const root = explicitRoot || vaultRoot();
   let pend = metaTouchPending.get(root);
   if (!pend) { pend = { notes: new Set(), dirs: new Set(), timer: null }; metaTouchPending.set(root, pend); }
   (noteRels || []).forEach(function (r) { if (r) pend.notes.add(r); });
@@ -1459,6 +1508,53 @@ vaultHandle('notes:read', async (_e, rel) => {
     throw new Error('EISDIR: 目标是目录而非笔记文件，无法读取: ' + rel);
   }
   return await vaultReadText(rel);
+});
+
+/* ED-61 文件树搜索升级：主进程全文搜索 IPC。
+ * walkNotes 拿笔记清单 → vaultReadTextSync 解密读正文 → includes 大小写不敏感匹配；
+ * 命中时截取命中行附近 60 字符作 snippet（保持原文，前端做关键词高亮）。
+ * 找到 limit 条立即返回（默认 10），避免大库傻扫；加密库锁屏期（密钥未就绪）直接返回空数组。
+ * @param {{q:string, limit?:number}} req 输入：q=关键词（空/短于 2 字符直接返回空），limit=最大结果数
+ * @returns {Promise<Array<{path:string,title:string,snippet:string}>>} 命中结果
+ * @author 火 冰 */
+vaultHandle('notes:searchText', async (_e, req) => {
+  const q = req && typeof req.q === 'string' ? req.q.trim() : '';
+  const limit = Math.max(1, Math.min(50, Number(req && req.limit) || 10));
+  if (q.length < 2) return []; // 单字符太噪，空/过短直接返回空
+  await ensureVault();
+  const root = vaultRoot();
+  if (!metaScanReady(root)) return []; // 加密库锁屏期：密钥未就绪时密文无法匹配明文关键词
+  const ql = q.toLowerCase();
+  const out = [];
+  const notes = [];
+  await walkNotes(root, '', notes);
+  // 第一遍：标题命中（最相关）→ 直接入列 + 正文首个匹配处作 snippet
+  // 第二遍：正文命中 → 按命中位置靠前排序；找到 limit 条立即停
+  for (const n of notes) {
+    if (n.isFolder) continue;
+    const fname = n.path.split('/').pop();
+    const title = fname.replace(/\.(md|markdown|txt)$/i, '');
+    const fnl = fname.toLowerCase();
+    let titleScore = -1; // -1=标题不命中；>=0=命中位置（越小越靠前）
+    const tIdx = fnl.indexOf(ql);
+    if (tIdx >= 0) titleScore = tIdx;
+    let text = '';
+    try { text = vaultReadTextSync(root, n.path) || ''; } catch (_) { continue; } // 文件损坏/删了等：跳过
+    const tl = text.toLowerCase();
+    const cIdx = tl.indexOf(ql);
+    if (cIdx < 0 && titleScore < 0) continue; // 标题和正文都不命中
+    // snippet：正文命中取命中位置附近；仅标题命中（正文没匹配）取文件开头附近
+    const anchor = cIdx >= 0 ? cIdx : 0;
+    const snipStart = Math.max(0, anchor - 50);
+    const snipEnd = Math.min(text.length, anchor + q.length + 50);
+    const snippet = (snipStart > 0 ? '…' : '') + text.slice(snipStart, snipEnd).replace(/\s+/g, ' ') + (snipEnd < text.length ? '…' : '');
+    // score：标题命中 -1000 + 命中位置（最相关→排最前）；正文命中 + 位置
+    const score = titleScore >= 0 ? (-1000 + titleScore) : cIdx;
+    out.push({ path: n.path, title: title, snippet: snippet, _score: score });
+    if (out.length >= limit) break;
+  }
+  out.sort(function (a, b) { return a._score - b._score; });
+  return out.map(function (r) { return { path: r.path, title: r.title, snippet: r.snippet }; });
 });
 
 /* 保存单篇笔记（自动建父目录）；保存后增量更新该笔记的索引块。

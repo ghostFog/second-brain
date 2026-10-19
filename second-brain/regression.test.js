@@ -2480,9 +2480,120 @@ async function testMetaVaultIncremental() {
   }
 }
 
+/* ED-60 / Bug-078 源码防回退断言（渲染端联动依赖 Electron/DOM，以真机验证为主，此处锁死关键结构）。
+ * 作者: 火 冰 */
+function testExternalFsWatch() {
+  const mainSrc = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+  const hostSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-host.js'), 'utf8');
+  const tabsSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-tabs.js'), 'utf8');
+  const gitSrc = fs.readFileSync(path.join(__dirname, 'plugins', 'git-sync', 'main.js'), 'utf8');
+
+  // ---- ED-60 主进程 ----
+  const snapIdx = mainSrc.indexOf('async function snapshotVault');
+  assert(snapIdx >= 0, 'ED-60-1: main.js 存在 snapshotVault');
+  const snapBody = mainSrc.slice(snapIdx, snapIdx + 900);
+  assert(!/Date\.now/.test(snapBody),
+    'ED-60-2: 快照内空目录必须用真实 stat mtime，禁止 Date.now()（否则每轮签名都变、每 10s 误报）');
+  assert(/n\.isFolder/.test(snapBody) && /promises\.stat\(/.test(snapBody),
+    'ED-60-3: 空目录项重新 stat 取真实 mtime');
+  assert(/function diffSnapshot\(/.test(mainSrc), 'ED-60-4: 存在 diffSnapshot 明细对比');
+
+  const tickIdx = mainSrc.indexOf('async function treeWatchTick');
+  const tickBody = mainSrc.slice(tickIdx, tickIdx + 2600);
+  assert(/!metaScanReady\(t\.root\)\)\s*continue/.test(tickBody),
+    'ED-60-5: 锁屏/密钥未就绪时 continue 跳过——不推送、不推进基线，解锁后补检出');
+  assert(/diffSnapshot\(prev,\s*items\)/.test(tickBody), 'ED-60-6: tick 用结构化快照做 diff');
+  assert(/Object\.assign\(\{\s*kind:\s*t\.kind\s*\},\s*d\)/.test(tickBody),
+    'ED-60-7: tree-changed 事件携带 added/removed/modified 明细');
+  assert(/scheduleMetaTouch\(mdRels,\s*\[\],\s*t\.root\)/.test(tickBody),
+    'ED-60-8: 外部变更经 touch 祖先链同步元数据，且显式传 root（setInterval 无 IPC 上下文）');
+  const touchIdx = mainSrc.indexOf('function scheduleMetaTouch');
+  assert(/function scheduleMetaTouch\(noteRels,\s*dirRels,\s*explicitRoot\)/.test(mainSrc.slice(touchIdx, touchIdx + 200)),
+    'ED-60-9: scheduleMetaTouch 支持 explicitRoot 第三参');
+
+  // ---- ED-60 渲染端 ----
+  assert(/function bindExternalFsWatch\(\)/.test(hostSrc), 'ED-60-10: 渲染端存在 bindExternalFsWatch');
+  assert(/bindExternalFsWatch\(\)/.test(hostSrc.slice(hostSrc.indexOf('async function initEditor'), hostSrc.indexOf('async function initEditor') + 1200)),
+    'ED-60-11: initEditor 中绑定外部变更订阅');
+  const bindIdx = hostSrc.indexOf('function bindExternalFsWatch');
+  const bindBody = hostSrc.slice(bindIdx, bindIdx + 2000);
+  assert(bindBody.indexOf('nd.offVaultTreeChanged()') >= 0
+    && bindBody.indexOf('nd.offVaultTreeChanged()') < bindBody.indexOf('nd.onVaultTreeChanged(function'),
+    'ED-60-12: 重入先 off 再 on，防止重复监听');
+  assert(/unlocked\s*===\s*false/.test(bindBody), 'ED-60-13: 渲染端锁屏守卫（双保险）');
+  assert(/setTimeout\(handleExternalTreeChange,\s*800\)/.test(bindBody), 'ED-60-14: 800ms 防抖合并事件风暴');
+  const hIdx = hostSrc.indexOf('async function handleExternalTreeChange');
+  const hBody = hostSrc.slice(hIdx, hIdx + 2600);
+  assert(/refreshTreeAfterChange\(\)/.test(hBody), 'ED-60-15: 外部变更自动刷新文件树');
+  assert(/edDirty\.has\(p\)/.test(hBody) && /未覆盖/.test(hBody),
+    'ED-60-16: 脏文档遭遇外部修改时保留用户版本仅提示，不被覆盖');
+  assert(/reloadNote\(p\)/.test(hBody), 'ED-60-17: 干净的当前标签外部修改后自动重载');
+  assert(/disk\s*===\s*loaded|disk === loaded/.test(hBody), 'ED-60-18: 与缓存一致判定为自身操作回声，幂等忽略');
+  assert(/edMissing\.add\(p\)/.test(hBody), 'ED-60-19: 外部删除/移动的打开标签打丢失标记');
+  assert(/edMissing\.delete\(p\)\)\s*renderTabs\(\)/.test(hostSrc), 'ED-60-20: 丢失标签保存后解除标记');
+  assert(/edMissing/.test(tabsSrc), 'ED-60-21: 标签栏消费 edMissing 渲染丢失态');
+
+  // ED-60-22: 手动刷新按钮（#file-tree-refresh）绑定 click handler——此前按钮 HTML 存在但无 JS 绑定，点了没反应
+  const ctxSrc = fs.readFileSync(path.join(__dirname, 'js', 'file-tree-ctx.js'), 'utf8');
+  assert(/function bindFileTreeRefreshButton\(\)/.test(ctxSrc), 'ED-60-22a: 存在 bindFileTreeRefreshButton 函数');
+  assert(/getElementById\('file-tree-refresh'\)/.test(ctxSrc), 'ED-60-22b: 绑定目标为 HTML 中的 #file-tree-refresh 按钮');
+  assert(/refreshTreeAfterChange\(\)/.test(ctxSrc), 'ED-60-22c: 点击回调走统一刷新收口 refreshTreeAfterChange（知识库+项目模式双覆盖）');
+  const hostBind = hostSrc.slice(hostSrc.indexOf('bindFileTreeContextMenu'), hostSrc.indexOf('bindFileTreeContextMenu') + 600);
+  assert(/bindFileTreeRefreshButton\(\)/.test(hostBind), 'ED-60-22d: initEditor 中调用 bindFileTreeRefreshButton');
+
+  // ---- ED-61 全文搜索 + 下拉建议 ----
+  const mainSearch = mainSrc.slice(mainSrc.indexOf('notes:searchText'), mainSrc.indexOf('notes:searchText') + 2500);
+  assert(mainSearch.indexOf('notes:searchText') >= 0, 'ED-61-1: main.js 存在 notes:searchText IPC handler');
+  assert(/walkNotes\(root,\s*'',\s*notes\)/.test(mainSearch), 'ED-61-2: 用 walkNotes 取笔记清单');
+  assert(/vaultReadTextSync\(root,\s*n\.path\)/.test(mainSearch), 'ED-61-3: 用 vaultReadTextSync 解密读正文（加密库也能搜）');
+  assert(/tl\.indexOf\(ql\)/.test(mainSearch), 'ED-61-4: 大小写不敏感全文匹配（tl.indexOf）');
+  assert(/out\.length\s*>=\s*limit\)\s*break/.test(mainSearch), 'ED-61-5: 命中 limit 条立即停（不傻扫全库）');
+  assert(/metaScanReady\(root\)\)\s*return\s*\[\]/.test(mainSearch), 'ED-61-6: 锁屏守卫——密钥未就绪返回空数组');
+  assert(/q\.length\s*<\s*2/.test(mainSearch), 'ED-61-7: 空/单字符直接返回空（降噪）');
+  assert(/titleScore/.test(mainSearch) && /fnl\.indexOf\(ql\)/.test(mainSearch), 'ED-61-7b: 文件名/标题也参与匹配（不只是正文）');
+  assert(/_score.*titleScore|titleScore.*-1000/.test(mainSearch), 'ED-61-7c: 标题命中给高分（-1000 + 位置），最相关排最前');
+  assert(/out\.sort/.test(mainSearch), 'ED-61-7d: 结果按相关性排序后返回');
+
+  // 双路覆盖：vaultRootForEvent 必须同时查 winVaults 和 winProjects（项目模式也能拿到正确根目录）
+  const vreIdx = mainSrc.indexOf('function vaultRootForEvent');
+  const vreBody = vreIdx >= 0 ? mainSrc.slice(vreIdx, vreIdx + 600) : '';
+  assert(vreBody.indexOf('winVaults.get') >= 0, 'ED-61-7e: vaultRootForEvent 查 winVaults（知识库模式）');
+  assert(vreBody.indexOf('winProjects.get') >= 0, 'ED-61-7f: vaultRootForEvent 查 winProjects（项目模式）');
+
+  const preSrc = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
+  assert(/searchNotes:\s*\(q,\s*limit\)\s*=>\s*ipcRenderer\.invoke\('notes:searchText'/.test(preSrc), 'ED-61-8: preload 暴露 searchNotes → notes:searchText IPC');
+
+  // 渲染端（hostSrc 已读）：300ms 防抖 + 下拉浮层 + 关键词高亮
+  // setupFullTextSearch 立即执行函数体较长，部分断言直接在整个 hostSrc 上匹配，避免 slice 截断
+  assert(hostSrc.indexOf('setupFullTextSearch') >= 0, 'ED-61-9: 编辑器页面存在 setupFullTextSearch 立即执行函数');
+  assert(/debounceTimer\s*=\s*setTimeout[\s\S]{0,1200}?,\s*300\s*\)/.test(hostSrc), 'ED-61-10: 300ms 防抖输入事件');
+  assert(/await\s+nd\.searchNotes[\s\S]{0,40}?q[\s\S]{0,10}?10/.test(hostSrc), 'ED-61-11: 调后端 searchNotes(q,10)，最多 10 条');
+  assert(/position:\s*absolute[\s\S]{0,200}top:\s*100%/.test(hostSrc) && /z-index:\s*9999/.test(hostSrc), 'ED-61-12: 下拉浮层 absolute + top:100% 紧贴父容器底边（CSS 锚定，无需运行时 getBoundingClientRect）+ z-index 置顶');
+  assert(/max-height:\s*320px/.test(hostSrc), 'ED-61-13: 下拉浮层最大高度 320px + 内部滚动');
+  assert(/new RegExp/.test(hostSrc) && /q\.replace/.test(hostSrc) && /\[\.\*\+\?\^\$/.test(hostSrc), 'ED-61-14: 特殊字符安全转义后构建正则，防止关键词正则注入');
+  assert(/escapeHtml\(it\.snippet/.test(hostSrc), 'ED-61-15: snippet 后端明文仍二次 escapeHtml 防 XSS');
+  assert(/<mark style/.test(hostSrc), 'ED-61-16: 命中片段关键词用 mark 标签高亮');
+  assert(/q\.length\s*<\s*2/.test(hostSrc), 'ED-61-17: 单字符/空时关闭浮层，不发请求');
+  // 文件名过滤同时保留（不是替换，而是增强）
+  assert(/f\.dataset\.name.*includes/.test(hostSrc), 'ED-61-18: 原文件名过滤同步保留，向后兼容（文件名过滤 + 全文搜索双轨）');
+
+  // ---- Bug-078：git config core.quotepath 禁止无条件重复写 ----
+  assert(/async function ensureQuotepath\(\)/.test(gitSrc), 'Bug-078-1: git-sync 存在幂等 ensureQuotepath');
+  const eqIdx = gitSrc.indexOf('async function ensureQuotepath');
+  const eqBody = gitSrc.slice(eqIdx, eqIdx + 600);
+  assert(/config',\s*'--get',\s*'core\.quotepath'/.test(eqBody) && /trim\(\)\s*===\s*'false'\)\s*return/.test(eqBody),
+    'Bug-078-2: 先 --get 读现值，已是 false 直接 return（只读不写）');
+  // 直写仅允许两处：ensureQuotepath 内部确认需要时写 1 次、git init 新仓库后写 1 次；轮询/启动点不得再直写
+  const unconditionalWrites = (gitSrc.match(/git\(\['config',\s*'core\.quotepath',\s*'false'\]\)/g) || []).length;
+  assert(unconditionalWrites === 2,
+    'Bug-078-3: core.quotepath 直写只允许 ensureQuotepath 内 + git init 后共 2 处（实际 ' + unconditionalWrites + ' 处），轮询/启动必须走 ensureQuotepath');
+  assert(/await ensureQuotepath\(\)/.test(gitSrc), 'Bug-078-4: 轮询/启动路径改调幂等 ensureQuotepath');
+}
+
 /* 异步端到端测试结束后统一汇总全部断言并设置退出码（同步断言此前已执行完毕）。
  * 作者: 火 冰 */
 testMetaVaultIncremental().then(function () {
+  testExternalFsWatch();
   console.log('\n========================================');
   console.log('回归断言汇总: 通过 ' + pass + ' / 失败 ' + fail);
   console.log('========================================');

@@ -56,7 +56,7 @@
     const closing = new Set(list);
     const closedCurrent = closing.has(edCurrent);
     edOpenTabs = edOpenTabs.filter(function (p) { return !closing.has(p); });
-    list.forEach(function (p) { delete edOutdated[p]; edPinned.delete(p); edDirty.delete(p); });
+    list.forEach(function (p) { delete edOutdated[p]; edPinned.delete(p); edDirty.delete(p); edMissing.delete(p); });
     if (closedCurrent) edCurrent = edOpenTabs[edOpenTabs.length - 1] || null;
     const p = edCurrent;
     renderTabs();
@@ -79,6 +79,7 @@
       const name = p.split('/').pop();
       const active = p === edCurrent;
       const pinned = edPinned.has(p);
+      const missing = edMissing.has(p); // ED-60：文件已在外部删除/移动，标签警示态（橙字+删除线，保存可恢复）
       // 固定区 tab：无关闭按钮，锁图标可点击解锁；普通 tab：× 左侧放钉图标可锁定
       const pinIcon = pinned
         ? '<i data-lucide="lock" data-action="pin-toggle" data-path="' + esc(p) + '" title="解除锁定" class="w-3 h-3 shrink-0" style="cursor:pointer; color:var(--note-brand-400);"></i>'
@@ -88,9 +89,14 @@
         : '<i data-lucide="x" data-action="close-tab" data-path="' + esc(p) + '" title="关闭" class="w-3 h-3 shrink-0" style="opacity:.5; cursor:pointer;"></i>';
       const dragState = (edDragFrom && edDragFrom === p) ? ' opacity:.35;'
         : (edDragTarget && edDragTarget === p) ? ' box-shadow: inset 0 -2px 0 var(--note-brand-400);' : '';
-      return '<div class="editor-tab h-full flex items-center gap-2 pl-2.5 pr-3 border-r cursor-pointer whitespace-nowrap" draggable="true" data-path="' + esc(p) + '" title="' + esc(p) + '" style="border-color: var(--note-border); background: ' + (active ? 'var(--note-background)' : (pinned ? 'rgba(124,58,237,.06)' : 'transparent')) + '; color: ' + (active ? 'var(--note-ink)' : 'var(--note-ink-3)') + ';' + dragState + '">'
-        + '<i data-lucide="file-text" class="w-3.5 h-3.5 shrink-0" style="color: var(--note-brand-400);"></i>'
-        + '<span class="text-[13px]">' + esc(name) + '</span>'
+      const fileIcon = missing
+        ? '<i data-lucide="alert-triangle" class="w-3.5 h-3.5 shrink-0" style="color:#d97706;" title="文件丢失"></i>'
+        : '<i data-lucide="file-text" class="w-3.5 h-3.5 shrink-0" style="color: var(--note-brand-400);"></i>';
+      const nameStyle = missing ? 'color:#d97706;text-decoration:line-through;' : '';
+      const tip = missing ? '此文件已在资源管理器中被删除或移动；保存可按原路径恢复\n' + p : p;
+      return '<div class="editor-tab h-full flex items-center gap-2 pl-2.5 pr-3 border-r cursor-pointer whitespace-nowrap" draggable="true" data-path="' + esc(p) + '" title="' + esc(tip) + '" style="border-color: var(--note-border); background: ' + (active ? 'var(--note-background)' : (pinned ? 'rgba(124,58,237,.06)' : 'transparent')) + '; color: ' + (active ? 'var(--note-ink)' : 'var(--note-ink-3)') + ';' + dragState + '">'
+        + fileIcon
+        + '<span class="text-[13px]" style="' + nameStyle + '">' + esc(name) + '</span>'
         + pinIcon + closeIcon
         + '</div>';
     }).join('');

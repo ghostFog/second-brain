@@ -219,6 +219,87 @@
     if (path === edCurrent) openNote(path);
   }
 
+  /* ============================
+   * ED-60 外部文件变更自动感知
+   * 订阅主进程 10s 快照监控推送的 vault:tree-changed（含 added/removed/modified 明细），
+   * 800ms 防抖合并事件风暴后：刷新文件树；打开中的笔记按「干净自动同步 / 脏文档保留 / 丢失标记」联动。
+   * ============================ */
+  let edExtWatchTimer = null;    // 防抖计时器
+  let edExtWatchAcc = null;      // 合并中的变更明细 {kind, added:Set, removed:Set, modified:Set}
+
+  /** 绑定外部变更订阅（initEditor 调用；重入先解绑防重复监听）。网页 mock 无此桥时静默降级。
+   * @author 火 冰 */
+  function bindExternalFsWatch() {
+    const nd = window.noteDesktop;
+    if (!nd || typeof nd.onVaultTreeChanged !== 'function') return;
+    if (typeof nd.offVaultTreeChanged === 'function') nd.offVaultTreeChanged();
+    edExtWatchTimer = null;
+    edExtWatchAcc = null;
+    nd.onVaultTreeChanged(function (data) {
+      if (!data) return;
+      // 锁屏遮罩下不处理（主进程锁屏期也不推送且不推进基线，解锁后首个周期补推），双保险
+      try {
+        const st = nd.security && nd.security.getStateSync ? nd.security.getStateSync() : null;
+        if (st && st.unlocked === false) return;
+      } catch (_) { /* 状态取不到不阻断 */ }
+      if (!edExtWatchAcc) edExtWatchAcc = { kind: data.kind || 'vault', added: new Set(), removed: new Set(), modified: new Set() };
+      (data.added || []).forEach(function (p) { edExtWatchAcc.added.add(p); edExtWatchAcc.removed.delete(p); });
+      (data.removed || []).forEach(function (p) { edExtWatchAcc.removed.add(p); edExtWatchAcc.added.delete(p); });
+      (data.modified || []).forEach(function (p) { if (!edExtWatchAcc.added.has(p)) edExtWatchAcc.modified.add(p); });
+      if (edExtWatchTimer) clearTimeout(edExtWatchTimer);
+      edExtWatchTimer = setTimeout(handleExternalTreeChange, 800);
+    });
+  }
+
+  /** 防抖到期后的实际处理：刷树 + 打开标签外部联动。
+   * 规则：文件丢失→标签标失+保留内容（保存即按原路径恢复）；干净标签外部修改→自动同步（当前标签即时重载，
+   * 后台标签换缓存）；脏标签外部修改→保留用户版本仅提示；与缓存一致视为应用内自身操作的回声，幂等忽略。
+   * @author 火 冰 */
+  async function handleExternalTreeChange() {
+    const acc = edExtWatchAcc;
+    edExtWatchAcc = null;
+    edExtWatchTimer = null;
+    if (!acc) return;
+    try { await refreshTreeAfterChange(); } catch (_) { /* 树刷新失败不阻断标签联动 */ }
+    if (acc.kind === 'project') return; // 项目模式为自动保存模型，本轮只刷树，不做编辑器内容联动，避免覆盖在编内容
+    // 刷新后 edNotes 即最新磁盘清单；打开标签命中明细或已不在清单（整目录被删）时纳入检查
+    const exists = new Set(edNotes.filter(function (n) { return !n.isFolder; }).map(function (n) { return n.path; }));
+    const touched = new Set();
+    edOpenTabs.forEach(function (p) {
+      if (sbIsPseudoPath(p)) return;
+      if (acc.added.has(p) || acc.removed.has(p) || acc.modified.has(p) || !exists.has(p)) touched.add(p);
+    });
+    if (!touched.size) return;
+    let tabsChanged = false;
+    for (const p of touched) {
+      const name = p.split('/').pop();
+      if (!exists.has(p)) { // 外部删除/移动：标记丢失，保留编辑内容
+        if (!edMissing.has(p)) {
+          edMissing.add(p);
+          tabsChanged = true;
+          showToast('「' + name + '」已在资源管理器中被删除或移动，内容已保留，保存可恢复到原路径');
+        }
+        continue;
+      }
+      if (edMissing.has(p)) { edMissing.delete(p); tabsChanged = true; } // 外部恢复/重建：解除丢失标记
+      let disk;
+      try { disk = await noteStore.read(p); } catch (_) { continue; }
+      const loaded = edOutdated[p];
+      if (loaded == null || disk === loaded) continue; // 未加载缓存 或 内容一致（自身保存回声）
+      if (edDirty.has(p)) {
+        showToast('「' + name + '」已被外部修改，你的未保存更改已保留（未覆盖）');
+        continue;
+      }
+      if (p === edCurrent) {
+        reloadNote(p); // 当前标签：清缓存重读并即时渲染
+        showToast('「' + name + '」已随外部修改自动更新');
+      } else {
+        edOutdated[p] = disk; // 后台标签：仅换缓存，切换过去即为磁盘新版
+      }
+    }
+    if (tabsChanged) renderTabs();
+  }
+
   /* 把当前打开的标签页路径列表持久化到 .second-brain/recent.json（桌面版桥接）。
    * 持久化时把当前激活（最后打开/切换）的笔记移到列表末尾，启动恢复据此定位「最后打开的文件」。 */
   function persistRecentTabs() {
@@ -315,7 +396,9 @@
       const handled = (typeof sbSave === 'function') ? await sbSave(p, mdText) : false;
       try {
         if (!handled) await noteStore.save(p, mdText);
-        edDirty.delete(p); const s = $('ed-saved'); if (s) s.textContent = handled ? (sbIsPseudoPath(p) ? '已保存到临时文件' : '已保存到项目') : '已自动保存';
+        edDirty.delete(p);
+        if (edMissing.delete(p)) renderTabs(); // ED-60：丢失标签保存即按原路径恢复，解除丢失样式
+        const s = $('ed-saved'); if (s) s.textContent = handled ? (sbIsPseudoPath(p) ? '已保存到临时文件' : '已保存到项目') : '已自动保存';
       } catch (err) { const s = $('ed-saved'); if (s) s.textContent = '保存失败'; }
     }, 800);
   }
@@ -524,6 +607,7 @@
     // 先绑定目录区/侧边面板拖拽条：即使下面装载/渲染异常也保证可拖动调宽
     bindTreeResizer();
     bindSideResizer();
+    bindExternalFsWatch(); // ED-60：订阅资源管理器外部增删改，自动刷新文件树/打开笔记
     // 项目窗口识别：经 preload 探测当前窗口是否为「打开项目」工作区（非知识库）
     if (window.sbProject) { try { await window.sbProject.detect(); } catch (_) { /* 忽略 */ } }
     let notes = [];
@@ -581,15 +665,109 @@
       renderFileProps();
     });
     // 双击重命名已改为 click 内时间窗判定（见 .tree-file 分支），避免 openNote 重建 DOM 使 dblclick 丢失
-    // 搜索过滤
-    const search = $('file-search');
-    if (search) search.addEventListener('input', function () {
-      const q = this.value.trim().toLowerCase();
-      document.querySelectorAll('.tree-file').forEach(f => {
-        const ok = !q || (f.dataset.name || '').toLowerCase().includes(q);
-        f.style.display = ok ? '' : 'none';
+    // ED-61 文件树搜索升级：默认走主进程全文搜索 IPC（解密后匹配），300ms 防抖 + 下拉浮层；
+    // 搜索框为空 / 单字符 / 后端桥不可用时回退原纯前端文件名过滤（保持现有能力）。
+    (function setupFullTextSearch() {
+      const search = $('file-search');
+      if (!search) return;
+      let debounceTimer = null, blurTimer = null, lastReqToken = 0, suggestionsEl = null;
+
+      /** 创建/取得下拉浮层 DOM（absolute 定位到搜索框正下方，紧贴，max-height 320px + 滚动）。
+       * 锚定结构：搜索框所在父容器设 position:relative，浮层作为兄弟节点挂在其末尾 → top:100% 紧贴搜索框底边，
+       * left/width 直接跟随搜索框，无需运行时 getBoundingClientRect 手动换算（避免侧栏 transform / overflow 干扰）。 */
+      function ensureSuggestionsEl() {
+        if (suggestionsEl && document.body.contains(suggestionsEl)) return suggestionsEl;
+        suggestionsEl = document.createElement('div');
+        suggestionsEl.setAttribute('role', 'listbox');
+        suggestionsEl.style.cssText = 'position:absolute;top:100%;left:0;right:0;z-index:9999;background:var(--note-background,#fff);border:1px solid var(--note-border,#e5e7eb);'
+          + 'border-top:none;border-radius:0 0 8px 8px;box-shadow:0 6px 20px rgba(0,0,0,.12);max-height:320px;overflow-y:auto;'
+          + 'font-size:12px;color:var(--note-ink,#111);padding:4px 0;display:none;';
+        // 挂载到搜索框的「直接父元素」末尾——搜索框在 DOM 里有自己的父节点，它就是 position:relative 的锚点
+        // 不要选 .tree-search 或更深的祖先：祖先可能比搜索框宽很多，浮层宽度会被拉大
+        const parent = search.parentElement;
+        if (parent) {
+          const curPos = getComputedStyle(parent).position;
+          if (curPos !== 'relative' && curPos !== 'absolute' && curPos !== 'fixed') parent.style.position = 'relative';
+          parent.appendChild(suggestionsEl);
+        } else {
+          document.body.appendChild(suggestionsEl);
+        }
+        return suggestionsEl;
+      }
+
+      /** 转义 HTML 特殊字符，snippet 后端返回安全明文仍需二次防注入 */
+      function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+      /** 渲染下拉浮层：标题 + 片段（关键词橙色高亮，安全转义后包装 <mark>）。 */
+      function renderSuggestions(list, q) {
+        const box = ensureSuggestionsEl();
+        if (!list || !list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+        const qRe = q ? new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi') : null;
+        box.innerHTML = list.map(it => {
+          const safeSnippet = escapeHtml(it.snippet || '').replace(qRe, '<mark style="background:#fff3a0;color:#b45309;padding:0 2px;border-radius:2px;">$1</mark>');
+          const safeTitle = escapeHtml(it.title || it.path.split('/').pop());
+          const folder = it.path.indexOf('/') >= 0 ? it.path.slice(0, it.path.lastIndexOf('/')) : '';
+          return '<div role="option" tabindex="-1" data-path="' + escapeHtml(it.path) + '" style="cursor:pointer;padding:8px 10px;line-height:1.4;border-bottom:1px solid var(--note-border,#f3f4f6);transition:background .08s;" onmouseover="this.style.background=\'rgba(124,58,237,.06)\'" onmouseout="this.style.background=\'\'">'
+            + '<div style="font-weight:500;color:var(--note-ink,#111);">' + safeTitle + '</div>'
+            + (folder ? '<div style="color:var(--note-ink-3,#9ca3af);font-size:11px;margin-top:2px;">📁 ' + escapeHtml(folder) + '</div>' : '')
+            + '<div style="color:var(--note-ink-2,#4b5563);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + safeSnippet + '</div>'
+            + '</div>';
+        }).join('');
+        box.style.display = 'block'; // 位置由 CSS top:100% + left:0 + right:0 自动紧贴搜索框底边，无需运行时换算
+      }
+
+      function closeSuggestions() { if (suggestionsEl) { suggestionsEl.style.display = 'none'; suggestionsEl.innerHTML = ''; } }
+
+      /** 点击项 → 打开对应笔记（走全局 openNote）。 */
+      suggestionsEl && suggestionsEl.addEventListener('click', function (e) {
+        const item = e.target.closest('[data-path]');
+        if (!item) return;
+        e.stopPropagation();
+        const p = item.getAttribute('data-path');
+        closeSuggestions();
+        if (typeof openNote === 'function') openNote(p);
+        search.value = '';
       });
-    });
+
+      // 退格键/点击外部关闭；ESC 关闭且回退焦点到搜索框
+      document.addEventListener('mousedown', function (e) {
+        if (!suggestionsEl || !suggestionsEl.contains(e.target)) closeSuggestions();
+      });
+      search.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') { closeSuggestions(); this.blur(); }
+        else if (e.key === 'Enter' && suggestionsEl && suggestionsEl.style.display !== 'none') {
+          // 回车打开第一项
+          const first = suggestionsEl.querySelector('[data-path]');
+          if (first) { e.preventDefault(); first.click(); }
+        }
+      });
+      search.addEventListener('blur', function () { blurTimer = setTimeout(closeSuggestions, 200); });
+      search.addEventListener('focus', function () { if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; } });
+
+      search.addEventListener('input', function () {
+        if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
+        const q = this.value.trim();
+        // 文件名过滤始终同步执行（ED-61 同时保留原有能力）
+        const ql = q.toLowerCase();
+        document.querySelectorAll('.tree-file').forEach(function (f) {
+          const ok = !ql || (f.dataset.name || '').toLowerCase().includes(ql);
+          f.style.display = ok ? '' : 'none';
+        });
+        // 全文搜索：单字符/空不发请求，桥不可用回退纯文件名
+        if (q.length < 2) { closeSuggestions(); return; }
+        const nd = window.noteDesktop;
+        if (!nd || typeof nd.searchNotes !== 'function') { closeSuggestions(); return; }
+        if (debounceTimer) clearTimeout(debounceTimer);
+        const token = ++lastReqToken;
+        debounceTimer = setTimeout(async function () {
+          try {
+            const list = await nd.searchNotes(q, 10);
+            if (token !== lastReqToken) return; // 被后续请求覆盖
+            renderSuggestions(list, q);
+          } catch (_) { closeSuggestions(); }
+        }, 300);
+      });
+    })();
     // 新建
     const newBtn = $('file-tree');
     document.querySelectorAll('[data-action="new-note"]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); doNewNote(); }));
@@ -856,9 +1034,10 @@
     // 侧边面板区块：恢复上次顺序 + 绑定拖拽调整顺序
     if (typeof restoreSidePanelOrder === 'function') restoreSidePanelOrder();
     if (typeof bindSidePanelDrag === 'function') bindSidePanelDrag();
-    // 文件树：右键菜单 + 拖拽移动
+    // 文件树：右键菜单 + 拖拽移动 + 手动刷新按钮（资源管理器操作后立即同步）
     bindFileTreeContextMenu && bindFileTreeContextMenu();
     bindFileTreeDrag();
+    if (typeof bindFileTreeRefreshButton === 'function') bindFileTreeRefreshButton();
     // 应用统一编辑模式（WYSIWYG/IR/SV/阅读），按上次记忆恢复（键 sbEditorMode，未设置默认「即时渲染」）
     applyEditorMode(lastEditorMode());
     // 切到其它视图再切回编辑器时，loadView 会重建整个视图 DOM，需把「已打开的标签 + 当前笔记」

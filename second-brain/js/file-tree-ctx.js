@@ -144,6 +144,8 @@ async function actMoveNote(oldPath, newPath) {
     edCurrent = newPath;
     edOpenTabs = edOpenTabs.map(p => p === oldPath ? newPath : p);
     if (edOutdated[oldPath] != null) { edOutdated[newPath] = edOutdated[oldPath]; delete edOutdated[oldPath]; }
+    if (edDirty.has(oldPath)) { edDirty.delete(oldPath); edDirty.add(newPath); }
+    if (edMissing.has(oldPath)) { edMissing.delete(oldPath); edMissing.add(newPath); } // ED-60：丢失标记随移动迁移
     await openNote(newPath);
     renderTabs();
   }
@@ -171,6 +173,8 @@ async function actMoveDir(oldDir, newParent) {
     const newPath = newPrefix + rel;
     edOpenTabs = edOpenTabs.map(p => p === edCurrent ? newPath : p);
     if (edOutdated[edCurrent] != null) { edOutdated[newPath] = edOutdated[edCurrent]; delete edOutdated[edCurrent]; }
+    if (edDirty.has(edCurrent)) { /* 脏标记保持指向新路径 */ edDirty.delete(edCurrent); edDirty.add(newPath); }
+    if (edMissing.has(edCurrent)) { edMissing.delete(edCurrent); edMissing.add(newPath); } // ED-60：丢失标记随目录迁移
     edCurrent = newPath;
     await openNote(newPath);
     renderTabs();
@@ -187,6 +191,24 @@ async function refreshTreeAfterChange() {
   edNotes = (await noteStore.list()).sort((a, b) => a.path.localeCompare(b.path, 'zh'));
   renderFileTree(edNotes);
   refreshIcons();
+}
+
+/* 绑定文件树右上角手动刷新按钮（HTML：#file-tree-refresh）。
+ * 资源管理器手动增删改后，点此按钮立即重新扫描磁盘并刷新文件树，无需等 ED-60 的 10s 自动快照周期。
+ * 幂等绑定：先 removeEventListener 旧 handler，防止 initEditor 重入（切视图返回）时重复绑定。
+ * @author 火 冰 */
+function bindFileTreeRefreshButton() {
+  const btn = document.getElementById('file-tree-refresh');
+  if (!btn) return;
+  if (btn.__sbRefreshHandler) { btn.removeEventListener('click', btn.__sbRefreshHandler); }
+  btn.__sbRefreshHandler = function () {
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+    Promise.resolve(refreshTreeAfterChange()).then(function () {
+      btn.disabled = false; btn.style.opacity = '';
+    }).catch(function () { btn.disabled = false; btn.style.opacity = ''; });
+  };
+  btn.addEventListener('click', btn.__sbRefreshHandler);
 }
 
 /* 构建单个菜单项（支持二级子菜单 / 分隔线 / 禁用态） */

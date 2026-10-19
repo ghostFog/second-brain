@@ -356,6 +356,7 @@
         if (i !== -1) edOpenTabs[i] = newPath;
         if (edPinned.has(path)) { edPinned.delete(path); edPinned.add(newPath); }
         if (edDirty.has(path)) { edDirty.delete(path); edDirty.add(newPath); }
+        if (edMissing.has(path)) { edMissing.delete(path); edMissing.add(newPath); } // ED-60：丢失标记随路径迁移
         edNotes = edNotes.map(function (n) { return n.path === path ? Object.assign({}, n, { path: newPath, name: v + '.md' }) : n; });
         if (edCurrent === path) edCurrent = newPath;
         renderFileTree(edNotes); renderTabs(); renderArticle(); persistRecentTabs();
@@ -436,6 +437,7 @@
         const remapSet = function (set) { const ns = new Set(); set.forEach(function (p) { ns.add(remap(p)); }); return ns; };
         edPinned = remapSet(edPinned);
         edDirty = remapSet(edDirty);
+        edMissing = remapSet(edMissing); // ED-60：丢失标记随目录重命名迁移
         if (edCurrent && edCurrent.startsWith(oldPrefix)) {
           edCurrent = remap(edCurrent);
           await openNote(edCurrent);
