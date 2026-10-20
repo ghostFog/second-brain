@@ -1520,37 +1520,73 @@ vaultHandle('notes:read', async (_e, rel) => {
 vaultHandle('notes:searchText', async (_e, req) => {
   const q = req && typeof req.q === 'string' ? req.q.trim() : '';
   const limit = Math.max(1, Math.min(50, Number(req && req.limit) || 10));
+  // ED-62 新参数：caseSensitive/wholeWord/range/snippetLen
+  const caseSensitive = !!(req && req.caseSensitive);
+  const wholeWord = !!(req && req.wholeWord);
+  const range = (req && req.range) || 'content'; // content=全文（正文+标题）/ name=仅文件名 / title=仅标题
+  const snippetLen = Math.max(20, Math.min(200, Number(req && req.snippetLen) || 50));
   if (q.length < 2) return []; // 单字符太噪，空/过短直接返回空
   await ensureVault();
   const root = vaultRoot();
   if (!metaScanReady(root)) return []; // 加密库锁屏期：密钥未就绪时密文无法匹配明文关键词
-  const ql = q.toLowerCase();
+  // 大小写不敏感：统一 toLowerCase；敏感/整词：保留原文走正则
+  let matcher; // matcher(str) → {idx, len} | null
+  if (caseSensitive) {
+    if (wholeWord) {
+      const re = new RegExp('\\b' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+      matcher = (str) => { const m = re.exec(str); return m ? { idx: m.index, len: m[0].length } : null; };
+    } else {
+      matcher = (str) => { const idx = str.indexOf(q); return idx >= 0 ? { idx, len: q.length } : null; };
+    }
+  } else {
+    const ql = q.toLowerCase();
+    if (wholeWord) {
+      const re = new RegExp('\\b' + ql.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+      matcher = (str) => { const m = re.exec(str.toLowerCase()); return m ? { idx: m.index, len: m[0].length } : null; };
+    } else {
+      matcher = (str) => { const idx = str.toLowerCase().indexOf(ql); return idx >= 0 ? { idx, len: q.length } : null; };
+    }
+  }
   const out = [];
   const notes = [];
   await walkNotes(root, '', notes);
-  // 第一遍：标题命中（最相关）→ 直接入列 + 正文首个匹配处作 snippet
-  // 第二遍：正文命中 → 按命中位置靠前排序；找到 limit 条立即停
   for (const n of notes) {
     if (n.isFolder) continue;
     const fname = n.path.split('/').pop();
     const title = fname.replace(/\.(md|markdown|txt)$/i, '');
-    const fnl = fname.toLowerCase();
-    let titleScore = -1; // -1=标题不命中；>=0=命中位置（越小越靠前）
-    const tIdx = fnl.indexOf(ql);
-    if (tIdx >= 0) titleScore = tIdx;
-    let text = '';
-    try { text = vaultReadTextSync(root, n.path) || ''; } catch (_) { continue; } // 文件损坏/删了等：跳过
-    const tl = text.toLowerCase();
-    const cIdx = tl.indexOf(ql);
-    if (cIdx < 0 && titleScore < 0) continue; // 标题和正文都不命中
-    // snippet：正文命中取命中位置附近；仅标题命中（正文没匹配）取文件开头附近
-    const anchor = cIdx >= 0 ? cIdx : 0;
-    const snipStart = Math.max(0, anchor - 50);
-    const snipEnd = Math.min(text.length, anchor + q.length + 50);
-    const snippet = (snipStart > 0 ? '…' : '') + text.slice(snipStart, snipEnd).replace(/\s+/g, ' ') + (snipEnd < text.length ? '…' : '');
-    // score：标题命中 -1000 + 命中位置（最相关→排最前）；正文命中 + 位置
-    const score = titleScore >= 0 ? (-1000 + titleScore) : cIdx;
-    out.push({ path: n.path, title: title, snippet: snippet, _score: score });
+    let titleMatch = null, contentMatch = null;
+    // range 分流：content 两者都查（标题优先入列）；name 仅文件名；title 仅标题（去后缀）
+    if (range === 'name') titleMatch = matcher(fname);
+    else if (range === 'title') titleMatch = matcher(title);
+    else { /* content 默认 */ titleMatch = matcher(title); }
+    if (range === 'content') {
+      let text = '';
+      try { text = vaultReadTextSync(root, n.path) || ''; } catch (_) { continue; } // 文件损坏/删了等：跳过
+      contentMatch = matcher(text);
+      if (!titleMatch) titleMatch = matcher(title); // content 范围：标题也查
+      if (!titleMatch && !contentMatch) continue;
+      // 排序分数：标题命中 -1000 优先，越早命中排名越高
+      const score = titleMatch ? (-1000 + titleMatch.idx) : contentMatch.idx;
+      // snippet 构造：contentMatch 优先（有正文上下文）；仅 titleMatch 时用标题+正文头部前缀
+      let snippet;
+      if (contentMatch) {
+        // 有正文命中：正常取上下文
+        const anchor = contentMatch.idx;
+        const snipStart = Math.max(0, anchor - snippetLen);
+        const snipEnd = Math.min(text.length, anchor + contentMatch.len + snippetLen);
+        snippet = (snipStart > 0 ? '…' : '') + text.slice(snipStart, snipEnd).replace(/\s+/g, ' ') + (snipEnd < text.length ? '…' : '');
+      } else {
+        // 仅标题命中：显示标题 + 正文前 snippetLen 字作为预览
+        const previewLen = Math.min(text.length, snippetLen * 2);
+        snippet = '（标题匹配）' + text.slice(0, previewLen).replace(/\s+/g, ' ');
+        if (text.length > previewLen) snippet += '…';
+      }
+      out.push({ path: n.path, title: title, snippet: snippet, _score: score });
+    } else {
+      // name/title 纯元数据搜索，不走正文
+      if (!titleMatch) continue;
+      out.push({ path: n.path, title: title, snippet: fname, _score: titleMatch.idx });
+    }
     if (out.length >= limit) break;
   }
   out.sort(function (a, b) { return a._score - b._score; });

@@ -52,8 +52,8 @@ contextBridge.exposeInMainWorld('noteDesktop', {
   readNote: (relPath) => ipcRenderer.invoke('notes:read', relPath),
   /** 保存单篇笔记：relPath 相对路径 + 全文 */
   saveNote: (relPath, content) => ipcRenderer.invoke('notes:save', relPath, content),
-  /** ED-61 全文搜索：{q, limit?} → [{path,title,snippet}]（主进程解密后匹配，锁屏期返回空） */
-  searchNotes: (q, limit) => ipcRenderer.invoke('notes:searchText', { q: q, limit: limit }),
+  /** ED-61/62 搜索：{q, limit?, caseSensitive?, wholeWord?, range?, snippetLen?} → [{path,title,snippet}] */
+  searchNotes: (opts) => ipcRenderer.invoke('notes:searchText', Object.assign({ q: '', limit: 10 }, opts || {})),
   /** 新建笔记：dir 为目标目录（可选），返回规范化相对路径 */
   createNote: (name, dir) => ipcRenderer.invoke('notes:create', name, dir),
   /** 新建目录：dir 为相对路径，返回规范化的相对路径 */

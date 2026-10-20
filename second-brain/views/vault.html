@@ -6,9 +6,28 @@
         <button data-dom-id="leaf-collapse" class="w-7 h-7 flex items-center justify-center rounded-md border transition-colors hover:opacity-80 shrink-0" style="border-color: var(--note-border); background: var(--note-surface-2); color: var(--note-ink-2);" title="收起文件树">
           <i data-lucide="panel-left-close" class="w-3.5 h-3.5"></i>
         </button>
-        <div class="flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-md border" style="border-color: var(--note-border); background: var(--note-surface-2);">
-          <i data-lucide="search" class="w-3.5 h-3.5 shrink-0" style="color: var(--note-ink-3);"></i>
-          <input id="file-search" type="text" placeholder="搜索文件..." class="flex-1 bg-transparent text-[12px] outline-none" style="color: var(--note-ink-2);">
+        <!-- ED-62 搜索框三段式一体化：左下拉(搜索范围) + 中 input(带搜索图标) + 右 Aa(大小写/整词) + 设置齿轮 -->
+        <!-- 注意：不能加 overflow-hidden，否则会 clip 所有 absolute 定位的 popover 和搜索建议下拉浮层 -->
+        <div id="sb-search-bar" class="flex-1 flex items-stretch rounded-md border" style="border-color: var(--note-border); background: var(--note-surface-2);">
+          <!-- 左下拉：搜索范围 -->
+          <select id="sb-search-range" class="bg-transparent text-[12px] outline-none cursor-pointer shrink-0 py-1.5 pl-2 pr-1" style="color: var(--note-ink-2); border-right:1px solid var(--note-border);">
+            <option value="content">全文搜索</option>
+            <option value="name">文件名</option>
+            <option value="title">标题</option>
+          </select>
+          <!-- 中 input -->
+          <div class="flex-1 flex items-center gap-1.5 px-2 py-1.5 min-w-0">
+            <i data-lucide="search" class="w-3.5 h-3.5 shrink-0" style="color: var(--note-ink-3);"></i>
+            <input id="file-search" type="text" placeholder="搜索文件..." class="flex-1 bg-transparent text-[12px] outline-none min-w-0" style="color: var(--note-ink-2);">
+          </div>
+          <!-- 右 Aa 图标：点击弹出大小写/整词开关 -->
+          <!-- position:relative 作为 popover 锚点；inline-flex items-center 让 Aa 文本和齿轮图标垂直对齐 -->
+          <button id="sb-search-aacase" title="匹配选项（点击切换大小写/整词）" class="px-1.5 shrink-0 inline-flex items-center transition-colors" style="border-left:1px solid var(--note-border); color: var(--note-ink-3); font-size:12px; font-weight:600; letter-spacing:.3px; font-family: ui-serif,Georgia,serif; position:relative;">Aa</button>
+          <!-- 设置齿轮：snippet 长度等 -->
+          <!-- position:relative 作为 popover 锚点 -->
+          <button id="sb-search-settings" title="搜索设置" class="px-1.5 shrink-0 inline-flex items-center transition-colors" style="border-left:1px solid var(--note-border); color: var(--note-ink-3); position:relative;">
+            <i data-lucide="settings" class="w-3.5 h-3.5"></i>
+          </button>
         </div>
         <button id="file-tree-refresh" class="w-7 h-7 flex items-center justify-center rounded-md border transition-colors hover:opacity-80 shrink-0" style="border-color: var(--note-border); background: var(--note-surface-2); color: var(--note-ink-2);" title="刷新文件树（手动在资源管理器操作后点击）">
           <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>

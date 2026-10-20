@@ -2541,34 +2541,39 @@ function testExternalFsWatch() {
   const hostBind = hostSrc.slice(hostSrc.indexOf('bindFileTreeContextMenu'), hostSrc.indexOf('bindFileTreeContextMenu') + 600);
   assert(/bindFileTreeRefreshButton\(\)/.test(hostBind), 'ED-60-22d: initEditor 中调用 bindFileTreeRefreshButton');
 
-  // ---- ED-61 全文搜索 + 下拉建议 ----
-  const mainSearch = mainSrc.slice(mainSrc.indexOf('notes:searchText'), mainSrc.indexOf('notes:searchText') + 2500);
+  // ---- ED-61/62 搜索 ----
+  const mainSearch = mainSrc.slice(mainSrc.indexOf('notes:searchText'), mainSrc.indexOf('notes:searchText') + 5000);
   assert(mainSearch.indexOf('notes:searchText') >= 0, 'ED-61-1: main.js 存在 notes:searchText IPC handler');
   assert(/walkNotes\(root,\s*'',\s*notes\)/.test(mainSearch), 'ED-61-2: 用 walkNotes 取笔记清单');
   assert(/vaultReadTextSync\(root,\s*n\.path\)/.test(mainSearch), 'ED-61-3: 用 vaultReadTextSync 解密读正文（加密库也能搜）');
-  assert(/tl\.indexOf\(ql\)/.test(mainSearch), 'ED-61-4: 大小写不敏感全文匹配（tl.indexOf）');
-  assert(/out\.length\s*>=\s*limit\)\s*break/.test(mainSearch), 'ED-61-5: 命中 limit 条立即停（不傻扫全库）');
-  assert(/metaScanReady\(root\)\)\s*return\s*\[\]/.test(mainSearch), 'ED-61-6: 锁屏守卫——密钥未就绪返回空数组');
-  assert(/q\.length\s*<\s*2/.test(mainSearch), 'ED-61-7: 空/单字符直接返回空（降噪）');
-  assert(/titleScore/.test(mainSearch) && /fnl\.indexOf\(ql\)/.test(mainSearch), 'ED-61-7b: 文件名/标题也参与匹配（不只是正文）');
-  assert(/_score.*titleScore|titleScore.*-1000/.test(mainSearch), 'ED-61-7c: 标题命中给高分（-1000 + 位置），最相关排最前');
-  assert(/out\.sort/.test(mainSearch), 'ED-61-7d: 结果按相关性排序后返回');
+  // ED-62 新增：caseSensitive/wholeWord/range/snippetLen 参数分流 + matcher 策略
+  assert(/caseSensitive/.test(mainSearch) && /wholeWord/.test(mainSearch) && /range/.test(mainSearch) && /snippetLen/.test(mainSearch),
+    'ED-62-1: handler 接受 caseSensitive/wholeWord/range/snippetLen 参数');
+  assert(/matcher\s*=|const matcher/.test(mainSearch), 'ED-62-2: 三种匹配策略（cs/ww/都关）抽成 matcher 函数');
+  assert(/new RegExp\(/g.test(mainSearch) >= 1, 'ED-62-3: wholeWord 走 \\b 正则');
+  assert(/\{ idx[^}]*len:/.test(mainSearch), 'ED-62-4: matcher 返回 {idx,len} 结构');
+  assert(/out\.length\s*>=\s*limit\)\s*break/.test(mainSearch), 'ED-61-5: 命中 limit 条立即停');
+  assert(/metaScanReady\(root\)\)\s*return\s*\[\]/.test(mainSearch), 'ED-61-6: 锁屏守卫');
+  assert(/q\.length\s*<\s*2/.test(mainSearch), 'ED-61-7: 空/单字符直接返回');
+  assert(/out\.sort/.test(mainSearch), 'ED-61-7d: 结果按相关性排序');
 
-  // 双路覆盖：vaultRootForEvent 必须同时查 winVaults 和 winProjects（项目模式也能拿到正确根目录）
+  // 双路覆盖：vaultRootForEvent 同时查 winVaults 和 winProjects
   const vreIdx = mainSrc.indexOf('function vaultRootForEvent');
   const vreBody = vreIdx >= 0 ? mainSrc.slice(vreIdx, vreIdx + 600) : '';
-  assert(vreBody.indexOf('winVaults.get') >= 0, 'ED-61-7e: vaultRootForEvent 查 winVaults（知识库模式）');
-  assert(vreBody.indexOf('winProjects.get') >= 0, 'ED-61-7f: vaultRootForEvent 查 winProjects（项目模式）');
+  assert(vreBody.indexOf('winVaults.get') >= 0 && vreBody.indexOf('winProjects.get') >= 0,
+    'ED-61-7e: vaultRootForEvent 双路 winVaults + winProjects');
 
   const preSrc = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
-  assert(/searchNotes:\s*\(q,\s*limit\)\s*=>\s*ipcRenderer\.invoke\('notes:searchText'/.test(preSrc), 'ED-61-8: preload 暴露 searchNotes → notes:searchText IPC');
+  // ED-62 改签名为 opts 对象透传
+  assert(/searchNotes:\s*\(opts\)\s*=>\s*ipcRenderer\.invoke\('notes:searchText'/.test(preSrc),
+    'ED-62-5: preload searchNotes 签名改 opts 对象，透传 caseSensitive/wholeWord/range/snippetLen');
 
   // 渲染端（hostSrc 已读）：300ms 防抖 + 下拉浮层 + 关键词高亮
   // setupFullTextSearch 立即执行函数体较长，部分断言直接在整个 hostSrc 上匹配，避免 slice 截断
   assert(hostSrc.indexOf('setupFullTextSearch') >= 0, 'ED-61-9: 编辑器页面存在 setupFullTextSearch 立即执行函数');
   assert(/debounceTimer\s*=\s*setTimeout[\s\S]{0,1200}?,\s*300\s*\)/.test(hostSrc), 'ED-61-10: 300ms 防抖输入事件');
   assert(/await\s+nd\.searchNotes[\s\S]{0,40}?q[\s\S]{0,10}?10/.test(hostSrc), 'ED-61-11: 调后端 searchNotes(q,10)，最多 10 条');
-  assert(/position:\s*absolute[\s\S]{0,200}top:\s*100%/.test(hostSrc) && /z-index:\s*9999/.test(hostSrc), 'ED-61-12: 下拉浮层 absolute + top:100% 紧贴父容器底边（CSS 锚定，无需运行时 getBoundingClientRect）+ z-index 置顶');
+  assert(/position:\s*fixed/.test(hostSrc) && /getBoundingClientRect/.test(hostSrc) && /document\.body\.appendChild\(suggestionsEl\)/.test(hostSrc), 'ED-61-12: 下拉浮层 position:fixed + append body + getBoundingClientRect 定位（彻底脱离 aside overflow-hidden 裁剪）+ z-index 置顶');
   assert(/max-height:\s*320px/.test(hostSrc), 'ED-61-13: 下拉浮层最大高度 320px + 内部滚动');
   assert(/new RegExp/.test(hostSrc) && /q\.replace/.test(hostSrc) && /\[\.\*\+\?\^\$/.test(hostSrc), 'ED-61-14: 特殊字符安全转义后构建正则，防止关键词正则注入');
   assert(/escapeHtml\(it\.snippet/.test(hostSrc), 'ED-61-15: snippet 后端明文仍二次 escapeHtml 防 XSS');
@@ -2576,6 +2581,18 @@ function testExternalFsWatch() {
   assert(/q\.length\s*<\s*2/.test(hostSrc), 'ED-61-17: 单字符/空时关闭浮层，不发请求');
   // 文件名过滤同时保留（不是替换，而是增强）
   assert(/f\.dataset\.name.*includes/.test(hostSrc), 'ED-61-18: 原文件名过滤同步保留，向后兼容（文件名过滤 + 全文搜索双轨）');
+  // ---- ED-62 渲染端：Aa 图标、齿轮设置、localStorage 持久化、三段式一体化 ----
+  assert(/sb-search-range/.test(hostSrc), 'ED-62-6: setup 中读取左下拉 range 选择器');
+  assert(/sb-search-aacase/.test(hostSrc), 'ED-62-7: setup 中绑定 Aa 图标点击');
+  assert(/sb-search-settings/.test(hostSrc), 'ED-62-8: setup 中绑定设置齿轮点击');
+  assert(/sb\.search\.settings/.test(hostSrc), 'ED-62-9: localStorage 持久化 key=sb.search.settings');
+  assert(/caseSensitive.*wholeWord.*snippetLen|Object\.assign\(\{\},\s*DEFAULTS\)/.test(hostSrc), 'ED-62-10: 设置含 caseSensitive/wholeWord/snippetLen 字段');
+  assert(/nd\.searchNotes\(\s*\{[\s\S]{0,200}?caseSensitive[\s\S]{0,80}?range[\s\S]{0,80}?snippetLen/.test(hostSrc),
+    'ED-62-11: 防抖回调把 caseSensitive/wholeWord/range/snippetLen 全透传给 searchNotes IPC');
+  // HTML 三段式验证（读 vault.html）
+  const vaultHtml = fs.readFileSync(path.join(__dirname, 'views', 'vault.html'), 'utf8');
+  assert(/sb-search-bar/.test(vaultHtml) && /sb-search-range/.test(vaultHtml) && /sb-search-aacase/.test(vaultHtml) && /sb-search-settings/.test(vaultHtml),
+    'ED-62-12: vault.html 搜索框为三段式一体化（range select + input + Aa + settings 齿轮）');
 
   // ---- Bug-078：git config core.quotepath 禁止无条件重复写 ----
   assert(/async function ensureQuotepath\(\)/.test(gitSrc), 'Bug-078-1: git-sync 存在幂等 ensureQuotepath');

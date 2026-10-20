@@ -26,7 +26,10 @@ globalThis.CHANGELOG = [
       'Bug-078 git-sync 状态轮询每 30s 重写 .git/config：core.quotepath 改幂等设置（先 --get 读现值，已是 false 则只读不写）',
       '元数据 scheduleMetaTouch 支持显式 root 第三参：treeWatchTick 无 IPC 上下文时正确指定库根',
       'ED-60 手动刷新按钮补齐：文件树右上角 #file-tree-refresh 补 JS click 绑定（此前 HTML 存在但无绑定，点了没反应），走统一 refreshTreeAfterChange 收口（知识库+项目模式双覆盖）',
-      'ED-61 文件树搜索升级为全文搜索 + 下拉建议：主进程 notes:searchText IPC（walkNotes + vaultReadTextSync 解密读，标题/正文双命中，标题优先早命中排序，命中 10 条早停，加密库锁屏守卫）；vaultRootForEvent 同时覆盖 winVaults + winProjects 双路，项目模式也能拿到正确根目录；渲染端 300ms 防抖 + CSS top:100% 紧贴搜索框底边的 absolute 下拉浮层，snippet 前后各 50 字符，mark 关键词高亮，点击直接 openNote',
+      'ED-62 搜索框三段式增强（Obsidian 风格）：vault.html 搜索区改造为一体化 flex 容器——左下拉（range：全文/文件名/标题）+ 中 input（带搜索图标）+ 右 Aa 图标（点击弹出 popover：区分大小写 / 匹配整词开关，两开关任一开启 Aa 高亮变紫）+ 设置齿轮（弹出 popover：显示上下文长度 30/50/100 字三档）；主进程 notes:searchText handler 新增 caseSensitive / wholeWord / range / snippetLen 参数，匹配策略抽成 matcher 函数（cs/ww/都关四分支），wholeWord 走 \\b 正则；preload.searchNotes 签名改 opts 对象透传；所有设置 localStorage sb.search.settings 持久化；Aa/齿轮 popover CSS top:100%+right:0 紧贴按钮底边',
+      'ED-62 修复：(1) 移除 sb-search-bar 的 overflow-hidden（之前裁剪了所有 absolute 定位的 popover 和搜索建议下拉浮层，导致下拉结果看不见）；(2) popover 锚点从 btn.parentElement（整个搜索条）改到 btn 自身（position:relative 设在按钮上），Aa popover 只在 Aa 按钮下方，设置 popover 只在齿轮按钮下方，不再互相覆盖；(3) 文件名过滤按 range 分流——range=content 时**不过滤文件树**（之前始终强制文件名过滤，用户输入后文件树只剩文件名含关键词的笔记，误以为全文搜索没生效）；(4) main.js titleMatch 时 snippet 切片用了 title 字符串索引当 content 索引（跨字符串错误），修复为 contentMatch 优先取正文上下文，仅 titleMatch 时标记"（标题匹配）"并用正文前 N 字预览；(5) Aa 文本与 settings SVG 图标加 inline-flex items-center 统一垂直对齐',
+      'ED-62 二次修复（彻底方案）：三种弹出层（suggestions 下拉、Aa popover、settings popover）全部**append 到 document.body + position:fixed + getBoundingClientRect 定位**——彻底脱离祖先 aside 的 overflow-hidden 裁剪（之前所有弹出层都在 aside DOM 子树内，不管怎么设 position 都会被 aside overflow:hidden 裁剪）；document mousedown handler 显式排除 Aa/设置/range 按钮自身，彻底解决 mousedown→click race condition（mousedown 先于 click 触发，之前导致 popover 刚打开就被 document mousedown 关掉）；window resize 时重新定位 suggestions',
+      'ED-61 文件树搜索升级为全文搜索 + 下拉建议：主进程 notes:searchText IPC（walkNotes + vaultReadTextSync 解密读，标题/正文双命中，标题优先早命中排序，命中 10 条早停，加密库锁屏守卫）；vaultRootForEvent 同时覆盖 winVaults + winProjects 双路，项目模式也能拿到正确根目录；渲染端 300ms 防抖 + CSS top:100% 紧贴搜索框底边的 absolute 下拉浮层，mark 关键词高亮，点击直接 openNote',
     ],
   },
   {

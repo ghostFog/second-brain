@@ -665,44 +665,76 @@
       renderFileProps();
     });
     // 双击重命名已改为 click 内时间窗判定（见 .tree-file 分支），避免 openNote 重建 DOM 使 dblclick 丢失
-    // ED-61 文件树搜索升级：默认走主进程全文搜索 IPC（解密后匹配），300ms 防抖 + 下拉浮层；
-    // 搜索框为空 / 单字符 / 后端桥不可用时回退原纯前端文件名过滤（保持现有能力）。
+    // ED-61/ED-62 搜索：三段式一体化 + 范围下拉 + Aa 大小写/整词 + 设置齿轮 + localStorage 持久化
     (function setupFullTextSearch() {
+      const LS_KEY = 'sb.search.settings';
+      const DEFAULTS = { range: 'content', caseSensitive: false, wholeWord: false, snippetLen: 50 };
+      const settings = Object.assign({}, DEFAULTS);
+      try { Object.assign(settings, JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (_) {}
+      // 持久化 Aa 图标状态（视觉：两开关任一开启时 Aa 高亮）
+      function persistSettings() { try { localStorage.setItem(LS_KEY, JSON.stringify(settings)); } catch (_) {} }
+      function applyAaIcon() {
+        const btn = document.getElementById('sb-search-aacase');
+        if (!btn) return;
+        const active = settings.caseSensitive || settings.wholeWord;
+        btn.style.color = active ? 'var(--note-brand-400)' : 'var(--note-ink-3)';
+        btn.title = (settings.caseSensitive ? '大小写敏感 ON ' : '') + (settings.wholeWord ? '整词 ON' : '');
+      }
+
       const search = $('file-search');
       if (!search) return;
+      // 同步 range 下拉初始值
+      const rangeSel = document.getElementById('sb-search-range');
+      if (rangeSel) { rangeSel.value = settings.range; rangeSel.addEventListener('change', function () {
+        settings.range = this.value; persistSettings();
+        // 触发一次即时搜索
+        if (search.value.trim().length >= 2) search.dispatchEvent(new Event('input'));
+      }); }
+      applyAaIcon();
+
       let debounceTimer = null, blurTimer = null, lastReqToken = 0, suggestionsEl = null;
 
-      /** 创建/取得下拉浮层 DOM（absolute 定位到搜索框正下方，紧贴，max-height 320px + 滚动）。
-       * 锚定结构：搜索框所在父容器设 position:relative，浮层作为兄弟节点挂在其末尾 → top:100% 紧贴搜索框底边，
-       * left/width 直接跟随搜索框，无需运行时 getBoundingClientRect 手动换算（避免侧栏 transform / overflow 干扰）。 */
+      /** 动态决定是否发后端搜索请求：range=content 必须走后端（解密全文匹配）；
+       *  range=name/title 可走纯前端过滤（速度快、无需 IPC），但仍发后端以复用排序/高亮逻辑；
+       *  桥不可用回退纯前端文件名过滤。 */
+      function shouldUseBackend(q) {
+        if (settings.range === 'content') return true;
+        // name/title 范围也走后端（主进程 handler 已做 range 分流且比前端过滤更规范）
+        const nd = window.noteDesktop;
+        return !!(nd && typeof nd.searchNotes === 'function');
+      }
+
       function ensureSuggestionsEl() {
         if (suggestionsEl && document.body.contains(suggestionsEl)) return suggestionsEl;
         suggestionsEl = document.createElement('div');
         suggestionsEl.setAttribute('role', 'listbox');
-        suggestionsEl.style.cssText = 'position:absolute;top:100%;left:0;right:0;z-index:9999;background:var(--note-background,#fff);border:1px solid var(--note-border,#e5e7eb);'
+        // position:fixed + append body，彻底脱离 ancestors 的 overflow:hidden 裁剪
+        suggestionsEl.style.cssText = 'position:fixed;z-index:9999;background:var(--note-background,#fff);border:1px solid var(--note-border,#e5e7eb);'
           + 'border-top:none;border-radius:0 0 8px 8px;box-shadow:0 6px 20px rgba(0,0,0,.12);max-height:320px;overflow-y:auto;'
           + 'font-size:12px;color:var(--note-ink,#111);padding:4px 0;display:none;';
-        // 挂载到搜索框的「直接父元素」末尾——搜索框在 DOM 里有自己的父节点，它就是 position:relative 的锚点
-        // 不要选 .tree-search 或更深的祖先：祖先可能比搜索框宽很多，浮层宽度会被拉大
-        const parent = search.parentElement;
-        if (parent) {
-          const curPos = getComputedStyle(parent).position;
-          if (curPos !== 'relative' && curPos !== 'absolute' && curPos !== 'fixed') parent.style.position = 'relative';
-          parent.appendChild(suggestionsEl);
-        } else {
-          document.body.appendChild(suggestionsEl);
-        }
+        document.body.appendChild(suggestionsEl);
         return suggestionsEl;
       }
 
-      /** 转义 HTML 特殊字符，snippet 后端返回安全明文仍需二次防注入 */
+      /** 用锚点元素的 getBoundingClientRect 把 suggestions 浮层定位到其正下方，同宽。
+       *  position:fixed 完全脱离祖先 overflow 裁剪（aside overflow-hidden 不再影响）。 */
+      function positionSuggestions() {
+        const anchor = search.parentElement;
+        if (!anchor) return;
+        const rect = anchor.getBoundingClientRect();
+        const box = ensureSuggestionsEl();
+        box.style.left = rect.left + 'px';
+        box.style.top = rect.bottom + 'px';
+        box.style.width = rect.width + 'px';
+      }
+
       function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
-      /** 渲染下拉浮层：标题 + 片段（关键词橙色高亮，安全转义后包装 <mark>）。 */
       function renderSuggestions(list, q) {
         const box = ensureSuggestionsEl();
         if (!list || !list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
-        const qRe = q ? new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi') : null;
+        positionSuggestions(); // 每次显示前重新定位（窗口尺寸/滚动可能变）
+        const qRe = q ? new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', settings.caseSensitive ? 'g' : 'gi') : null;
         box.innerHTML = list.map(it => {
           const safeSnippet = escapeHtml(it.snippet || '').replace(qRe, '<mark style="background:#fff3a0;color:#b45309;padding:0 2px;border-radius:2px;">$1</mark>');
           const safeTitle = escapeHtml(it.title || it.path.split('/').pop());
@@ -713,56 +745,152 @@
             + '<div style="color:var(--note-ink-2,#4b5563);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + safeSnippet + '</div>'
             + '</div>';
         }).join('');
-        box.style.display = 'block'; // 位置由 CSS top:100% + left:0 + right:0 自动紧贴搜索框底边，无需运行时换算
+        box.style.display = 'block';
       }
 
       function closeSuggestions() { if (suggestionsEl) { suggestionsEl.style.display = 'none'; suggestionsEl.innerHTML = ''; } }
 
-      /** 点击项 → 打开对应笔记（走全局 openNote）。 */
-      suggestionsEl && suggestionsEl.addEventListener('click', function (e) {
-        const item = e.target.closest('[data-path]');
-        if (!item) return;
-        e.stopPropagation();
-        const p = item.getAttribute('data-path');
-        closeSuggestions();
-        if (typeof openNote === 'function') openNote(p);
-        search.value = '';
-      });
+      // ------- Aa 切换图标：点击弹出大小写/整词 popover -------
+      let aaPopover = null;
+      function closeAaPopover() { if (aaPopover) { aaPopover.remove(); aaPopover = null; } }
+      function showAaPopover() {
+        closeAaPopover();
+        aaPopover = document.createElement('div');
+        // position:fixed + append body，彻底脱离 aside overflow-hidden 裁剪
+        aaPopover.style.cssText = 'position:fixed;z-index:10000;background:var(--note-background,#fff);border:1px solid var(--note-border,#e5e7eb);'
+          + 'border-top:none;border-radius:0 0 8px 8px;box-shadow:0 6px 20px rgba(0,0,0,.12);padding:6px;min-width:140px;font-size:12px;';
+        function toggle(label, key) {
+          const row = document.createElement('label');
+          row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 8px;cursor:pointer;border-radius:4px;';
+          row.innerHTML = '<input type="checkbox" style="accent-color:#7c3aed;" ' + (settings[key] ? 'checked' : '') + '>'
+            + '<span style="color:var(--note-ink,#111);">' + escapeHtml(label) + '</span>';
+          row.addEventListener('change', function () {
+            settings[key] = row.querySelector('input').checked;
+            persistSettings(); applyAaIcon();
+            if (search.value.trim().length >= 2) search.dispatchEvent(new Event('input'));
+          });
+          return row;
+        }
+        aaPopover.appendChild(toggle('区分大小写', 'caseSensitive'));
+        aaPopover.appendChild(toggle('匹配整词', 'wholeWord'));
+        document.body.appendChild(aaPopover);
+        // 用 getBoundingClientRect 把 popover 定位到 Aa 按钮正下方，右对齐
+        const btn = document.getElementById('sb-search-aacase');
+        if (btn) {
+          const rect = btn.getBoundingClientRect();
+          // popover 渲染后才能拿到宽度，但 min-width 已知 140px，用按钮右边对齐
+          aaPopover.style.left = Math.max(4, rect.right - 140) + 'px';
+          aaPopover.style.top = rect.bottom + 'px';
+        }
+      }
 
-      // 退格键/点击外部关闭；ESC 关闭且回退焦点到搜索框
+      // ------- 设置齿轮：弹出 snippet 长度滑杆 -------
+      let settingsPopover = null;
+      function closeSettingsPopover() { if (settingsPopover) { settingsPopover.remove(); settingsPopover = null; } }
+      function showSettingsPopover() {
+        closeSettingsPopover();
+        settingsPopover = document.createElement('div');
+        // position:fixed + append body，彻底脱离 aside overflow-hidden 裁剪
+        settingsPopover.style.cssText = 'position:fixed;z-index:10000;background:var(--note-background,#fff);border:1px solid var(--note-border,#e5e7eb);'
+          + 'border-top:none;border-radius:0 0 8px 8px;box-shadow:0 6px 20px rgba(0,0,0,.12);padding:10px;min-width:180px;font-size:12px;';
+        settingsPopover.innerHTML = '<div style="color:var(--note-ink-3,#9ca3af);margin-bottom:6px;">搜索设置</div>'
+          + '<label style="display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--note-ink,#111);">'
+          + '<span>显示更多上下文</span>'
+          + '<select id="sb-snippet-len" style="background:transparent;border:1px solid var(--note-border);border-radius:4px;padding:2px 4px;font-size:11px;color:var(--note-ink-2);">'
+          + '<option value="30"' + (settings.snippetLen === 30 ? ' selected' : '') + '>短 (30字)</option>'
+          + '<option value="50"' + (settings.snippetLen === 50 ? ' selected' : '') + '>中 (50字)</option>'
+          + '<option value="100"' + (settings.snippetLen === 100 ? ' selected' : '') + '>长 (100字)</option>'
+          + '</select></label>';
+        document.body.appendChild(settingsPopover);
+        // 用 getBoundingClientRect 把 popover 定位到设置齿轮正下方，右对齐
+        const btn = document.getElementById('sb-search-settings');
+        if (btn) {
+          const rect = btn.getBoundingClientRect();
+          settingsPopover.style.left = Math.max(4, rect.right - 180) + 'px';
+          settingsPopover.style.top = rect.bottom + 'px';
+        }
+        settingsPopover.querySelector('#sb-snippet-len').addEventListener('change', function () {
+          settings.snippetLen = Number(this.value); persistSettings();
+          if (search.value.trim().length >= 2) search.dispatchEvent(new Event('input'));
+        });
+      }
+
+      // ------- 事件：Aa 图标点击 / 设置齿轮点击 -------
+      document.getElementById('sb-search-aacase') && document.getElementById('sb-search-aacase').addEventListener('click', function (e) {
+        e.stopPropagation(); closeSettingsPopover(); aaPopover ? closeAaPopover() : showAaPopover();
+      });
+      document.getElementById('sb-search-settings') && document.getElementById('sb-search-settings').addEventListener('click', function (e) {
+        e.stopPropagation(); closeAaPopover(); settingsPopover ? closeSettingsPopover() : showSettingsPopover();
+      });
+      // 点击外部关闭所有 popover
+      // 重要：mousedown 在 click 之前触发。当 popover 已打开，用户再次点击按钮时，
+      // document mousedown 会先执行——如果不排除按钮自身，popover 会被先关掉，click 再打开（race condition）。
+      // 现在所有弹出层都 append 到 body（兄弟节点），contains(e.target) 不能用于按钮，必须显式排除按钮 ID。
       document.addEventListener('mousedown', function (e) {
-        if (!suggestionsEl || !suggestionsEl.contains(e.target)) closeSuggestions();
+        closeSuggestions();
+        const aaBtn = document.getElementById('sb-search-aacase');
+        const setBtn = document.getElementById('sb-search-settings');
+        const rangeSel = document.getElementById('sb-search-range');
+        const onSafeBtn = (aaBtn && aaBtn.contains(e.target))
+          || (setBtn && setBtn.contains(e.target))
+          || (rangeSel && rangeSel.contains(e.target));
+        if (onSafeBtn) return; // 点的是搜索条的交互按钮，不关 popover，让 click handler 去 toggle
+        if (aaPopover && !aaPopover.contains(e.target)) closeAaPopover();
+        if (settingsPopover && !settingsPopover.contains(e.target)) closeSettingsPopover();
       });
       search.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') { closeSuggestions(); this.blur(); }
+        if (e.key === 'Escape') { closeSuggestions(); closeAaPopover(); closeSettingsPopover(); this.blur(); }
         else if (e.key === 'Enter' && suggestionsEl && suggestionsEl.style.display !== 'none') {
-          // 回车打开第一项
           const first = suggestionsEl.querySelector('[data-path]');
           if (first) { e.preventDefault(); first.click(); }
         }
       });
       search.addEventListener('blur', function () { blurTimer = setTimeout(closeSuggestions, 200); });
       search.addEventListener('focus', function () { if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; } });
+      // 窗口尺寸变化时，重新定位 suggestions（position:fixed 依赖 viewport 坐标）
+      window.addEventListener('resize', function () {
+        if (suggestionsEl && suggestionsEl.style.display !== 'none') positionSuggestions();
+      });
 
       search.addEventListener('input', function () {
         if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
         const q = this.value.trim();
-        // 文件名过滤始终同步执行（ED-61 同时保留原有能力）
+        // 文件树过滤：range='name' 过滤文件名；range='title' 过滤标题（去后缀）；range='content' 不过滤
+        // 全文搜索时让用户看清全库，从下拉浮层（后端返回的真实全文命中）看结果
         const ql = q.toLowerCase();
         document.querySelectorAll('.tree-file').forEach(function (f) {
-          const ok = !ql || (f.dataset.name || '').toLowerCase().includes(ql);
+          let ok = true;
+          if (ql) {
+            if (settings.range === 'name') {
+              // 纯文件名过滤：dataset.name 是带扩展名的文件名
+              ok = (f.dataset.name || '').toLowerCase().includes(ql);
+            } else if (settings.range === 'title') {
+              // 标题过滤：去掉 md/markdown/txt 后缀
+              const name = (f.dataset.name || '');
+              const title = name.replace(/\.(md|markdown|txt)$/i, '');
+              ok = title.toLowerCase().includes(ql);
+            } else {
+              // content 全文范围：**不过滤文件树**（后端会返回真实正文命中，下拉浮层展示）
+              ok = true;
+            }
+          }
           f.style.display = ok ? '' : 'none';
         });
-        // 全文搜索：单字符/空不发请求，桥不可用回退纯文件名
         if (q.length < 2) { closeSuggestions(); return; }
+        if (!shouldUseBackend(q)) { closeSuggestions(); return; }
         const nd = window.noteDesktop;
-        if (!nd || typeof nd.searchNotes !== 'function') { closeSuggestions(); return; }
         if (debounceTimer) clearTimeout(debounceTimer);
         const token = ++lastReqToken;
         debounceTimer = setTimeout(async function () {
           try {
-            const list = await nd.searchNotes(q, 10);
-            if (token !== lastReqToken) return; // 被后续请求覆盖
+            const list = await nd.searchNotes({
+              q: q, limit: 10,
+              caseSensitive: settings.caseSensitive,
+              wholeWord: settings.wholeWord,
+              range: settings.range,
+              snippetLen: settings.snippetLen,
+            });
+            if (token !== lastReqToken) return;
             renderSuggestions(list, q);
           } catch (_) { closeSuggestions(); }
         }, 300);
