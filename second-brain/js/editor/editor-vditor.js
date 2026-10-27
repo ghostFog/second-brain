@@ -35,6 +35,260 @@
   let vdBuildRetryTimer = null;
   /** @type {number} 重试剩余次数：500ms × 60 = 30s 上限，避免无限轮询 */
   let vdBuildRetryLeft = 0;
+
+  /* ★ Bug-080: copy 事件拦截——当选中范围涉及表格 TD/TH 时，
+   * 用 tab 分隔的 text/plain + 完整 text/html 覆盖 vditor 的 Markdown-only 格式。
+   * vditor 原生 copy 会用 lute 把 IR DOM 转 Markdown 放 text/plain，还故意把 text/html 清空！
+   * 导致我们 paste 时拿不到 tab 分隔的 grid。这里在 capture 阶段先拦住，自己写正确格式。
+   * 作者: 火 冰 */
+  document.addEventListener('copy', function (e) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (range.collapsed) return; // 没选中内容
+
+    // 判断选中范围内是否有 TD/TH
+    const container = range.commonAncestorContainer;
+    const containerEl = container.nodeType === 3 ? container.parentElement : container;
+    if (!containerEl) return;
+    const inTable = containerEl.closest && containerEl.closest('TABLE');
+    if (!inTable) return; // 不在表格里 → 放行
+
+    // 收集选中范围内所有 TD/TH
+    const selectedCells = [];
+    const walker = document.createTreeWalker(inTable, NodeFilter.SHOW_ELEMENT, {
+      acceptNode: function (node) {
+        const tag = node.tagName;
+        if (tag !== 'TD' && tag !== 'TH') return NodeFilter.FILTER_SKIP;
+        // 安全判断：cell 是否被 range 选中
+        // 某些 Electron/Chrome 版本 Range.intersectsNode 参数校验很严，
+        // 用 compareBoundaryPoints 替代更稳定
+        try {
+          const cellRange = document.createRange();
+          cellRange.selectNodeContents(node);
+          // 如果 range 与 cellRange 有交集 → 选中
+          if (cellRange.compareBoundaryPoints(Range.END_TO_START, range) < 0 &&
+              cellRange.compareBoundaryPoints(Range.START_TO_END, range) > 0) {
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        } catch (_) { /* 忽略 range 异常 */ }
+        return NodeFilter.FILTER_SKIP;
+      }
+    });
+    let node;
+    while ((node = walker.nextNode())) selectedCells.push(node);
+    if (selectedCells.length === 0) return;
+
+    // 阻止 vditor 的 copy 处理（它会写 Markdown 格式，我们要 tab 分隔）
+    e.stopPropagation();
+    e.preventDefault();
+
+    // 计算选中 cells 的矩形范围（在 tableEl 坐标系里的最小行/列到最大行/列）
+    const trs = inTable.rows;
+    let minRow = Infinity, maxRow = -1, minCol = Infinity, maxCol = -1;
+    const cellPos = new Map(); // cellElement → [row, col]
+    for (let i = 0; i < trs.length; i++) {
+      for (let j = 0; j < trs[i].cells.length; j++) {
+        const c = trs[i].cells[j];
+        if (selectedCells.includes(c)) {
+          cellPos.set(c, [i, j]);
+          if (i < minRow) minRow = i;
+          if (i > maxRow) maxRow = i;
+          if (j < minCol) minCol = j;
+          if (j > maxCol) maxCol = j;
+        }
+      }
+    }
+
+    // 构建 tab 分隔的 text/plain 和 HTML 表格
+    // ★ 关键：text/plain 里单元格内的换行必须转成 <br>，不能用真实 \n
+    // 否则 paste 时 \n 分行会把 cell 内换行误判为行分隔
+    const textLines = [];
+    const htmlRows = [];
+    for (let r = minRow; r <= maxRow; r++) {
+      const textCells = [];
+      const htmlCells = [];
+      for (let c = minCol; c <= maxCol; c++) {
+        const cell = trs[r] && trs[r].cells[c];
+        if (cell) {
+          // cell.innerText 保留单元格内换行（真实 \n），转 <br> 避免与行分隔 \n 混淆
+          const plainVal = (cell.innerText || '').replace(/\r?\n/g, '<br>');
+          textCells.push(plainVal);
+          // HTML 直接用 innerHTML（完整结构，paste 时优先解析 HTML）
+          htmlCells.push('<' + cell.tagName + '>' + cell.innerHTML + '</' + cell.tagName + '>');
+        } else {
+          textCells.push('');
+          htmlCells.push('<TD><br></TD>');
+        }
+      }
+      textLines.push(textCells.join('\t'));
+      htmlRows.push('<tr>' + htmlCells.join('') + '</tr>');
+    }
+    const textPlain = textLines.join('\n');
+    const textHtml = '<table><tbody>' + htmlRows.join('') + '</tbody></table>';
+
+    console.log('[BUG-080] copy intercepted: text=', JSON.stringify(textPlain));
+    console.log('[BUG-080] copy HTML=', textHtml);
+
+    e.clipboardData.setData('text/plain', textPlain);
+    e.clipboardData.setData('text/html', textHtml);
+  }, true);
+
+  /* ★ 调试用：全局最早注册的 beforeinput 监听（比任何模块都早）
+   * 用来确认 beforeinput 事件到底有没有在 Electron 里触发。
+   * 如果这个都打不出日志，说明 Electron 或 vditor 用了 execCommand 绕过 beforeinput。
+   * 作者: 火 冰 */
+  document.addEventListener('beforeinput', function (e) {
+    console.log('[BUG-080-GLOBAL] beforeinput: inputType=', e.inputType, 'cancelable=', e.cancelable, 'defaultPrevented=', e.defaultPrevented);
+  }, true);
+  document.addEventListener('beforeinput', function (e) {
+    console.log('[BUG-080-GLOBAL-BUBBLE] beforeinput(bubble): inputType=', e.inputType);
+  }, false);
+  document.addEventListener('paste', function (e) {
+    console.log('[BUG-080-GLOBAL] paste: defaultPrevented=', e.defaultPrevented, 'clipboard types=', e.clipboardData ? Array.from(e.clipboardData.types) : 'none');
+    // 也尝试读 HTML 格式，看 Excel 复制的是不是 HTML 表格
+    if (e.clipboardData && e.clipboardData.getData) {
+      const html = e.clipboardData.getData('text/html');
+      if (html) console.log('[BUG-080-GLOBAL] paste HTML=', html.substring(0, 300));
+      const plain = e.clipboardData.getData('text/plain');
+      console.log('[BUG-080-GLOBAL] paste PLAIN=', JSON.stringify(plain));
+    }
+  }, true);
+
+  /* ============================================================
+   * 宿主层 per-tab 独立 undo/redo 历史 + Ctrl+Shift+Z redo 支持（Bug-079 最终方案）
+   * 背景：vditor 是全局单例（唯一 vdInst），原生 undo 栈挂在 vditor.undo.{ir,sv,wysiwyg}，
+   * 且栈内的 diff_match_patch patch 与当时 DOM 状态紧耦合，**无法在切 tab 时 save/restore**
+   * （patch 从 A DOM 拿到 B DOM 上应用结果完全错误）。
+   * 方案：放弃 vditor 原生 undo/redo，改为宿主层维护 per-tab 的「整文档内容快照」历史栈：
+   *   - vdTabHistory[path] = { undoStack: [content1, content2, ...], redoStack: [], lastPushTs: 0 }
+   *   - vditor input 回调时 debounced push 到当前 tab 的 undoStack
+   *   - 捕获阶段拦截 Ctrl+Z（undo）/ Ctrl+Shift+Z（redo）/ Ctrl+Y（redo）
+   *     对命中者 preventDefault + stopImmediatePropagation 屏蔽 vditor 原生 keydown，
+   *     然后从宿主栈取快照调 vdInst.setValue(snap, true)
+   * 注意：粒度是「整文档快照」而非 vditor 原生的字符级 diff——这是为了正确性的合理取舍
+   * （VS Code / Notion 等主流编辑器也都用文档级 undo）。
+   * 作者: 火 冰
+   * ============================================================ */
+  /** @type {Object.<string, {undoStack:string[], redoStack:string[], lastPushTs:number}>} per-tab 历史栈 */
+  let vdTabHistory = {};
+  /** @type {string[]} 每个 tab 最近一次 push 后被 setValue 回填的快照（避免 undo 栈里重复存相同内容） */
+  let vdLastPushContent = {};
+  /** @type {number} push 去抖 timer id（当前 tab 共用一个，input 时 reset） */
+  let vdPushDebounceTimer = null;
+  /** @type {string|null} push 去抖期间关联的 tab path（timer 到点时校验还是不是同一个 tab） */
+  let vdPushDebouncePath = null;
+
+  /** 确保 path 在 vdTabHistory 里有记录，懒初始化 undoStack/redoStack
+   * @param {string} path tab path
+   * @author 火 冰 */
+  function vdEnsureHistory(path) {
+    if (!path) return null;
+    if (!vdTabHistory[path]) vdTabHistory[path] = { undoStack: [], redoStack: [], lastPushTs: 0 };
+    return vdTabHistory[path];
+  }
+
+  /** 去抖 push 当前 vditor 内容到 tab 历史栈（500ms debounce）
+   * 连续输入时 reset timer，停止 500ms 后再 push；切 tab 时 timer 失效（path 变了）。
+   * @param {string} path 当前 tab path
+   * @author 火 冰 */
+  function vdDebouncePush(path) {
+    if (!path) return;
+    vdPushDebouncePath = path;
+    if (vdPushDebounceTimer) clearTimeout(vdPushDebounceTimer);
+    vdPushDebounceTimer = setTimeout(function () {
+      // 去抖到点时 path 已变（用户切 tab 了）→ 丢弃
+      if (vdPushDebouncePath !== path) return;
+      vdPushDebounceTimer = null;
+      vdPushDebouncePath = null;
+      const md = (vdInst && typeof vdInst.getValue === 'function') ? vdInst.getValue() : vdBuffer;
+      vdDoPush(path, md);
+    }, 500);
+  }
+
+  /** 立即 push 一份快照（切 tab 保存 outgoing 时用，不走去抖）
+   * @param {string} path tab path
+   * @param {string} md 要 push 的内容
+   * @author 火 冰 */
+  function vdDoPush(path, md) {
+    const h = vdEnsureHistory(path);
+    if (!h) return;
+    const content = String(md == null ? '' : md);
+    // 和上次 push/回填的内容一样 → 不重复存
+    if (vdLastPushContent[path] === content) return;
+    h.undoStack.push(content);
+    h.redoStack = []; // 新 push 清空 redo
+    vdLastPushContent[path] = content;
+    // 栈上限 100 条
+    if (h.undoStack.length > 100) h.undoStack.shift();
+  }
+
+  /** 立即 push 并同步更新 lastPushContent（setValue 回填时防止 undo 栈重复）
+   * @param {string} path tab path
+   * @param {string} md 内容
+   * @author 火 冰 */
+  function vdMarkFilled(path, md) {
+    vdLastPushContent[path] = String(md == null ? '' : md);
+  }
+
+  /** 去抖 push 未到点时主动 flush：清 timer + 立即 vdDoPush 当前内容。
+   * 在 Ctrl+Z/Ctrl+Y 执行前调用，确保 in-flight 的编辑状态被捕获后再回退/前进。
+   * @param {string} path 当前 tab path
+   * @author 火 冰 */
+  function vdFlushDebounce(path) {
+    if (!vdPushDebounceTimer) return;
+    // 只 flush 匹配的 path（timer 可能已过期指向其他 tab）
+    if (vdPushDebouncePath !== path) { clearTimeout(vdPushDebounceTimer); vdPushDebounceTimer = null; vdPushDebouncePath = null; return; }
+    clearTimeout(vdPushDebounceTimer); vdPushDebounceTimer = null; vdPushDebouncePath = null;
+    const md = (vdInst && typeof vdInst.getValue === 'function') ? vdInst.getValue() : vdBuffer;
+    vdDoPush(path, md);
+  }
+
+  /** 执行 undo：从 undoStack 弹出上一个快照，调 setValue 回填
+   * Bug-079 修复：Ctrl+Z 时若有未到点的 debounce timer，先 flush 捕获当前编辑状态再回退，
+   * 否则 500ms 去抖还没到点，undoStack 里只有起始态，Ctrl+Z 一按全部撤销。
+   * @param {string} path 当前 tab path
+   * @returns {boolean} 是否成功执行了 undo
+   * @author 火 冰 */
+  function vdDoUndo(path) {
+    vdFlushDebounce(path);
+    const h = vdEnsureHistory(path);
+    if (!h || h.undoStack.length < 2) return false; // 至少要有初始态 + 一条编辑
+    const cur = h.undoStack.pop();
+    h.redoStack.push(cur);
+    const prev = h.undoStack[h.undoStack.length - 1];
+    vdMarkFilled(path, prev);
+    try { if (vdInst) vdInst.setValue(prev, true); } catch (_) { /* 忽略 */ }
+    window.sbOutlineNotify();
+    return true;
+  }
+
+  /** 执行 redo：从 redoStack 弹出一条快照，调 setValue 回填
+   * 同样先 flush pending debounce（虽然 redo 场景少，但保证一致）。
+   * @param {string} path 当前 tab path
+   * @returns {boolean} 是否成功执行了 redo
+   * @author 火 冰 */
+  function vdDoRedo(path) {
+    vdFlushDebounce(path);
+    const h = vdEnsureHistory(path);
+    if (!h || h.redoStack.length === 0) return false;
+    const next = h.redoStack.pop();
+    h.undoStack.push(next);
+    vdMarkFilled(path, next);
+    try { if (vdInst) vdInst.setValue(next, true); } catch (_) { /* 忽略 */ }
+    window.sbOutlineNotify();
+    return true;
+  }
+
+  /** 外部清理接口：关闭页签时清理对应历史栈，防内存泄漏。
+   * 由 editor-tabs.js 的 closeTabs 调用。
+   * @param {string} path 关闭的 tab path
+   * @author 火 冰 */
+  window.vdClearUndoCache = function (path) {
+    if (path in vdTabHistory) delete vdTabHistory[path];
+    if (path in vdLastPushContent) delete vdLastPushContent[path];
+  };
+
   /** @type {string[]} 工具栏精简项：承接原自研格式/表格/代码/数学能力，含原生搜索、大纲、导出；
    *  upload 为 vditor 内置上传按钮，支持图片与附件（accept/上传逻辑见 buildVditor 的 upload 配置） */
   const VDTOOLBAR = [
@@ -1234,13 +1488,22 @@
         filename: function (name) { return name; },
         handler: handleVdUpload,
       },
-      input: function (v) { sync2Host(v); window.sbOutlineNotify(); vdSvGutterRefresh(); },
+      /* Bug-079: 输入时 debounced push 当前 tab 的 undo 历史（500ms 去抖）。
+       * vditor 原生 undo 栈已被宿主层取代，这里维护 per-tab 独立历史。作者: 火 冰 */
+      input: function (v) {
+        sync2Host(v); window.sbOutlineNotify(); vdSvGutterRefresh();
+        if (vdLastTabPath) vdDebouncePush(vdLastTabPath);
+      },
       blur: function () {
         // 首帧异步渲染完成前（vdReady=false）不触发保存：此时 vditor 内部未就绪，getValue 抛错
         // 会回退暂存缓冲，若缓冲为空会把空内容经 onEdInput 落入防抖保存，覆盖磁盘——笔记被自动清空
         // （Bug-052，文件只剩 1 字节换行）。渲染完成后才允许 blur 同步内容。作者: 火 冰
         if (!vdReady) return;
-        sync2Host(vdGetValue());
+        const md = vdGetValue();
+        sync2Host(md);
+        // Bug-079: blur 时立即 push 一份到当前 tab 的 undo 栈（不走去抖），
+        // 确保切 tab 后 outgoing 的历史点已被记录。作者: 火 冰
+        if (vdLastTabPath) vdDoPush(vdLastTabPath, md);
       },
       /* vditor 首帧异步渲染完成后的回调：把 init 期间积压的待渲内容补进编辑器，
        * 修复启动/快速切换时「工具栏渲染正常但内容区空白」的时序问题。
@@ -1257,7 +1520,7 @@
         const pending = (vdPending != null) ? vdPending : '';
         vdPending = null;
         if (pending !== '' && target) {
-          try { target.setValue(pending); console.log('[vditor] 首帧渲染完成，已补渲 ' + pending.length + ' 字符'); }
+          try { target.setValue(pending, true); console.log('[vditor] 首帧渲染完成，已补渲 ' + pending.length + ' 字符'); }
           catch (e) { console.warn('[vd-after] setValue error: ' + e); }
         }
         // 异步首帧渲染后，vditor 可能按默认 preview 布局重置各视图显隐；
@@ -1322,8 +1585,322 @@
   /** 把某篇笔记内容同步进编辑区（首次打开懒创建实例）；内容会覆盖编辑器当前内容并重置为保存态
    * 说明：分屏(both)布局下 vditor 运行期 setValue 只刷新右侧预览、左侧源码面板不同步，会呈现
    * 「左大片空白 + 右侧窄条」；故分屏态改为销毁重建实例，让两侧面板都用新内容填充。
-   * @param {string} md markdown 源文本 */
-  window.vdSyncValue = function (md) {
+   * Bug-079 升级：path 变化时先 save outgoing undo → setValue(md,true) → restore incoming undo，
+   * 实现每页签独立 Ctrl+Z 历史栈；path 不变（Provider 切换等）则只 setValue。
+   * @param {string} md markdown 源文本
+   * @param {string} [path] 当前 tab path（不传则跳过 undo 历史隔离） */
+  /** @type {string|null} 上次 vdSyncValue 同步过的 tab path（切 tab 时识别 outgoing/incoming） */
+  let vdLastTabPath = null;
+
+  /* Bug-079: 捕获阶段拦截 Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y，用宿主层 per-tab 历史栈执行 undo/redo。
+   * 放在捕获阶段（capture=true）且先 preventDefault+stopImmediatePropagation，
+   * 彻底屏蔽 vditor 原生的 keydown 处理和 Chromium 默认行为。
+   * 必须在 IIFE 顶层立即注册一次，不能等 vditor 构建好（否则快速 Ctrl+Z 可能没拦截到）。
+   * 作者: 火 冰 */
+  document.addEventListener('keydown', function (e) {
+    if (!vdInst || !vdLastTabPath) return;
+    // 快捷键目标必须在编辑器容器内（输入框、下拉菜单等走默认行为）
+    const vdEl = (vdInst && vdInst.vditor && vdInst.vditor.element) || document.getElementById('ed-vditor');
+    if (!vdEl) return;
+    const active = document.activeElement;
+    if (!active || !vdEl.contains(active)) return;
+    if (e.altKey) return;   // Alt 组合键不拦截
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (!ctrl) return;
+    const k = e.key;
+    const isZ = (k === 'z' || k === 'Z');
+    const isY = (k === 'y' || k === 'Y');
+    if (!isZ && !isY) return;
+    const path = vdLastTabPath;
+    if (isZ && !e.shiftKey) {
+      // Ctrl+Z → undo
+      e.preventDefault(); e.stopImmediatePropagation();
+      vdDoUndo(path);
+    } else if ((isZ && e.shiftKey) || isY) {
+      // Ctrl+Shift+Z / Ctrl+Y → redo
+      e.preventDefault(); e.stopImmediatePropagation();
+      vdDoRedo(path);
+    }
+  }, true);
+
+  /* Bug-080: 拦截 beforeinput（DOM 修改**之前**）和 paste 事件（兜底），
+   * 实现 vditor 表格单元格多格粘贴（Excel 复制 tab 分隔）。
+   * 根因：vditor 原生 + 浏览器默认 paste 行为是把剪贴板内容整段塞进当前 contenteditable，
+   * 不解析 tab 分隔多格分发。**paste 事件拦截太晚**（DOM 已被修改），
+   * 必须在 **beforeinput** 阶段拦截（inputType='insertFromPaste'）+ preventDefault。
+   * 同时保留 paste 事件拦截作为 fallback（某些场景 beforeinput e.data 为空）。
+   * 作者: 火 冰 */
+
+  /** 用 Selection API 找到光标所在的 TD/TH。
+   * 关键：vditor contenteditable 的 document.activeElement 是整个编辑器容器（.vditor-wysiwyg），
+   * 不是光标所在的 cell。必须用 window.getSelection().anchorNode 往上 traverse。
+   * @returns {HTMLElement|null} 光标所在的 TD/TH，或 null
+   * @author 火 冰 */
+  function vdGetCursorCell() {
+    try {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return null;
+      const node = sel.anchorNode;
+      if (!node) return null;
+      // 文本节点：parentElement 往上找
+      if (node.nodeType === 3) {
+        const parent = node.parentElement;
+        return parent ? (parent.closest && (parent.closest('TD') || parent.closest('TH'))) : null;
+      }
+      // 元素节点：直接 closest
+      if (node.nodeType === 1) {
+        return node.closest && (node.closest('TD') || node.closest('TH'));
+      }
+      return null;
+    } catch (_) { return null; }
+  }
+
+  /** 解析剪贴板内容到 grid[row][col]。
+   * 优先解析 text/html（用 TD/TH 边界最明确，cell 内换行不被误判），
+   * 没有 HTML 时 fallback 到 text/plain（\n 分行、\t 分列、<br> 还原 cell 内换行）。
+   * @param {string} html clipboardData.getData('text/html')
+   * @param {string} plain clipboardData.getData('text/plain')
+   * @returns {Array<Array<{text:string, isHtml:boolean}>>|null} grid，null 表示无法解析
+   * @author 火 冰 */
+  function vdParseClipboardToGrid(html, plain) {
+    // 1) 优先解析 HTML（最准）
+    if (html && /<table[\s\S]*<(td|th)[\s\S]*<\/(td|th)>[\s\S]*<\/table>/i.test(html)) {
+      try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const table = doc.querySelector('table');
+        if (table && table.rows.length > 0) {
+          const grid = [];
+          for (let i = 0; i < table.rows.length; i++) {
+            const rowCells = [];
+            const cells = table.rows[i].cells;
+            if (cells.length === 0) continue; // 跳过空行（thead/tbody 可能的结构）
+            for (let j = 0; j < cells.length; j++) {
+              const c = cells[j];
+              // 用 innerHTML 保留 cell 内换行等结构
+              rowCells.push({ text: c.innerHTML || '', isHtml: true });
+            }
+            grid.push(rowCells);
+          }
+          if (grid.length > 0) {
+            console.log('[BUG-080] parseGrid from HTML:', grid.length, 'rows');
+            return grid;
+          }
+        }
+      } catch (_) { /* 忽略 HTML 解析异常 */ }
+    }
+
+    // 2) Fallback: 解析 text/plain
+    if (!plain) return null;
+    const cleaned = plain.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const rows = cleaned.split('\n');
+    while (rows.length > 0 && rows[rows.length - 1].trim() === '' && rows.length > 1) rows.pop();
+    const grid = rows.map(function (r) {
+      return r.split('\t').map(function (cell) {
+        // copy 时把 cell 内换行转成 <br> 避免和行分隔 \n 混淆
+        // paste 时把 <br> 还原回 \n（作为 cell 内换行）
+        return { text: cell.replace(/<br\s*\/?>/gi, '\n'), isHtml: false };
+      });
+    });
+    console.log('[BUG-080] parseGrid from plain:', grid.length, 'rows');
+    return grid;
+  }
+
+  /** 核心分发函数：把 grid[row][col] 从 cellEl 开始逐格填充表格。
+   * 超出边界时自动扩展行列。
+   * @param {HTMLElement} cellEl 活动单元格（TD/TH）
+   * @param {Array<Array<{text:string, isHtml:boolean}>>} grid 从剪贴板解析来的二维数组
+   * @author 火 冰 */
+  function vdPasteTableGrid(cellEl, grid) {
+    if (!grid || grid.length === 0) return;
+
+    // ★ 单格内容：从光标位置插入，保留 cell 内其他内容
+    if (grid.length === 1 && grid[0].length === 1) {
+      const item = grid[0][0];
+      const val = item.text;
+      console.log('[BUG-080] single-cell insert at caret, val=', JSON.stringify(val.substring ? val.substring(0, 30) : val));
+
+      try {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) {
+          const range = sel.getRangeAt(0);
+          // 只处理光标在 cellEl 内的情况
+          if (cellEl.contains(range.startContainer)) {
+            range.deleteContents();
+            if (item.isHtml) {
+              // HTML 内容：创建 fragment 插入
+              const temp = document.createElement('div');
+              temp.innerHTML = val;
+              const frag = document.createDocumentFragment();
+              while (temp.firstChild) frag.appendChild(temp.firstChild);
+              range.insertNode(frag);
+            } else {
+              // 纯文本：把 \n 转 <br> 让 vditor 渲染
+              const html = val ? val.replace(/\r?\n/g, '<br>') : '';
+              const temp = document.createElement('div');
+              temp.innerHTML = html;
+              const frag = document.createDocumentFragment();
+              while (temp.firstChild) frag.appendChild(temp.firstChild);
+              range.insertNode(frag);
+            }
+            // 光标移到插入内容末尾
+            range.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(range);
+            console.log('[BUG-080] single-cell insert DONE');
+            if (typeof vdLastTabPath === 'string' && vdLastTabPath) vdDebouncePush(vdLastTabPath);
+            return;
+          }
+        }
+      } catch (_) { /* Selection 操作异常，fallback 到覆盖 */ }
+
+      // Fallback：光标不在 cell 内或插入失败 → 覆盖当前 cell
+      cellEl.innerHTML = item.isHtml ? (val || '<br>') : (val ? val.replace(/\r?\n/g, '<br>') : '<br>');
+      if (typeof vdLastTabPath === 'string' && vdLastTabPath) vdDebouncePush(vdLastTabPath);
+      return;
+    }
+
+    // ★ 多格内容：从 cellEl 开始逐格覆盖
+    console.log('[BUG-080] multi-cell overwrite, grid=', grid.length, 'rows');
+
+    // 定位起始 cell 坐标
+    const tableEl = cellEl.closest('TABLE');
+    if (!tableEl) { console.log('[BUG-080] vdPasteTableGrid: no TABLE ancestor'); return; }
+    let startRow = -1, startCol = -1;
+    const trs = tableEl.rows;
+    for (let i = 0; i < trs.length; i++) {
+      const tds = trs[i].cells;
+      for (let j = 0; j < tds.length; j++) {
+        if (tds[j] === cellEl) { startRow = i; startCol = j; console.log('[BUG-080] FOUND at row=', i, 'col=', j); break; }
+      }
+      if (startRow >= 0) break;
+    }
+    if (startRow < 0) { console.log('[BUG-080] vdPasteTableGrid: startRow not found'); return; }
+
+    // 先清 cellEl 里 vditor/浏览器已经塞进来的内容
+    cellEl.innerHTML = '<br>';
+
+    // 逐格填充；表格不够大时自动扩展
+    for (let r = 0; r < grid.length; r++) {
+      let row = startRow + r;
+      while (row >= tableEl.rows.length) {
+        const lastTR = tableEl.rows[tableEl.rows.length - 1];
+        if (!lastTR) break;
+        const hasTh = /^\s*th\s*$/i.test(lastTR.firstElementChild && lastTR.firstElementChild.tagName);
+        const newTR = document.createElement('tr');
+        for (let c = 0; c < lastTR.cells.length; c++) {
+          const tag = hasTh ? 'TH' : 'TD';
+          const newCell = document.createElement(tag);
+          newCell.innerHTML = '<br>';
+          newTR.appendChild(newCell);
+        }
+        tableEl.appendChild(newTR);
+      }
+      const curTR = tableEl.rows[row];
+      if (!curTR) continue;
+
+      for (let c = 0; c < grid[r].length; c++) {
+        let col = startCol + c;
+        while (col >= curTR.cells.length) {
+          const refTD = curTR.cells[curTR.cells.length - 1];
+          const tag = refTD ? refTD.tagName : 'TD';
+          const newCell = document.createElement(tag);
+          newCell.innerHTML = '<br>';
+          curTR.appendChild(newCell);
+        }
+        const cell = curTR.cells[col];
+        if (!cell) continue;
+        const item = grid[r][c];
+        const val = item.text;
+        console.log('[BUG-080]   fill row=', row, 'col=', col, 'val=', JSON.stringify(val.substring ? val.substring(0, 30) : val));
+
+        // isHtml=true → innerHTML 保留结构（cell 内换行 <br> 等）
+        // isHtml=false → innerHTML 把 \n 转成 <br> 让 vditor 能渲染
+        if (item.isHtml) {
+          cell.innerHTML = val || '<br>';
+        } else {
+          // 纯文本里可能有 cell 内换行（已还原成 \n），转 <br> 保留
+          cell.innerHTML = val ? val.replace(/\r?\n/g, '<br>') : '<br>';
+        }
+      }
+    }
+    console.log('[BUG-080] vdPasteTableGrid: DONE');
+
+    // 选中起始 cell 让用户继续编辑
+    try {
+      cellEl.focus();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(cellEl);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (_) { /* 忽略 focus 异常 */ }
+
+    // 触发 input 让宿主层记录历史（Bug-079 debounce push）
+    if (typeof vdLastTabPath === 'string' && vdLastTabPath) {
+      vdDebouncePush(vdLastTabPath);
+    }
+  }
+
+  /** beforeinput 阶段拦截（DOM 修改**之前**）——主拦截入口 */
+  document.addEventListener('beforeinput', function (e) {
+    // 只关心粘贴动作
+    if (e.inputType !== 'insertFromPaste') return;
+    if (!vdInst) return;
+    const vdEl = (vdInst && vdInst.vditor && vdInst.vditor.element) || document.getElementById('ed-vditor');
+    if (!vdEl) return;
+    const active = document.activeElement;
+    if (!active || !vdEl.contains(active)) return;
+    const cellEl = vdGetCursorCell();
+    if (!cellEl) return; // 不在表格里 → 放行
+
+    // beforeinput 的 e.data 只有纯文本，没有 HTML（Chrome 行为）
+    let text = '';
+    if (e.data && typeof e.data === 'string' && e.data.length > 0) text = e.data;
+    if (!text) return; // 没内容 → 放行让 paste 兜底
+
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const grid = vdParseClipboardToGrid(null, text);
+    if (grid) vdPasteTableGrid(cellEl, grid);
+  }, true);
+
+  /** paste 事件兜底：某些 Electron 版本 beforeinput e.data 可能为空，这里从 clipboardData 取 */
+  document.addEventListener('paste', function (e) {
+    if (!vdInst) return;
+    const vdEl = (vdInst && vdInst.vditor && vdInst.vditor.element) || document.getElementById('ed-vditor');
+    if (!vdEl) return;
+    const active = document.activeElement;
+    if (!active || !vdEl.contains(active)) return;
+    const cellEl = vdGetCursorCell();
+    if (!cellEl) return;
+
+    // 拿 text/plain 和 text/html，vdParseClipboardToGrid 会优先 HTML
+    let html = '', plain = '';
+    if (e.clipboardData && e.clipboardData.getData) {
+      try { html = e.clipboardData.getData('text/html') || ''; } catch (_) { html = ''; }
+      try { plain = e.clipboardData.getData('text/plain') || ''; } catch (_) { plain = ''; }
+    } else if (window.clipboardData) {
+      try { plain = window.clipboardData.getData('Text') || ''; } catch (_) { plain = ''; }
+    }
+    if (!html && !plain) return;
+
+    console.log('[BUG-080] paste: html=', html.substring ? html.substring(0, 80) : html, 'plain=', JSON.stringify(plain.substring ? plain.substring(0, 80) : plain));
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const grid = vdParseClipboardToGrid(html, plain);
+    if (grid) vdPasteTableGrid(cellEl, grid);
+  }, true);
+
+  /** 把某篇笔记内容同步进编辑区（首次打开懒创建实例）；内容会覆盖编辑器当前内容并重置为保存态
+   * 说明：分屏(both)布局下 vditor 运行期 setValue 只刷新右侧预览、左侧源码面板不同步，会呈现
+   * 「左大片空白 + 右侧窄条」；故分屏态改为销毁重建实例，让两侧面板都用新内容填充。
+   * Bug-079：path 变化时立即 push outgoing 快照到宿主历史栈，然后 setValue(clearStack=true)，
+   * 最后 incoming redoStack 清空。宿主层拦截 Ctrl+Z/Shift+Z/Y 实现 per-tab 独立 undo。
+   * @param {string} md markdown 源文本
+   * @param {string} [path] 当前 tab path（不传则跳过 outgoing push 和 incoming redo 清空） */
+  window.vdSyncValue = function (md, path) {
     vdBuffer = String(md == null ? '' : md);
     // 经 ensureVd 懒创建；若旧实例根节点已脱离文档（冷启动视图重建后容器被替换）则销毁重建，
     // 避免 setValue 写进已摘除节点、界面恒空白（Bug-069）。
@@ -1335,12 +1912,36 @@
     if (!vdReady) { vdPending = vdBuffer; return; }
     if (vdPreview === 'both') {
       // 分屏视图：重建实例以完整刷新左源码/右预览，避免 setValue 在分屏下的内容不同步窄条
+      if (vdLastTabPath) { /* 切 tab 时分屏重建也要 push outgoing，但实例马上销毁，先从 vdBuffer 取 */ }
       try { vdInst.destroy(); } catch (_) { /* 忽略销毁异常 */ }
       vdInst = null;
       buildVditor();
+      if (path) { vdLastTabPath = path; vdMarkFilled(path, vdBuffer); }
       return;
     }
-    try { vdInst.setValue(vdBuffer); } catch (_) { /* 忽略 */ }
+    /* 切 tab 识别：path 显式传入且与上次不同 → push outgoing + 清 incoming redo；
+     * path 未传或相同（Provider 切换）→ 只 setValue，不动历史栈。
+     * 作者: 火 冰 */
+    const pathChanged = (path != null && path !== vdLastTabPath);
+    if (pathChanged) {
+      // push outgoing：从 vditor 当前实例读内容（尚未被 setValue 覆盖）
+      if (vdLastTabPath) {
+        const curContent = (typeof vdInst.getValue === 'function') ? vdInst.getValue() : vdBuffer;
+        vdDoPush(vdLastTabPath, curContent);
+      }
+      // 清 incoming redoStack（undoStack 保留）
+      const h = vdEnsureHistory(path);
+      if (h) { h.redoStack = []; }
+      // 初始首次打开该 tab 时，把磁盘 md push 进 undoStack 作为「起始快照」
+      if (h && h.undoStack.length === 0) {
+        h.undoStack.push(vdBuffer);
+        vdLastPushContent[path] = vdBuffer;
+      }
+      // 清除可能残留在旧 path 上的 debounce timer
+      if (vdPushDebounceTimer) { clearTimeout(vdPushDebounceTimer); vdPushDebounceTimer = null; vdPushDebouncePath = null; }
+    }
+    try { vdInst.setValue(vdBuffer, true); } catch (_) { /* 忽略 */ }
+    if (pathChanged) { vdLastTabPath = path; vdMarkFilled(path, vdBuffer); }
     window.sbOutlineNotify();   // 切笔记后通知插件大纲重建，标题实时跟随当前文件
   };
 
@@ -1348,7 +1949,10 @@
    * @param {string} md markdown 源文本 */
   window.vdSetValue = function (md) {
     vdBuffer = String(md == null ? '' : md);
-    if (vdInst) { try { vdInst.setValue(vdBuffer); } catch (_) { /* 忽略 */ } }
+    // 清空场景（如删除当前笔记后）：重置 path tracking，防止下次 vdSyncValue 误操作旧 path 的历史栈
+    vdLastTabPath = null;
+    if (vdPushDebounceTimer) { clearTimeout(vdPushDebounceTimer); vdPushDebounceTimer = null; vdPushDebouncePath = null; }
+    if (vdInst) { try { vdInst.setValue(vdBuffer, true); } catch (_) { /* 忽略 */ } }
     window.sbOutlineNotify();   // 切换/载入文档后通知插件大纲重建，标题实时跟随当前文件
   };
 
@@ -1800,6 +2404,42 @@
     if (vdCodeLnObs) { vdCodeLnObs.disconnect(); vdCodeLnObs = null; }   // 同步拆代码块行号观察器，防跨实例泄漏
     if (vdInst) { try { vdInst.destroy(); } catch (_) { /* 忽略 */ } }
     vdInst = null;
+  };
+
+  /* 关键修复：插件异步加载时序竞态
+   *
+   * 问题：目录插件 markdown-editor 的 main.js 在异步 loadDirPlugins 中加载完成后，
+   * 会通过 window.sbVdToolbarAdd 把「宽屏 / 表格列宽 / 大纲」三个按钮注入到
+   * window.__sbVdToolbarInjects 队列。但如果 buildVditor 在此之前就被执行过（启动时
+   * initEditor → openNote → renderArticle → ensureVd → buildVditor），vditor 实例
+   * 创建时读到的注入队列还是空的，三个按钮就丢失了，且 vditor toolbar 创建后不会
+   * 自动再读队列。用户切预览/编辑节点模式时触发 ir↔sv 重建，此时插件已加载完，按钮
+   * 就出现了——这就是「切换预览就出来」的根因。
+   *
+   * 修复：暴露 window.vdRebuild，供 loadDirPlugins 全部加载完后调用。如果 vditor
+   * 实例已存在（说明首次 buildVditor 已经跑过但插件按钮还没注入），主动销毁并重建
+   * 一次，让 toolbar 从完整注入队列构建，三个按钮立即出现。
+   *
+   * 作者: 火 冰 */
+  window.vdRebuild = function () {
+    if (!vdInst) return;   // 还没创建过实例，无需重建（下次 buildVditor 自然会读到完整注入队列）
+    const mode = vdMode;
+    const preview = vdPreview;
+    // 保留当前内容（buildVditor 内部 safeGetValue 会在销毁前取值，这里只是保底）
+    const cur = safeGetValue();
+    if (cur != null) vdBuffer = cur;
+    // 销毁旧实例并重建
+    vdDestroy();
+    buildVditor();
+    // 还原模式（buildVditor 默认按 vdMode/vdPreview 构建，这里保险一下）
+    if (vdMode !== mode || vdPreview !== preview) {
+      setVdMode(mode);
+      vdPreview = preview;
+      applyVdVisibility();
+    }
+    // 同步高亮插件按钮状态（宽屏/列宽）
+    if (typeof window.mdeRestoreWide === 'function') window.mdeRestoreWide();
+    if (typeof window.mdeRestoreTableAuto === 'function') window.mdeRestoreTableAuto();
   };
 
   /* ---------- 宿主自接管全屏（舍弃 vditor 内置 fullscreen，其还原在宿主下不可靠） ---------- */

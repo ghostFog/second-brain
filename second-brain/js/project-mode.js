@@ -294,7 +294,7 @@ globalThis.sbTempFiles = (function () {
       edOutdated['temp://' + abs] = r.content || '';
     }
     edCurrent = 'temp://' + abs;
-    if (typeof vdSyncValue === 'function') vdSyncValue(edOutdated[edCurrent] || '');
+    if (typeof vdSyncValue === 'function') vdSyncValue(edOutdated[edCurrent] || '', edCurrent);
     const cnt = document.getElementById('ed-count'); if (cnt) cnt.textContent = countChars(edOutdated[edCurrent] || '') + ' 字';
     const saved = document.getElementById('ed-saved'); if (saved) saved.textContent = '已加载（临时文件）';
     // 渲染唯一临时页签：隐藏既有知识库页签 + 挂一个临时页签；打开知识库笔记时 renderTabs 会清掉它

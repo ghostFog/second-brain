@@ -81,6 +81,8 @@
 | [Bug-075](Bug-075.md) | 已修复（测试完成） | 项目窗口打开 .sql 等文本文件编辑区完全空白（页签/字数正常、无报错），且非 md 文本无高亮：`buildVditor` 在 `window.Vditor` 未就绪（启动 clearCache 竞态）时静默放弃且永不重试。修复：Vditor 未就绪 500ms 延迟重试构建（60 次上限）；项目模式非 md 文本按后缀包 ```lang fence 复用代码块 hljs 高亮、`onEdInput` 统一解包；`project:read` 优先按 UTF-16 BOM 解码（文本一律进编辑器）。 |
 | [Bug-076](Bug-076.md) | 已修复（测试完成） | 重新打开知识库（无编辑）`recent.json` 每次被重写（内容相同仅刷 mtime）：启动恢复标签触发 openNote→persistRecentTabs，主进程 `notes:recentSave` 无比对无条件 writeFile。修复：meta-vault 新增 `writeIfChanged` 最小化写入出口，recentSave 改走该出口；`_meta.json` 首开全写经真机两轮快照查明为一次性迁移收敛，非缺陷。 |
 | [Bug-077](Bug-077.md) | 已修复（测试完成） | 加密知识库每次打开全部 `_meta.json` 被重写（仅 updatedAt 变）：解密读函数先取 `encKeyCache.get`（首调 undefined）后 `ensureNoteKey` 才建缓存，首读静默返回 ENC1 密文；与渲染端恢复标签读取竞速，污染边界逐轮不同致指纹每轮变、diff 误判全写。修复：三函数先 ensureNoteKey 再取 ring，真机第二轮零写入。 |
+| [Bug-079](Bug-079.md) | 已修复（测试完成） | 切换页签后 Ctrl+Z 回退串内容 + 连续输入会全部撤销 + 不支持 Ctrl+Shift+Z redo：vditor 单例 undo 栈跨 tab 共享且不处理 Shift+Z；宿主层 per-tab 文档快照历史栈解决，Ctrl+Z 前先 flush pending debounce timer 确保步长正确；Ctrl+Shift+Z/Ctrl+Y redo 也统一走宿主栈。 |
+| [Bug-080](Bug-080.md) | 已修复（测试完成） | 表格单元格 Ctrl+V 粘贴 Excel 多单元格（tab 分隔）全部堆进一行/单元格：vditor 不处理 paste 表格语义，宿主层 capture 阶段 paste 拦截器解析 tab/newline 逐格填充，超出边界自动扩展行列。 |
 
 > 注（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——语言选择器(chip)显隐保留为 Bug-011，链接弹框 `docButton` 那条纠正为 Bug-042。
 

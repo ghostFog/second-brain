@@ -56,7 +56,8 @@
     const closing = new Set(list);
     const closedCurrent = closing.has(edCurrent);
     edOpenTabs = edOpenTabs.filter(function (p) { return !closing.has(p); });
-    list.forEach(function (p) { delete edOutdated[p]; edPinned.delete(p); edDirty.delete(p); edMissing.delete(p); });
+    list.forEach(function (p) { delete edOutdated[p]; edPinned.delete(p); edDirty.delete(p); edMissing.delete(p);
+      if (typeof vdClearUndoCache === 'function') vdClearUndoCache(p); /* Bug-079: 关闭页签同步清理 undo 快照 */ });
     if (closedCurrent) edCurrent = edOpenTabs[edOpenTabs.length - 1] || null;
     const p = edCurrent;
     renderTabs();

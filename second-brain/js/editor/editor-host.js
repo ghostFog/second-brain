@@ -1,4 +1,4 @@
-/* ============================================
+﻿/* ============================================
  * 第二脑 — 编辑器宿主·打开/保存/模式/编辑区
  * 作者: 火 冰
  * 功能: 打开笔记与模式路由、保存与字数、标题、启动初始化（initEditor）、
@@ -197,6 +197,21 @@
      * 事件会把「旧文件可见内容」以新文件路径保存，造成串文件/笔记丢失。故在内容就绪后、渲染前
      * 再激活为当前文件，保证 edCurrent 恒等于「编辑器当前正显示的文件」。作者: 火 冰 */
     edCurrent = path;
+    /* 关键时序：在 await file read 完成后、renderArticle 之前，重新路由 Provider。
+     * openNote 开头（约第 141-144 行）在 await 之前就调用了 pluginManager.getEditorProviders(edExt)，
+     * 但此时目录插件（markdown-editor）可能还在异步加载中（initPluginSystem → loadDirPlugins 无 await），
+     * getEditorProviders 只会返回 fallback（id=__fallback__）。await file read 期间，JS 事件循环会处理
+     * 目录插件加载完成的微任务，此时 markdown-editor 已注册了真正的 Provider。这里重新获取就能拿到
+     * 正确的 Provider id（markdown-editor），避免 renderArticle 中 isMd=false 导致工具栏模式按钮被隐藏。
+     * 作者: 火 冰 */
+    {
+      const freshProvs = (typeof pluginManager !== 'undefined' && pluginManager && pluginManager.getEditorProviders)
+        ? pluginManager.getEditorProviders(edExt) : [];
+      if (freshProvs[0] && (!edProvider || edProvider.id !== freshProvs[0].id)) {
+        edProvider = freshProvs[0];
+        edTextFallback = !!(edProvider && edProvider.isFallback);
+      }
+    }
     // 打开方式：入参优先，否则按上次记忆的统一编辑模式（WYSIWYG/IR/SV/阅读）应用；
     applyEditorMode(opts.mode || lastEditorMode());
     renderTabs();
@@ -446,6 +461,18 @@
   function renderArticle() {
     const path = edCurrent;
     const md = edOutdated[path] || '';
+    /* 双重保险：每次 renderArticle 都重新路由一次 Provider，不依赖 openNote 开头缓存的值。
+     * 异步目录插件的 Provider 可能在 openNote 内部 await file read 之后才注册好，
+     * 这里直接重新获取能确保用到最新的 Provider，isMd 判定才是正确的。作者: 火 冰 */
+    {
+      const ext = (typeof fileExtension === 'function') ? fileExtension(path) : edExt;
+      const provs = (typeof pluginManager !== 'undefined' && pluginManager && pluginManager.getEditorProviders)
+        ? pluginManager.getEditorProviders(ext) : [];
+      if (provs[0] && (!edProvider || edProvider.id !== provs[0].id)) {
+        edProvider = provs[0];
+        edTextFallback = !!(edProvider && edProvider.isFallback);
+      }
+    }
     const isMd = edProvider && edProvider.id === 'markdown-editor';
     setModeToolbarVisible(isMd);   // 只有 vditor Markdown 编辑器需要模式切换按钮
 
@@ -469,7 +496,7 @@
       const vdHost = document.getElementById('ed-vditor');
       if (vdHost) vdHost.style.display = '';
       document.querySelectorAll('.sb-provider-dom').forEach(function (n) { n.parentNode.removeChild(n); });
-      if (typeof vdSyncValue === 'function') vdSyncValue(md);
+      if (typeof vdSyncValue === 'function') vdSyncValue(md, path);
     }
     // 标题/时间/字数组件已按 ED-44 移除：顶部不留标题条，改名统一走文件树（右键「重命名」/双击文件名）
     // 字数/保存状态仍由下方状态栏（ed-count/ed-saved）承担
@@ -750,6 +777,37 @@
 
       function closeSuggestions() { if (suggestionsEl) { suggestionsEl.style.display = 'none'; suggestionsEl.innerHTML = ''; } }
 
+      /** 打开搜索结果对应的笔记。
+       * @param {string} path 笔记 vault 内路径（如 "folder/note.md"）
+       * @author 火 冰 */
+      function openSearchedNote(path) {
+        if (!path) return;
+        closeSuggestions();
+        search.value = '';
+        // 调宿主层的 openNote（和文件树点击同一入口）
+        if (typeof window.openNote === 'function') {
+          window.openNote(path);
+        } else if (typeof window.loadNoteByPath === 'function') {
+          window.loadNoteByPath(path);
+        }
+      }
+
+      // 在 suggestionsEl 上用事件委托绑 click（因为 innerHTML 重建会丢 handler）
+      // 必须在 ensureSuggestionsEl 创建后、第一次 render 前就绑好
+      function bindSuggestionsClick() {
+        const box = ensureSuggestionsEl();
+        if (box._suggestionsBound) return;
+        box._suggestionsBound = true;
+        box.addEventListener('click', function (e) {
+          const item = e.target.closest && e.target.closest('[data-path]');
+          if (!item) return;
+          const p = item.getAttribute('data-path');
+          if (p) { e.preventDefault(); openSearchedNote(p); }
+        });
+        // Enter 触发的 click() 也走这里
+      }
+      bindSuggestionsClick();
+
       // ------- Aa 切换图标：点击弹出大小写/整词 popover -------
       let aaPopover = null;
       function closeAaPopover() { if (aaPopover) { aaPopover.remove(); aaPopover = null; } }
@@ -827,7 +885,14 @@
       // document mousedown 会先执行——如果不排除按钮自身，popover 会被先关掉，click 再打开（race condition）。
       // 现在所有弹出层都 append 到 body（兄弟节点），contains(e.target) 不能用于按钮，必须显式排除按钮 ID。
       document.addEventListener('mousedown', function (e) {
-        closeSuggestions();
+        // ★ Bug-081: 排除 suggestionsEl 内的 mousedown——否则点击搜索结果项时，
+        // mousedown 先触发把 innerHTML 清空，click 事件根本来不及执行
+        if (suggestionsEl && suggestionsEl.contains(e.target)) {
+          // 点在下拉浮层里：不关 suggestions，让 click handler 去处理
+          // 但要关 aaPopover / settingsPopover（它们互不关联）
+        } else {
+          closeSuggestions();
+        }
         const aaBtn = document.getElementById('sb-search-aacase');
         const setBtn = document.getElementById('sb-search-settings');
         const rangeSel = document.getElementById('sb-search-range');
@@ -1183,3 +1248,41 @@
       await window.sbProject.applyUi();
     }
   }
+
+  /* ============================
+   * Bug 修复：异步加载目录插件完成后重新检查 Provider 路由
+   * 根因：loadDirPlugins() 是异步的，首次 openNote 可能在 markdown-editor 插件注册 Provider 之前执行，
+   * 导致 provider 走 fallback（纯文本），renderArticle 中 setModeToolbarVisible(false) 把工具栏三个模式
+   * 切换按钮隐藏了。插件加载完后不会自动刷新，按钮就一直保持隐藏。
+   * 修复：暴露全局函数，供 loadDirPlugins 全部加载完后调用，重新路由 Provider 并刷新工具栏显隐。
+   * 作者: 火 冰
+   * ============================ */
+  /**
+   * 重新检查当前打开文件的 Provider 路由：如果 Provider 是 fallback（或已过期），
+   * 重新从 pluginManager.getEditorProviders 获取正确的 Provider，并刷新工具栏按钮显隐。
+   * 由 app-plugins.js 的 loadDirPlugins 在目录插件加载完后调用。
+   * @author 火 冰 */
+  window.sbRecheckEditorProvider = function () {
+    if (!edCurrent) return;   // 当前无打开的笔记，无需刷新
+    // 重新路由：用当前文件后缀查最新 Provider 列表
+    const ext = (typeof fileExtension === 'function') ? fileExtension(edCurrent) : edExt;
+    const provs = (typeof pluginManager !== 'undefined' && pluginManager && pluginManager.getEditorProviders)
+      ? pluginManager.getEditorProviders(ext) : [];
+    const newProv = provs[0] || null;
+    if (!newProv) return;
+    // 如果 Provider 变了（比如从 fallback 变成了 markdown-editor），更新并刷新
+    if (!edProvider || edProvider.id !== newProv.id) {
+      edProvider = newProv;
+      edExt = ext;
+      edTextFallback = !!(edProvider && edProvider.isFallback);
+      // 只刷新工具栏显隐（不需要重新渲染整个文章），保持当前编辑内容不丢
+      const isMd = edProvider && edProvider.id === 'markdown-editor';
+      setModeToolbarVisible(isMd);
+      // 如果从 fallback 切换到了 markdown-editor，同步触发 vditor 内容同步
+      // 注意：此处不传 path 参数（edCurrent 没变，是同一份内容换编辑器引擎），
+      // 让 vdSyncValue 内部 pathChanged=false → 只 setValue 清空 undo，不 save/restore（切 tab 隔离逻辑）
+      if (isMd && typeof vdSyncValue === 'function') {
+        vdSyncValue(edOutdated[edCurrent] || '');
+      }
+    }
+  };

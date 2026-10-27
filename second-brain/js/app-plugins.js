@@ -1177,6 +1177,24 @@ async function loadDirPlugins() {
   if (grid && typeof renderPlugins === 'function') {
     renderPlugins(currentCat, searchInput ? searchInput.value : '', sortSelect ? sortSelect.value : '');
   }
+
+  // Bug 修复：异步目录插件（如 markdown-editor）加载完后，重新检查当前打开文件的 Provider 路由。
+  // 首次 openNote 可能在 Provider 注册前就走了 fallback，导致工具栏模式切换按钮被隐藏，
+  // 插件注册完后不会自动刷新。这里主动触发一次路由刷新（sbRecheckEditorProvider 在 editor-host.js 中定义）。
+  if (typeof window.sbRecheckEditorProvider === 'function') {
+    try { window.sbRecheckEditorProvider(); } catch (_) { /* 忽略刷新异常 */ }
+  }
+
+  // 关键修复：异步目录插件加载完后，如果 vditor 实例已存在，主动重建一次。
+  // markdown-editor 插件在 main.js 执行时通过 sbVdToolbarAdd 把「宽屏/列宽/大纲」三个按钮
+  // 注入到 __sbVdToolbarInjects；但如果首次 buildVditor（openNote 触发）在插件加载前就执行了，
+  // 构建时读到的注入队列还是空的，三个按钮就丢失了。用户切预览/编辑节点（触发 ir↔sv 重建）才出来，
+  // 就是因为那时插件已加载完、注入队列完整。这里在 loadDirPlugins 全部结束后调 vdRebuild，
+  // 如果实例已存在就销毁重建一次，否则跳过（下次 buildVditor 自然会读到完整注入队列）。
+  // vdRebuild 在 editor-vditor.js 中定义。
+  if (typeof window.vdRebuild === 'function') {
+    try { window.vdRebuild(); } catch (_) { /* 忽略重建异常 */ }
+  }
 }
 
 globalThis.syncPluginConfig = syncPluginConfig;

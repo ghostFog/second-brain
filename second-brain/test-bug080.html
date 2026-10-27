@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Bug-080 表格复制粘贴测试</title>
+  <link rel="stylesheet" href="node_modules/vditor/dist/index.css">
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    .log { background: #f5f5f5; border: 1px solid #ccc; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+    h1 { font-size: 18px; }
+    .instructions { background: #fffde7; padding: 10px; margin: 10px 0; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Bug-080 测试：表格 copy→paste 多格分发</h1>
+  <div class="instructions">
+    <b>测试步骤：</b><br>
+    1. 在下方 vditor 中创建/编辑一个带表格的笔记<br>
+    2. 选中表格中的某些 cells → Ctrl+C<br>
+    3. 光标移到目标位置 → Ctrl+V<br>
+    4. 看 Console 和下方日志区
+  </div>
+  <div id="vditor"></div>
+  <h3>事件日志</h3>
+  <div id="log" class="log"></div>
+
+  <script src="node_modules/vditor/dist/index.js"></script>
+  <script>
+    // Bug-080 copy 拦截 + paste 拦截（从 editor-vditor.js 复制过来的核心逻辑）
+    const LOG = document.getElementById('log');
+    function log(msg) {
+      console.log(msg);
+      LOG.textContent += msg + '\n';
+      LOG.scrollTop = LOG.scrollHeight;
+    }
+
+    /* ============ copy 拦截 ============ */
+    document.addEventListener('copy', function (e) {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      if (range.collapsed) return;
+
+      const container = range.commonAncestorContainer;
+      const containerEl = container.nodeType === 3 ? container.parentElement : container;
+      if (!containerEl) return;
+      const inTable = containerEl.closest && containerEl.closest('TABLE');
+      if (!inTable) return;
+
+      const selectedCells = [];
+      const walker = document.createTreeWalker(inTable, NodeFilter.SHOW_ELEMENT, {
+        acceptNode: function (node) {
+          const tag = node.tagName;
+          if (tag !== 'TD' && tag !== 'TH') return NodeFilter.FILTER_SKIP;
+          try {
+            const cellRange = document.createRange();
+            cellRange.selectNodeContents(node);
+            if (cellRange.compareBoundaryPoints(Range.END_TO_START, range) < 0 &&
+                cellRange.compareBoundaryPoints(Range.START_TO_END, range) > 0) {
+              return NodeFilter.FILTER_ACCEPT;
+            }
+          } catch (_) {}
+          return NodeFilter.FILTER_SKIP;
+        }
+      });
+      let node;
+      while ((node = walker.nextNode())) selectedCells.push(node);
+      if (selectedCells.length === 0) return;
+
+      e.stopPropagation();
+      e.preventDefault();
+
+      const trs = inTable.rows;
+      let minRow = Infinity, maxRow = -1, minCol = Infinity, maxCol = -1;
+      for (let i = 0; i < trs.length; i++) {
+        for (let j = 0; j < trs[i].cells.length; j++) {
+          const c = trs[i].cells[j];
+          if (selectedCells.includes(c)) {
+            if (i < minRow) minRow = i;
+            if (i > maxRow) maxRow = i;
+            if (j < minCol) minCol = j;
+            if (j > maxCol) maxCol = j;
+          }
+        }
+      }
+
+      const textLines = [];
+      const htmlRows = [];
+      for (let r = minRow; r <= maxRow; r++) {
+        const textCells = [];
+        const htmlCells = [];
+        for (let c = minCol; c <= maxCol; c++) {
+          const cell = trs[r] && trs[r].cells[c];
+          const val = cell ? (cell.textContent || '') : '';
+          textCells.push(val);
+          const tag = cell ? cell.tagName : 'TD';
+          htmlCells.push('<' + tag + '>' + val + '</' + tag + '>');
+        }
+        textLines.push(textCells.join('\t'));
+        htmlRows.push('<tr>' + htmlCells.join('') + '</tr>');
+      }
+      const textPlain = textLines.join('\n');
+      const textHtml = '<table><tbody>' + htmlRows.join('') + '</tbody></table>';
+
+      log('[COPY] intercepted: text=' + JSON.stringify(textPlain));
+      log('[COPY] HTML=' + textHtml);
+
+      e.clipboardData.setData('text/plain', textPlain);
+      e.clipboardData.setData('text/html', textHtml);
+    }, true);
+
+    /* ============ Selection 找光标 cell ============ */
+    function getCursorCell() {
+      try {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return null;
+        const node = sel.anchorNode;
+        if (!node) return null;
+        if (node.nodeType === 3) {
+          const parent = node.parentElement;
+          return parent ? (parent.closest && (parent.closest('TD') || parent.closest('TH'))) : null;
+        }
+        if (node.nodeType === 1) {
+          return node.closest && (node.closest('TD') || node.closest('TH'));
+        }
+        return null;
+      } catch (_) { return null; }
+    }
+
+    /* ============ paste 分发 ============ */
+    function pasteTableGrid(cellEl, text) {
+      const cleaned = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const rows = cleaned.split('\n');
+      while (rows.length > 0 && rows[rows.length - 1].trim() === '' && rows.length > 1) rows.pop();
+      const grid = rows.map(function (r) { return r.split('\t'); });
+      log('[PASTE] grid=' + JSON.stringify(grid));
+
+      const tableEl = cellEl.closest('TABLE');
+      if (!tableEl) { log('[PASTE] no TABLE ancestor'); return; }
+      let startRow = -1, startCol = -1;
+      const trs = tableEl.rows;
+      for (let i = 0; i < trs.length; i++) {
+        const tds = trs[i].cells;
+        for (let j = 0; j < tds.length; j++) {
+          if (tds[j] === cellEl) { startRow = i; startCol = j; break; }
+        }
+        if (startRow >= 0) break;
+      }
+      log('[PASTE] FOUND at row=' + startRow + ' col=' + startCol);
+      if (startRow < 0) return;
+
+      cellEl.innerHTML = '<br>';
+
+      for (let r = 0; r < grid.length; r++) {
+        let row = startRow + r;
+        while (row >= tableEl.rows.length) {
+          const lastTR = tableEl.rows[tableEl.rows.length - 1];
+          if (!lastTR) break;
+          const hasTh = /^\s*th\s*$/i.test(lastTR.firstElementChild && lastTR.firstElementChild.tagName);
+          const newTR = document.createElement('tr');
+          for (let c = 0; c < lastTR.cells.length; c++) {
+            const tag = hasTh ? 'TH' : 'TD';
+            const newCell = document.createElement(tag);
+            newCell.innerHTML = '<br>';
+            newTR.appendChild(newCell);
+          }
+          tableEl.appendChild(newTR);
+        }
+        const curTR = tableEl.rows[row];
+        if (!curTR) continue;
+
+        for (let c = 0; c < grid[r].length; c++) {
+          let col = startCol + c;
+          while (col >= curTR.cells.length) {
+            const refTD = curTR.cells[curTR.cells.length - 1];
+            const tag = refTD ? refTD.tagName : 'TD';
+            const newCell = document.createElement(tag);
+            newCell.innerHTML = '<br>';
+            curTR.appendChild(newCell);
+          }
+          const cell = curTR.cells[col];
+          if (!cell) continue;
+          const val = String(grid[r][c] == null ? '' : grid[r][c]);
+          log('[PASTE]   fill row=' + row + ' col=' + col + ' val=' + JSON.stringify(val));
+          cell.textContent = val;
+          if (!val) cell.innerHTML = '<br>';
+        }
+      }
+      log('[PASTE] DONE');
+
+      try {
+        cellEl.focus();
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(cellEl);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch (_) {}
+    }
+
+    /* ============ paste 拦截 ============ */
+    document.addEventListener('paste', function (e) {
+      const cellEl = getCursorCell();
+      if (!cellEl) { log('[PASTE] not in TD/TH'); return; }
+      log('[PASTE] in cellEl=' + cellEl.tagName);
+
+      let text = '';
+      if (e.clipboardData && e.clipboardData.getData) {
+        text = e.clipboardData.getData('text/plain');
+      }
+      if (!text) { log('[PASTE] empty text'); return; }
+
+      log('[PASTE] text=' + JSON.stringify(text));
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      pasteTableGrid(cellEl, text);
+    }, true);
+
+    /* ============ 初始化 vditor ============ */
+    const vditor = new Vditor('vditor', {
+      height: 400,
+      mode: 'wysiwyg',
+      value: '# 测试\n\n| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| A | B | C |\n| 1 | 2 | 3 |\n| X | Y | Z |\n\n选中上面表格中的一行，Ctrl+C，然后把光标移到下面位置粘贴试试。',
+      cache: { enable: false },
+      toolbarConfig: { pin: true }
+    });
+  </script>
+</body>
+</html>

@@ -2605,6 +2605,105 @@ function testExternalFsWatch() {
   assert(unconditionalWrites === 2,
     'Bug-078-3: core.quotepath 直写只允许 ensureQuotepath 内 + git init 后共 2 处（实际 ' + unconditionalWrites + ' 处），轮询/启动必须走 ensureQuotepath');
   assert(/await ensureQuotepath\(\)/.test(gitSrc), 'Bug-078-4: 轮询/启动路径改调幂等 ensureQuotepath');
+
+  // ---- Bug-079：宿主层 per-tab 独立 undo/redo 历史 + Ctrl+Shift+Z redo 支持 ----
+  const vditorSrc = fs.readFileSync(path.join(__dirname, 'js', 'editor', 'editor-vditor.js'), 'utf8');
+  // 所有 setValue 调用都传 clearStack=true（宿主层自己的 undo 栈取代 vditor 原生栈）
+  const setValueCalls = vditorSrc.match(/\.setValue\(/g) || [];
+  const setValueClearStackCalls = vditorSrc.match(/\.setValue\([^)]*,\s*true\)/g) || [];
+  assert(setValueCalls.length === setValueClearStackCalls.length && setValueCalls.length >= 3,
+    'Bug-079-1: 所有 setValue 调用（共 ' + setValueCalls.length + ' 处）都传了 clearStack=true（实际 ' + setValueClearStackCalls.length + ' 处）');
+  assert(/vdInst\.setValue\(vdBuffer,\s*true\)/.test(vditorSrc),
+    'Bug-079-2: vdSyncValue 主路径 setValue(vdBuffer, true) 清空 vditor 原生 undo');
+  assert(/vdInst\.setValue\(vdBuffer,\s*true\)/.test(vditorSrc.split('window.vdSetValue')[1]),
+    'Bug-079-3: vdSetValue 里 setValue(vdBuffer, true) 清空 vditor 原生 undo');
+  assert(/target\.setValue\(pending,\s*true\)/.test(vditorSrc),
+    'Bug-079-4: after 回调首帧补渲 setValue(pending, true) 清空 vditor 原生 undo');
+
+  // 宿主层历史栈核心变量和函数
+  assert(/let vdTabHistory = \{\}/.test(vditorSrc),
+    'Bug-079-5: 存在 vdTabHistory per-tab 历史栈');
+  assert(/let vdLastTabPath = null/.test(vditorSrc),
+    'Bug-079-6: 存在 vdLastTabPath 追踪上次 tab');
+  assert(/function vdDebouncePush/.test(vditorSrc),
+    'Bug-079-7: 存在 vdDebouncePush 去抖 push 函数');
+  assert(/function vdDoPush/.test(vditorSrc),
+    'Bug-079-8: 存在 vdDoPush 立即 push 函数');
+  assert(/function vdDoUndo/.test(vditorSrc),
+    'Bug-079-9: 存在 vdDoUndo undo 函数');
+  assert(/function vdDoRedo/.test(vditorSrc),
+    'Bug-079-10: 存在 vdDoRedo redo 函数');
+  assert(/window\.vdClearUndoCache/.test(vditorSrc),
+    'Bug-079-11: 暴露 window.vdClearUndoCache 供关闭页签清理');
+
+  // keydown 捕获阶段拦截器：Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y
+  assert(/addEventListener\(['"]keydown['"].*true\)/s.test(vditorSrc),
+    'Bug-079-12: 存在捕获阶段 keydown listener');
+  assert(/ctrlKey[\s\S]{0,300}?stopImmediatePropagation/s.test(vditorSrc),
+    'Bug-079-13: keydown 里有 stopImmediatePropagation 屏蔽 vditor 原生处理');
+  assert(/isZ\s*&&\s*!e\.shiftKey/.test(vditorSrc) || /z.*key.*shiftKey.*undo/i.test(vditorSrc),
+    'Bug-079-14: Ctrl+Z 分支单独判断（!shiftKey）');
+  assert(/isY/.test(vditorSrc) || /shiftKey[\s\S]{0,100}isZ/.test(vditorSrc),
+    'Bug-079-15: 支持 Ctrl+Shift+Z / Ctrl+Y redo');
+
+  // vdSyncValue 签名 + pathChanged 分支（切 tab 时 push outgoing）
+  assert(/window\.vdSyncValue = function\s*\(\s*md\s*,\s*path\s*\)/.test(vditorSrc),
+    'Bug-079-16: vdSyncValue 签名加 path 参数');
+  assert(/pathChanged.*path.*!==.*vdLastTabPath/.test(vditorSrc),
+    'Bug-079-17: pathChanged 检测 path !== vdLastTabPath');
+  assert(/vdDoPush\(vdLastTabPath/.test(vditorSrc),
+    'Bug-079-18: pathChanged 时 vdDoPush outgoing 快照');
+  assert(/h\.redoStack\s*=\s*\[\]/.test(vditorSrc),
+    'Bug-079-19: pathChanged 时清 incoming redoStack');
+  assert(/vdLastTabPath\s*=\s*path/.test(vditorSrc),
+    'Bug-079-20: pathChanged 后更新 vdLastTabPath = path');
+
+  // input 回调里 debounced push
+  assert(/input:[\s\S]{0,300}?vdDebouncePush/s.test(vditorSrc),
+    'Bug-079-21: input 回调里调 vdDebouncePush');
+
+  // editor-tabs.js closeTabs 里调用 vdClearUndoCache（tabsSrc 在本函数上方已读）
+  assert(/vdClearUndoCache\(p\)/.test(tabsSrc),
+    'Bug-079-22: closeTabs 里调 vdClearUndoCache 清理历史栈');
+
+  // editor-host.js renderArticle 传 path（hostSrc 在本函数上方已读）
+  assert(/vdSyncValue\(md,\s*path\)/.test(hostSrc),
+    'Bug-079-23: renderArticle 里 vdSyncValue(md, path) 传 path');
+
+  // project-mode.js 临时文件打开也传 edCurrent
+  const pmSrc = fs.readFileSync(path.join(__dirname, 'js', 'project-mode.js'), 'utf8');
+  assert(/vdSyncValue\([^)]*edCurrent\)/.test(pmSrc),
+    'Bug-079-24: project-mode 临时文件打开也传 path');
+
+  // Bug-079 flush 修复：Ctrl+Z 前必须 flush pending debounce，否则 500ms 去抖还没到点
+  // undoStack 里只有起始态，Ctrl+Z 一按全部撤销
+  assert(/function vdFlushDebounce/.test(vditorSrc),
+    'Bug-079-25: 存在 vdFlushDebounce 函数');
+  assert(/vdDoUndo[\s\S]{0,200}?vdFlushDebounce/.test(vditorSrc),
+    'Bug-079-26: vdDoUndo 里第一行调 vdFlushDebounce');
+  assert(/vdDoRedo[\s\S]{0,200}?vdFlushDebounce/.test(vditorSrc),
+    'Bug-079-27: vdDoRedo 里第一行也调 vdFlushDebounce');
+
+  // ---- Bug-080：表格单元格多格 paste 拦截 ----
+  assert(/addEventListener\(['"]paste['"].*true\)/s.test(vditorSrc),
+    'Bug-080-1: 存在捕获阶段 paste listener');
+  assert(/clipboardData\.getData\(['"]text\/plain['"]\)/.test(vditorSrc),
+    'Bug-080-2: paste 里用 clipboardData.getText(text/plain)');
+  assert(/closest\(['"]TD['"]\)|closest\(['"]TH['"]\)/.test(vditorSrc) || /closest.*TD|TH/.test(vditorSrc),
+    'Bug-080-3: paste 里判 closest TD/TH');
+  assert(/split\(['"]\\t['"]\)|\.split\('\\t'\)/.test(vditorSrc) || /split.*\\t/.test(vditorSrc),
+    'Bug-080-4: paste 里按 tab 分列');
+  assert(/split\(['"]\\n['"]\)|\.split\('\\n'\)/.test(vditorSrc) || /split.*\\n/.test(vditorSrc),
+    'Bug-080-5: paste 里按换行分行');
+  // Bug-080-6: 存在 beforeinput 拦截（主入口，阻止 DOM 修改）和 paste 拦截（兜底）
+  assert(/addEventListener\(['"]beforeinput['"].*true\)/s.test(vditorSrc),
+    'Bug-080-6a: 存在捕获阶段 beforeinput listener');
+  assert(/inputType.*insertFromPaste/.test(vditorSrc),
+    'Bug-080-6b: beforeinput 检查 inputType=insertFromPaste');
+  assert(/addEventListener\(['"]paste['"].*true\)/s.test(vditorSrc),
+    'Bug-080-6c: 存在捕获阶段 paste listener（兜底）');
+  assert(/tableEl\.rows/i.test(vditorSrc) && /row >= tableEl\.rows\.length/.test(vditorSrc),
+    'Bug-080-7: paste 里表格边界判断 + 自动扩展行');
 }
 
 /* 异步端到端测试结束后统一汇总全部断言并设置退出码（同步断言此前已执行完毕）。
