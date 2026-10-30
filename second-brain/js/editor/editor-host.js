@@ -389,6 +389,7 @@
    * vditor 在 input 事件把最新文本回调至此；预览联动由 vditor 自管。
    * 作者: 火 冰 */
   function onEdInput(mdText) {
+    const _t0 = performance.now();
     // 内容归属在「产生这次输入」时即固定为该文件，后续一律用 p 而非 edCurrent。
     // 原实现在 autosave 去抖 timer 触发时才读 edCurrent，快速切换笔记时会把 A 的内容写进 B
     // （串文件/覆盖丢失），或 A 的去抖 timer 被 B 的输入 clearTimeout 清掉导致 A 的修改不保存。
@@ -405,17 +406,37 @@
     if (!restoreS('edAutoSave', true)) { if (saved) saved.textContent = '自动保存已关闭'; return; }
     // 按文件独立去抖：仅重置本文件自己的 timer，不影响其它正在编辑的笔记（避免切换时丢保存）
     if (edSaveTimers[p]) clearTimeout(edSaveTimers[p]);
+    const _t1 = performance.now();
+
     edSaveTimers[p] = setTimeout(async function () {
+      const _s0 = performance.now();
       delete edSaveTimers[p];
       // 保存路由：临时文件（非知识库第二套）走 sbSave 写回原绝对路径，项目文件/知识库按路径路由保存
       const handled = (typeof sbSave === 'function') ? await sbSave(p, mdText) : false;
+      const _s1 = performance.now();
       try {
         if (!handled) await noteStore.save(p, mdText);
+        const _s2 = performance.now();
         edDirty.delete(p);
         if (edMissing.delete(p)) renderTabs(); // ED-60：丢失标签保存即按原路径恢复，解除丢失样式
         const s = $('ed-saved'); if (s) s.textContent = handled ? (sbIsPseudoPath(p) ? '已保存到临时文件' : '已保存到项目') : '已自动保存';
-      } catch (err) { const s = $('ed-saved'); if (s) s.textContent = '保存失败'; }
+        const _s3 = performance.now();
+        if (_s3 - _s0 > 10) {
+          console.warn('[PERF][SAVE] path=', p.split('/').pop(), 'mdLen=', mdText.length,
+            'total=', (_s3 - _s0).toFixed(1), 'ms',
+            'sbSave=', (_s1 - _s0).toFixed(1),
+            'noteStore=', (_s2 - _s1).toFixed(1));
+        }
+      } catch (err) { console.error('[PERF][SAVE] ERROR:', err); const s = $('ed-saved'); if (s) s.textContent = '保存失败'; }
     }, 800);
+
+    const _t2 = performance.now();
+    if (_t2 - _t0 > 3) {
+      console.warn('[PERF][onEdInput] path=', p.split('/').pop(), 'mdLen=', mdText.length,
+        'total=', (_t2 - _t0).toFixed(1), 'ms',
+        'guard+cache=', (_t1 - _t0).toFixed(1),
+        'setTimer=', (_t2 - _t1).toFixed(1));
+    }
   }
 
   /* ============================

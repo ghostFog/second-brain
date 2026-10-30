@@ -80,7 +80,7 @@
       (filesByFolder.get(key) || []).forEach(n => {
         if (n.isFolder) return;
         const active = n.path === edCurrent;
-        html += '<div class="tree-file flex items-center gap-1.5 pr-2 py-1 cursor-pointer' + gsTreeClass(n.path) + '" draggable="true" data-type="note" data-path="' + esc(n.path) + '" data-name="' + esc(n.name) + '" title="' + esc(n.path) + '" style="' + (fNode.depth ? 'padding-left:' + (24 + fNode.depth * 24) + 'px;' : 'padding-left:24px;') + (active ? 'background: var(--note-brand-600); color: #FFFFFF;' : 'color: var(--note-ink-2);') + '">'
+        html += '<div class="tree-file' + (active ? ' active-path' : '') + ' flex items-center gap-1.5 pr-2 py-1 cursor-pointer' + gsTreeClass(n.path) + '" draggable="true" data-type="note" data-path="' + esc(n.path) + '" data-name="' + esc(n.name) + '" title="' + esc(n.path) + '" style="' + (fNode.depth ? 'padding-left:' + (24 + fNode.depth * 24) + 'px;' : 'padding-left:24px;') + (active ? 'background: var(--note-brand-600); color: #FFFFFF;' : 'color: var(--note-ink-2);') + '">'
           + '<i data-lucide="file-text" class="w-3.5 h-3.5 shrink-0" style="color: ' + (active ? '#FFFFFF' : 'var(--note-ink-3)') + ';"></i>'
           + '<span class="flex-1 truncate">' + esc(n.name) + '</span>'
           + '<span class="text-[10px] shrink-0" style="color: ' + (active ? 'rgba(255,255,255,0.7)' : 'var(--note-ink-3)') + ';">' + relDate(n.mtime) + '</span>'
@@ -92,7 +92,7 @@
     (filesByFolder.get('') || []).forEach(n => {
       if (n.isFolder) return;
       const active = n.path === edCurrent;
-      html += '<div class="tree-file flex items-center gap-1.5 pl-6 pr-2 py-1 cursor-pointer' + gsTreeClass(n.path) + '" draggable="true" data-type="note" data-path="' + esc(n.path) + '" data-name="' + esc(n.name) + '" title="' + esc(n.path) + '" style="' + (active ? 'background: var(--note-brand-600); color: #FFFFFF;' : 'color: var(--note-ink-2);') + '">'
+      html += '<div class="tree-file' + (active ? ' active-path' : '') + ' flex items-center gap-1.5 pl-6 pr-2 py-1 cursor-pointer' + gsTreeClass(n.path) + '" draggable="true" data-type="note" data-path="' + esc(n.path) + '" data-name="' + esc(n.name) + '" title="' + esc(n.path) + '" style="' + (active ? 'background: var(--note-brand-600); color: #FFFFFF;' : 'color: var(--note-ink-2);') + '">'
         + '<i data-lucide="file-text" class="w-3.5 h-3.5 shrink-0" style="color: ' + (active ? '#FFFFFF' : 'var(--note-ink-3)') + ';"></i>'
         + '<span class="flex-1 truncate">' + esc(n.name) + '</span>'
         + '<span class="text-[10px] shrink-0" style="color: ' + (active ? 'rgba(255,255,255,0.7)' : 'var(--note-ink-3)') + ';">' + relDate(n.mtime) + '</span>'
@@ -103,6 +103,40 @@
     const stat = $('vault-stat'); if (stat) stat.textContent = '共 ' + notes.length + ' 篇笔记' + (noteStore.isMock() ? ' · 网页演示' : '');
     const sizeEl = $('vault-size');
     if (sizeEl) { const kb = notes.reduce((s, n) => s + (n.size || 0), 0) / 1024; sizeEl.textContent = (kb < 1024 ? kb.toFixed(1) : (kb / 1024).toFixed(1)) + (kb < 1024 ? ' KB' : ' MB'); }
+  }
+
+  /** 刷新文件树 active 状态：展开 edCurrent 所有父目录 + 高亮。
+   *  关键：只在 active 路径真的变了才重建 renderFileTree，否则只做轻量 style 更新。
+   *  如果每次 renderTabs 都重建文件树（如保存后也会调 renderTabs），整个程序会卡死。
+   * @author 火 冰 */
+  function refreshFileTreeActive() {
+    if (!edCurrent || !edNotes) return;
+    const tree = $('file-tree');
+    if (!tree) return;
+
+    // 1. 找当前 DOM 里已高亮的 active path
+    const curActive = tree.querySelector('.tree-file.active-path');
+    const curPath = curActive && curActive.getAttribute ? curActive.getAttribute('data-path') : null;
+
+    if (curPath !== edCurrent) {
+      // active 真的变了 → 展开父目录 + 重建文件树
+      const parts = edCurrent.split('/');
+      let cum = '';
+      for (let i = 0; i < parts.length - 1; i++) {
+        cum = cum ? cum + '/' + parts[i] : parts[i];
+        if (typeof collapsedFolders !== 'undefined') collapsedFolders.delete(cum);
+      }
+      renderFileTree(edNotes);
+      // 滚入可视区
+      const active = tree.querySelector('.tree-file[data-path="' + CSS.escape(edCurrent) + '"]');
+      if (active) {
+        const br = tree.getBoundingClientRect(), ar = active.getBoundingClientRect();
+        if (ar.top < br.top || ar.bottom > br.bottom) {
+          active.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      }
+    }
+    // active 没变（保存后重绘 renderTabs 等场景）→ 什么都不做，避免阻塞主线程
   }
 
   /* 绑定文件树拖拽移动：事件委托在 #file-tree 上，处理 HTML5 dragstart / dragover / drop / dragend

@@ -2530,7 +2530,7 @@ function testExternalFsWatch() {
   assert(/reloadNote\(p\)/.test(hBody), 'ED-60-17: 干净的当前标签外部修改后自动重载');
   assert(/disk\s*===\s*loaded|disk === loaded/.test(hBody), 'ED-60-18: 与缓存一致判定为自身操作回声，幂等忽略');
   assert(/edMissing\.add\(p\)/.test(hBody), 'ED-60-19: 外部删除/移动的打开标签打丢失标记');
-  assert(/edMissing\.delete\(p\)\)\s*renderTabs\(\)/.test(hostSrc), 'ED-60-20: 丢失标签保存后解除标记');
+  assert(/edMissing\.delete\(p\)[\s\S]{0,100}?renderTabs\(\)/.test(hostSrc), 'ED-60-20: 丢失标签保存后解除标记');
   assert(/edMissing/.test(tabsSrc), 'ED-60-21: 标签栏消费 edMissing 渲染丢失态');
 
   // ED-60-22: 手动刷新按钮（#file-tree-refresh）绑定 click handler——此前按钮 HTML 存在但无 JS 绑定，点了没反应
@@ -2659,7 +2659,7 @@ function testExternalFsWatch() {
     'Bug-079-20: pathChanged 后更新 vdLastTabPath = path');
 
   // input 回调里 debounced push
-  assert(/input:[\s\S]{0,300}?vdDebouncePush/s.test(vditorSrc),
+  assert(/input:[\s\S]{0,800}?vdDebouncePush/s.test(vditorSrc),
     'Bug-079-21: input 回调里调 vdDebouncePush');
 
   // editor-tabs.js closeTabs 里调用 vdClearUndoCache（tabsSrc 在本函数上方已读）

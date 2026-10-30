@@ -1,4 +1,4 @@
-/* ============================================
+﻿/* ============================================
  * 第二脑 — Markdown 编辑引擎 vditor 桥接 + .md Provider
  * 作者: 火 冰
  * 功能:
@@ -53,6 +53,18 @@
     if (!containerEl) return;
     const inTable = containerEl.closest && containerEl.closest('TABLE');
     if (!inTable) return; // 不在表格里 → 放行
+
+    // ★ 关键判断：如果 Selection 的 anchor 和 focus 都在**同一个** TD/TH 内 → 放行！
+    // 这种情况是用户在单元格内选中了部分文本（或整 cell 文本），
+    // 应该让浏览器/vditor 正常复制选中的文本，而不是触发我们的"整表格"复制逻辑。
+    // 只有跨了 cell 边界（选中了多个 cells）才需要拦截改写 clipboardData。
+    const anchorEl = sel.anchorNode && (sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode);
+    const focusEl = sel.focusNode && (sel.focusNode.nodeType === 3 ? sel.focusNode.parentElement : sel.focusNode);
+    const anchorCell = anchorEl && (anchorEl.closest && (anchorEl.closest('TD') || anchorEl.closest('TH')));
+    const focusCell = focusEl && (focusEl.closest && (focusEl.closest('TD') || focusEl.closest('TH')));
+    if (anchorCell === focusCell) {
+      return; // 同一个 cell 内 → 放行
+    }
 
     // 收集选中范围内所有 TD/TH
     const selectedCells = [];
@@ -127,32 +139,8 @@
     const textPlain = textLines.join('\n');
     const textHtml = '<table><tbody>' + htmlRows.join('') + '</tbody></table>';
 
-    console.log('[BUG-080] copy intercepted: text=', JSON.stringify(textPlain));
-    console.log('[BUG-080] copy HTML=', textHtml);
-
     e.clipboardData.setData('text/plain', textPlain);
     e.clipboardData.setData('text/html', textHtml);
-  }, true);
-
-  /* ★ 调试用：全局最早注册的 beforeinput 监听（比任何模块都早）
-   * 用来确认 beforeinput 事件到底有没有在 Electron 里触发。
-   * 如果这个都打不出日志，说明 Electron 或 vditor 用了 execCommand 绕过 beforeinput。
-   * 作者: 火 冰 */
-  document.addEventListener('beforeinput', function (e) {
-    console.log('[BUG-080-GLOBAL] beforeinput: inputType=', e.inputType, 'cancelable=', e.cancelable, 'defaultPrevented=', e.defaultPrevented);
-  }, true);
-  document.addEventListener('beforeinput', function (e) {
-    console.log('[BUG-080-GLOBAL-BUBBLE] beforeinput(bubble): inputType=', e.inputType);
-  }, false);
-  document.addEventListener('paste', function (e) {
-    console.log('[BUG-080-GLOBAL] paste: defaultPrevented=', e.defaultPrevented, 'clipboard types=', e.clipboardData ? Array.from(e.clipboardData.types) : 'none');
-    // 也尝试读 HTML 格式，看 Excel 复制的是不是 HTML 表格
-    if (e.clipboardData && e.clipboardData.getData) {
-      const html = e.clipboardData.getData('text/html');
-      if (html) console.log('[BUG-080-GLOBAL] paste HTML=', html.substring(0, 300));
-      const plain = e.clipboardData.getData('text/plain');
-      console.log('[BUG-080-GLOBAL] paste PLAIN=', JSON.stringify(plain));
-    }
   }, true);
 
   /* ============================================================
@@ -1491,8 +1479,41 @@
       /* Bug-079: 输入时 debounced push 当前 tab 的 undo 历史（500ms 去抖）。
        * vditor 原生 undo 栈已被宿主层取代，这里维护 per-tab 独立历史。作者: 火 冰 */
       input: function (v) {
-        sync2Host(v); window.sbOutlineNotify(); vdSvGutterRefresh();
+        const _p0 = performance.now();
+
+        // ① sync2Host → vditor.getValue()（IR 模式 DOM→MD 重解析可能很重）
+        const _g0 = performance.now();
+        sync2Host(v);
+        const _g1 = performance.now();
+
+        // ② sbOutlineNotify（目前空操作）
+        const _o0 = performance.now();
+        window.sbOutlineNotify();
+        const _o1 = performance.now();
+
+        // ③ sv 模式 gutter 去抖（IR/WYSIWYG 完全跳过）
+        const _u0 = performance.now();
+        if (vdMode === 'sv') {
+          if (vdSvGutter._deb) clearTimeout(vdSvGutter._deb);
+          vdSvGutter._deb = setTimeout(function () { vdSvGutterRefresh(); }, 300);
+        }
+        const _u1 = performance.now();
+
+        // ④ undo 历史去抖
+        const _d0 = performance.now();
         if (vdLastTabPath) vdDebouncePush(vdLastTabPath);
+        const _d1 = performance.now();
+
+        const _p1 = performance.now();
+        const _P = _p1 - _p0;
+        if (_P > 5) {
+          console.warn('[PERF][INPUT] total=', _P.toFixed(1), 'ms',
+            'mode=' + vdMode,
+            'sync2Host=', (_g1 - _g0).toFixed(1),
+            'outline=', (_o1 - _o0).toFixed(1),
+            'gutter=', (_u1 - _u0).toFixed(1),
+            'debPush=', (_d1 - _d0).toFixed(1));
+        }
       },
       blur: function () {
         // 首帧异步渲染完成前（vdReady=false）不触发保存：此时 vditor 内部未就绪，getValue 抛错
@@ -1683,7 +1704,6 @@
             grid.push(rowCells);
           }
           if (grid.length > 0) {
-            console.log('[BUG-080] parseGrid from HTML:', grid.length, 'rows');
             return grid;
           }
         }
@@ -1702,7 +1722,6 @@
         return { text: cell.replace(/<br\s*\/?>/gi, '\n'), isHtml: false };
       });
     });
-    console.log('[BUG-080] parseGrid from plain:', grid.length, 'rows');
     return grid;
   }
 
@@ -1718,7 +1737,6 @@
     if (grid.length === 1 && grid[0].length === 1) {
       const item = grid[0][0];
       const val = item.text;
-      console.log('[BUG-080] single-cell insert at caret, val=', JSON.stringify(val.substring ? val.substring(0, 30) : val));
 
       try {
         const sel = window.getSelection();
@@ -1747,8 +1765,11 @@
             range.collapse(false);
             sel.removeAllRanges();
             sel.addRange(range);
-            console.log('[BUG-080] single-cell insert DONE');
-            if (typeof vdLastTabPath === 'string' && vdLastTabPath) vdDebouncePush(vdLastTabPath);
+            vdDebouncePush(vdLastTabPath);
+            // Bug-080 补：触发宿主层保存（vditor input 因 preventDefault 没触发）
+            const md1 = vdGetValue(); sync2Host(md1);
+            window.sbOutlineNotify && window.sbOutlineNotify();
+            vdSvGutterRefresh && vdSvGutterRefresh();
             return;
           }
         }
@@ -1756,26 +1777,26 @@
 
       // Fallback：光标不在 cell 内或插入失败 → 覆盖当前 cell
       cellEl.innerHTML = item.isHtml ? (val || '<br>') : (val ? val.replace(/\r?\n/g, '<br>') : '<br>');
-      if (typeof vdLastTabPath === 'string' && vdLastTabPath) vdDebouncePush(vdLastTabPath);
+      vdDebouncePush(vdLastTabPath);
+      // Bug-080 补：触发宿主层保存
+      const md2 = vdGetValue(); sync2Host(md2);
+      window.sbOutlineNotify && window.sbOutlineNotify();
+      vdSvGutterRefresh && vdSvGutterRefresh();
       return;
     }
 
     // ★ 多格内容：从 cellEl 开始逐格覆盖
-    console.log('[BUG-080] multi-cell overwrite, grid=', grid.length, 'rows');
 
     // 定位起始 cell 坐标
     const tableEl = cellEl.closest('TABLE');
-    if (!tableEl) { console.log('[BUG-080] vdPasteTableGrid: no TABLE ancestor'); return; }
     let startRow = -1, startCol = -1;
     const trs = tableEl.rows;
     for (let i = 0; i < trs.length; i++) {
       const tds = trs[i].cells;
       for (let j = 0; j < tds.length; j++) {
-        if (tds[j] === cellEl) { startRow = i; startCol = j; console.log('[BUG-080] FOUND at row=', i, 'col=', j); break; }
       }
       if (startRow >= 0) break;
     }
-    if (startRow < 0) { console.log('[BUG-080] vdPasteTableGrid: startRow not found'); return; }
 
     // 先清 cellEl 里 vditor/浏览器已经塞进来的内容
     cellEl.innerHTML = '<br>';
@@ -1812,7 +1833,6 @@
         if (!cell) continue;
         const item = grid[r][c];
         const val = item.text;
-        console.log('[BUG-080]   fill row=', row, 'col=', col, 'val=', JSON.stringify(val.substring ? val.substring(0, 30) : val));
 
         // isHtml=true → innerHTML 保留结构（cell 内换行 <br> 等）
         // isHtml=false → innerHTML 把 \n 转成 <br> 让 vditor 能渲染
@@ -1824,7 +1844,6 @@
         }
       }
     }
-    console.log('[BUG-080] vdPasteTableGrid: DONE');
 
     // 选中起始 cell 让用户继续编辑
     try {
@@ -1837,10 +1856,11 @@
       sel.addRange(range);
     } catch (_) { /* 忽略 focus 异常 */ }
 
-    // 触发 input 让宿主层记录历史（Bug-079 debounce push）
-    if (typeof vdLastTabPath === 'string' && vdLastTabPath) {
-      vdDebouncePush(vdLastTabPath);
-    }
+    // Bug-080 补：触发宿主层保存（vditor input 因 preventDefault 没触发）
+    vdDebouncePush(vdLastTabPath);
+    const md3 = vdGetValue(); sync2Host(md3);
+    window.sbOutlineNotify && window.sbOutlineNotify();
+    vdSvGutterRefresh && vdSvGutterRefresh();
   }
 
   /** beforeinput 阶段拦截（DOM 修改**之前**）——主拦截入口 */
@@ -1886,7 +1906,6 @@
     }
     if (!html && !plain) return;
 
-    console.log('[BUG-080] paste: html=', html.substring ? html.substring(0, 80) : html, 'plain=', JSON.stringify(plain.substring ? plain.substring(0, 80) : plain));
     e.preventDefault();
     e.stopImmediatePropagation();
     const grid = vdParseClipboardToGrid(html, plain);
@@ -2085,6 +2104,7 @@
    * 行号与首行文本对齐、paddingLeft 让出左缘。样式见 css/app.css .sb-sv-gutter。作者: 火 冰
    * ============================================================ */
   const SB_SV_GUTTER_ID = 'sb-sv-gutter';
+  const vdSvGutter = { _deb: null };   // sv 源码行号列去抖 timer（大笔记每行强制 reflow 会卡死）
 
   /** 取 sv 源码 textarea（vditor.sv.element） */
   function vdSvTextarea() {

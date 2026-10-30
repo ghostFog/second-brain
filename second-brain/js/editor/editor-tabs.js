@@ -105,6 +105,7 @@
     refreshIcons();
     updateTabScroll();
     ensureTabVisible(edCurrent);
+    refreshFileTreeActive(); // Bug-082: 页签切换→目录区同步高亮当前笔记
   }
 
   /* 关闭 tab 右键菜单 */

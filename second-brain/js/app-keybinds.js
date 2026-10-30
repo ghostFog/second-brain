@@ -208,6 +208,32 @@ function kbInitBuiltins() {
     else if (typeof openPalette === 'function') openPalette();
   } });
   kbRegisterCommand({ id: 'cmd:new', label: '新建笔记', icon: 'file-plus', group: '内置', defaultShortcut: 'Ctrl+N', action: function () { location.hash = '#/editor'; document.dispatchEvent(new CustomEvent('note:new')); } });
+  // Ctrl+S：手动保存全部脏笔记（跳过防抖 timer，立即落盘）。
+  // 遍历 edDirty（Set<path>），每个取 edOutdated[path] 缓存的最新 md，清掉 pending timer，同步保存。
+  // 保存完成后 showToast 冒泡提示 "已保存 N 篇笔记"。作者: 火 冰
+  kbRegisterCommand({ id: 'cmd:save', label: '手动保存全部笔记', icon: 'save', group: '内置', defaultShortcut: 'Ctrl+S', action: function () {
+    const dirtyPaths = Array.from(typeof edDirty !== 'undefined' ? edDirty : new Set());
+    if (dirtyPaths.length === 0) { if (typeof showToast === 'function') showToast('没有未保存的修改'); return; }
+    let saved = 0, failed = 0;
+    Promise.all(dirtyPaths.map(async function (p) {
+      if (typeof edSaveTimers !== 'undefined' && edSaveTimers[p]) { clearTimeout(edSaveTimers[p]); delete edSaveTimers[p]; }
+      const md = (typeof edOutdated !== 'undefined') ? (edOutdated[p] || '') : '';
+      try {
+        const handled = (typeof sbSave === 'function') ? await sbSave(p, md) : false;
+        if (!handled && typeof noteStore !== 'undefined' && typeof noteStore.save === 'function') await noteStore.save(p, md);
+        if (typeof edDirty !== 'undefined') edDirty.delete(p);
+        saved++;
+      } catch (_e) { failed++; }
+    })).then(function () {
+      if (typeof renderTabs === 'function') renderTabs(); // 清 tab 脏标记样式
+      if (typeof showToast === 'function') {
+        showToast(failed === 0 ? ('已保存 ' + saved + ' 篇笔记') : ('已保存 ' + saved + ' 篇，' + failed + ' 篇失败'));
+      }
+      // 状态栏 "已保存到…" 文案也更新
+      const s = typeof $('') === 'function' ? $('ed-saved') : null;
+      if (s) s.textContent = '已手动保存';
+    });
+  } });
   kbRegisterCommand({ id: 'cmd:graph', label: '打开图谱视图', icon: 'git-fork', group: '内置', defaultShortcut: 'Ctrl+G', action: function () { location.hash = '#/graph'; if (typeof closePalette === 'function') closePalette(); } });
   // 全屏/开发者工具：桌面端经 noteDesktop 走 IPC 控制主进程；无 noteDesktop（网页端）时静默忽略
   kbRegisterCommand({ id: 'cmd:fullscreen', label: '切换全屏（窗口）', icon: 'maximize', group: '内置', defaultShortcut: 'F11', action: function () {
