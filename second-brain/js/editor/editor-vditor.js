@@ -166,6 +166,10 @@
   let vdPushDebounceTimer = null;
   /** @type {string|null} push 去抖期间关联的 tab path（timer 到点时校验还是不是同一个 tab） */
   let vdPushDebouncePath = null;
+  /** @type {string|null} push 去抖期间预缓存的 md（input 回调传入，避免二次 getValue） */
+  let vdPushDebounceMD = null;
+  /** @type {string|null} 上一次 input 回调的 v（内容没变时跳过整条回调链） */
+  let vdLastInputV = null;
 
   /** 确保 path 在 vdTabHistory 里有记录，懒初始化 undoStack/redoStack
    * @param {string} path tab path
@@ -178,18 +182,25 @@
 
   /** 去抖 push 当前 vditor 内容到 tab 历史栈（500ms debounce）
    * 连续输入时 reset timer，停止 500ms 后再 push；切 tab 时 timer 失效（path 变了）。
+   * 大文件优化：input 回调的 v 参数已经是 lute 算好的 md，直接传入可避免二次 DOM→MD 转换。
    * @param {string} path 当前 tab path
+   * @param {string} [precomputedMd] 可选的预计算 md（如 input 回调参数），省去 getValue 开销
    * @author 火 冰 */
-  function vdDebouncePush(path) {
+  function vdDebouncePush(path, precomputedMd) {
     if (!path) return;
     vdPushDebouncePath = path;
+    if (precomputedMd != null) vdPushDebounceMD = precomputedMd;   // 缓存预计算的 md
     if (vdPushDebounceTimer) clearTimeout(vdPushDebounceTimer);
     vdPushDebounceTimer = setTimeout(function () {
       // 去抖到点时 path 已变（用户切 tab 了）→ 丢弃
       if (vdPushDebouncePath !== path) return;
       vdPushDebounceTimer = null;
       vdPushDebouncePath = null;
-      const md = (vdInst && typeof vdInst.getValue === 'function') ? vdInst.getValue() : vdBuffer;
+      // 优先用预缓存的 md（input 回调传入的），否则才 getValue
+      const md = vdPushDebounceMD != null
+        ? vdPushDebounceMD
+        : ((vdInst && typeof vdInst.getValue === 'function') ? vdInst.getValue() : vdBuffer);
+      vdPushDebounceMD = null;
       vdDoPush(path, md);
     }, 500);
   }
@@ -211,6 +222,47 @@
     if (h.undoStack.length > 100) h.undoStack.shift();
   }
 
+  /** ================================================================
+   *  大文件性能降级：统一阈值 + requestIdleCallback 延迟重操作
+   *  大文件定义：md 内容 > 50KB 或 DOM 节点 > 2000 个
+   *  目的：避免 MutationObserver 全量扫描、getMarkdown 重操作阻塞主线程
+   *  作者: 火 冰
+   *  ================================================================ */
+  /** @const {number} 大文件阈值：md 字符数超过此值进入降级模式 */
+  const SB_LARGE_MD_THRESHOLD = 50 * 1024;
+  /** @const {number} 大 DOM 阈值：元素节点数超过此值进入降级模式 */
+  const SB_LARGE_DOM_THRESHOLD = 2000;
+
+  /** 检测当前内容/规模是否为大文件（需性能降级）
+   *  @returns {boolean} 是大文件
+   *  @author 火 冰 */
+  function sbIsLargeContent() {
+    const md = vdGetValue();
+    if (md && md.length > SB_LARGE_MD_THRESHOLD) return true;
+    const root = document.getElementById('ed-vditor');
+    if (root && typeof root.querySelectorAll === 'function') {
+      // 用 getElementsByTagName('*').length 比 querySelectorAll 快
+      if (root.getElementsByTagName('*').length > SB_LARGE_DOM_THRESHOLD) return true;
+    }
+    return false;
+  }
+
+  /** 在 requestIdleCallback（或 rAF 兜底）中执行重操作，大文件下避免阻塞输入响应
+   *  @param {Function} fn 要执行的函数
+   *  @param {number} [timeout=500] 最大等待毫秒数（即使不空闲也要执行，防饿死）
+   *  @author 火 冰 */
+  function sbRunWhenIdle(fn, timeout) {
+    timeout = timeout || 500;
+    if (typeof window.requestIdleCallback === 'function') {
+      try { window.requestIdleCallback(fn, { timeout: timeout }); return; } catch (_) { /* 忽略 */ }
+    }
+    // 兜底：setTimeout + rAF（让浏览器先处理一帧输入）
+    setTimeout(function () {
+      if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(fn);
+      else fn();
+    }, 0);
+  }
+
   /** 立即 push 并同步更新 lastPushContent（setValue 回填时防止 undo 栈重复）
    * @param {string} path tab path
    * @param {string} md 内容
@@ -221,14 +273,19 @@
 
   /** 去抖 push 未到点时主动 flush：清 timer + 立即 vdDoPush 当前内容。
    * 在 Ctrl+Z/Ctrl+Y 执行前调用，确保 in-flight 的编辑状态被捕获后再回退/前进。
+   * 大文件优化：优先用预缓存的 md（input 回调传入），省去 getValue 开销。
    * @param {string} path 当前 tab path
    * @author 火 冰 */
   function vdFlushDebounce(path) {
     if (!vdPushDebounceTimer) return;
     // 只 flush 匹配的 path（timer 可能已过期指向其他 tab）
-    if (vdPushDebouncePath !== path) { clearTimeout(vdPushDebounceTimer); vdPushDebounceTimer = null; vdPushDebouncePath = null; return; }
+    if (vdPushDebouncePath !== path) { clearTimeout(vdPushDebounceTimer); vdPushDebounceTimer = null; vdPushDebouncePath = null; vdPushDebounceMD = null; return; }
     clearTimeout(vdPushDebounceTimer); vdPushDebounceTimer = null; vdPushDebouncePath = null;
-    const md = (vdInst && typeof vdInst.getValue === 'function') ? vdInst.getValue() : vdBuffer;
+    // 大文件优化：优先用预缓存的 md，只在 null 时才 getValue
+    const md = vdPushDebounceMD != null
+      ? vdPushDebounceMD
+      : ((vdInst && typeof vdInst.getValue === 'function') ? vdInst.getValue() : vdBuffer);
+    vdPushDebounceMD = null;
     vdDoPush(path, md);
   }
 
@@ -687,31 +744,72 @@
   window.sbMarkAttachCallouts = markAttachCallouts;
 
   let sbCalloutTimer = null;
-  /** 防抖标记：编辑内容变后，仅扫描 IR/WYSIWYG 编辑区并加指示类 */
+  /** 防抖标记：编辑内容变后，扫描 IR/WYSIWYG 编辑区给 blockquote 加指示类。
+   *  大文件优化：md > 50KB 时改走 requestIdleCallback，避免 120ms timer 阻塞输入响应。
+   *  @author 火 冰 */
   function scheduleCalloutMark() {
     if (sbCalloutTimer) return;
     sbCalloutTimer = setTimeout(function () {
       sbCalloutTimer = null;
       if (!vdInst || !vdInst.vditor) return;
       const v = vdInst.vditor;
-      if (v.ir) markAttachCallouts(v.ir.element);
-      if (v.wysiwyg) markAttachCallouts(v.wysiwyg.element);
+      const doMark = function () {
+        const _t0 = performance.now();
+        if (v.ir) markAttachCallouts(v.ir.element);
+        if (v.wysiwyg) markAttachCallouts(v.wysiwyg.element);
+        if (performance.now() - _t0 > 5 && window.__sbDebugPerf) {
+          console.warn('[PERF][calloutMark] large=' + sbIsLargeContent().toString() +
+            ' took=' + (performance.now() - _t0).toFixed(1) + 'ms');
+        }
+      };
+      // 大文件 → 空闲时执行；小文件 → 立即（120ms 去抖已保证不会太频繁）
+      if (sbIsLargeContent()) sbRunWhenIdle(doMark, 1000);
+      else doMark();
     }, 120);
   }
 
-  /** 挂载 MutationObserver 监听文档结构变化，防抖触发指示块标记（重建/切换后自动覆盖）。
-   *  观察 documentElement（始终存在，不受脚本加载位置/body 就绪时机影响）。
+  /** @type {MutationObserver|null} 附件引言块观察器（可重挂目标：启动时 documentElement，vditor 就绪后缩到编辑区） */
+  let sbCalloutObs = null;
+
+  /** 挂载/重挂载 MutationObserver 监听结构变化，防抖触发指示块标记。
+   *  作用域优先级：vditor 编辑区根 > body > documentElement（保证脚本加载早期也能工作）。
+   *  vditor 构建完成后调用此函数把观察范围从 documentElement 缩到编辑区根，
+   *  排除工具栏 tooltip、设置面板等无关 DOM 变化。
    *  @author 火 冰 */
   function watchAttachCallouts() {
-    const root = document && document.documentElement ? document.documentElement : (document ? document.body : null);
-    if (!root || typeof MutationObserver !== 'function') return;
+    // 优先挂 vditor 编辑区根（已就绪时），否则回退 documentElement
+    let target = null;
+    if (vdInst && vdInst.vditor && vdInst.vditor.element) target = vdInst.vditor.element;
+    if (!target) target = document.getElementById('ed-vditor');
+    if (!target) target = document.body || document.documentElement;
+    if (!target || typeof MutationObserver !== 'function') return;
+
+    // disconnect 旧 observer（若存在）
+    if (sbCalloutObs) { try { sbCalloutObs.disconnect(); } catch (_) { /* 忽略 */ } sbCalloutObs = null; }
+
     try {
-      const ob = new MutationObserver(function () { scheduleCalloutMark(); });
-      ob.observe(root, { childList: true, subtree: true });
+      sbCalloutObs = new MutationObserver(function (mutations) {
+        // 快速路径：如果 mutation 的 target 不在编辑区或其子树内，直接跳过
+        // （启动早期 documentElement 挂的 observer 会捕获整个页面变化，这里过滤）
+        if (mutations && vdInst && vdInst.vditor && vdInst.vditor.element) {
+          const vdRoot = vdInst.vditor.element;
+          for (let i = 0; i < mutations.length; i++) {
+            const m = mutations[i];
+            if (m.target === vdRoot || (m.target.nodeType === 1 && vdRoot.contains(m.target))) {
+              scheduleCalloutMark();
+              return;   // 有任何一个 mutation 在编辑区内就触发，去抖保证最终只扫一次
+            }
+          }
+          // 所有 mutation 都不在编辑区内 → 跳过
+          return;
+        }
+        scheduleCalloutMark();
+      });
+      sbCalloutObs.observe(target, { childList: true, subtree: true });
     } catch (_) { /* 忽略观察异常 */ }
   }
 
-  // 启动即监听：编辑区 `> [!attach]` 引言实时加指示块样式（防抖，仅切 class，不改内容）
+  // 启动即监听（早期挂 documentElement，后续 vditor 构建完成后重挂到编辑区根）
   watchAttachCallouts();
 
   // 冒泡阶段拦截：卡片下载按钮 → 下载；点卡片主体 → 系统默认程序打开（不导航窗口）
@@ -1480,18 +1578,17 @@
        * vditor 原生 undo 栈已被宿主层取代，这里维护 per-tab 独立历史。作者: 火 冰 */
       input: function (v) {
         const _p0 = performance.now();
+        if (v === vdLastInputV) return;   // 内容未变跳过整条回调链
+        vdLastInputV = v;
 
-        // ① sync2Host → vditor.getValue()（IR 模式 DOM→MD 重解析可能很重）
         const _g0 = performance.now();
         sync2Host(v);
         const _g1 = performance.now();
 
-        // ② sbOutlineNotify（目前空操作）
         const _o0 = performance.now();
         window.sbOutlineNotify();
         const _o1 = performance.now();
 
-        // ③ sv 模式 gutter 去抖（IR/WYSIWYG 完全跳过）
         const _u0 = performance.now();
         if (vdMode === 'sv') {
           if (vdSvGutter._deb) clearTimeout(vdSvGutter._deb);
@@ -1499,9 +1596,8 @@
         }
         const _u1 = performance.now();
 
-        // ④ undo 历史去抖
         const _d0 = performance.now();
-        if (vdLastTabPath) vdDebouncePush(vdLastTabPath);
+        if (vdLastTabPath) vdDebouncePush(vdLastTabPath, v);
         const _d1 = performance.now();
 
         const _p1 = performance.now();
@@ -1555,6 +1651,9 @@
         vdCodeLnSchedule();
         // 工具栏自定义按钮（行号/换行）首次渲染后同步激活态高亮
         vdToolbarRefreshStates();
+        // 性能优化：vditor 就绪后把附件引言块 observer 从 documentElement 重挂到编辑区根，
+        // 排除工具栏 tooltip、设置面板等无关 DOM 变化触发的无效扫描
+        watchAttachCallouts();
       },
     };
     try {
@@ -1957,7 +2056,7 @@
         vdLastPushContent[path] = vdBuffer;
       }
       // 清除可能残留在旧 path 上的 debounce timer
-      if (vdPushDebounceTimer) { clearTimeout(vdPushDebounceTimer); vdPushDebounceTimer = null; vdPushDebouncePath = null; }
+      if (vdPushDebounceTimer) { clearTimeout(vdPushDebounceTimer); vdPushDebounceTimer = null; vdPushDebouncePath = null; vdPushDebounceMD = null; }
     }
     try { vdInst.setValue(vdBuffer, true); } catch (_) { /* 忽略 */ }
     if (pathChanged) { vdLastTabPath = path; vdMarkFilled(path, vdBuffer); }
@@ -1970,7 +2069,7 @@
     vdBuffer = String(md == null ? '' : md);
     // 清空场景（如删除当前笔记后）：重置 path tracking，防止下次 vdSyncValue 误操作旧 path 的历史栈
     vdLastTabPath = null;
-    if (vdPushDebounceTimer) { clearTimeout(vdPushDebounceTimer); vdPushDebounceTimer = null; vdPushDebouncePath = null; }
+    if (vdPushDebounceTimer) { clearTimeout(vdPushDebounceTimer); vdPushDebounceTimer = null; vdPushDebouncePath = null; vdPushDebounceMD = null; }
     if (vdInst) { try { vdInst.setValue(vdBuffer, true); } catch (_) { /* 忽略 */ } }
     window.sbOutlineNotify();   // 切换/载入文档后通知插件大纲重建，标题实时跟随当前文件
   };
@@ -2376,13 +2475,29 @@
     });
   }
 
-  /** rAF 合并调度：同一帧内多次触发（observer/回调/resize）只扫一次 */
+  /** rAF 合并调度：同一帧内多次触发（observer/回调/resize）只扫一次。
+   *  大文件优化：md > 50KB 或 DOM > 2000 节点时，改为 requestIdleCallback 延迟执行，
+   *  让浏览器先处理输入渲染，空闲时再做代码块行号扫描（包含 scrollHeight 强制 reflow）。
+   *  @author 火 冰 */
   function vdCodeLnSchedule() {
     if (vdCodeLnScheduled) return;
     vdCodeLnScheduled = true;
-    const run = function () { vdCodeLnScheduled = false; vdCodeLnScan(document.getElementById('ed-vditor')); };
-    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(run);
-    else setTimeout(run, 0);
+    const run = function () {
+      vdCodeLnScheduled = false;
+      const _t0 = performance.now();
+      vdCodeLnScan(document.getElementById('ed-vditor'));
+      const _d = performance.now() - _t0;
+      if (_d > 3 && window.__sbDebugPerf) {
+        console.warn('[PERF][codeLnScan] ms=' + _d.toFixed(1) + 'ms large=' + sbIsLargeContent().toString());
+      }
+    };
+    if (sbIsLargeContent()) {
+      sbRunWhenIdle(run, 2000);   // 大文件：空闲时扫，超时 2s 防饿死
+    } else if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(run);   // 小文件：一帧内响应
+    } else {
+      setTimeout(run, 0);
+    }
   }
 
   /** 挂/重挂观察器到当前实例根：childList（代码块渲染/重建）+ attributes（class=IR 编辑态切换、

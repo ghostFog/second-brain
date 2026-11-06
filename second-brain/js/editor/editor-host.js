@@ -401,7 +401,15 @@
     if (prev === mdText && !edDirty.has(p)) return;
     edOutdated[p] = mdText;
     edDirty.add(p); // 内容变化记为「有未保存更改」
-    const cnt = $('ed-count'); if (cnt) cnt.textContent = countChars(mdText) + ' 字';
+    // 性能优化：countChars 延后到 rAF，让 input 回调链尽快返回
+    // （1MB md 的正则 replace 需 5-10ms，阻塞输入渲染）
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(function () {
+        const cnt = $('ed-count'); if (cnt) cnt.textContent = countChars(mdText) + ' 字';
+      });
+    } else {
+      const cnt = $('ed-count'); if (cnt) cnt.textContent = countChars(mdText) + ' 字';
+    }
     const saved = $('ed-saved'); if (saved) saved.textContent = '编辑中…';
     if (!restoreS('edAutoSave', true)) { if (saved) saved.textContent = '自动保存已关闭'; return; }
     // 按文件独立去抖：仅重置本文件自己的 timer，不影响其它正在编辑的笔记（避免切换时丢保存）
