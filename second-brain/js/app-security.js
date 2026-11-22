@@ -11,6 +11,16 @@
 (function () {
   const nd = (typeof window !== 'undefined' && window.noteDesktop) || null;
 
+  /* 安全模块日志：经 SBLog 落盘（userData/logs/app.log），便于还原锁屏显示/隐藏时序。
+   * @param {string} level 日志级别（info/warn/error）
+   * @param {string} msg 日志正文
+   * @author huobing */
+  function log(level, msg) {
+    try {
+      if (window.SBLog && typeof window.SBLog[level] === 'function') window.SBLog[level]('[security-ui] ' + msg);
+    } catch (_) { /* 日志失败不影响锁屏 */ }
+  }
+
   /* 取遮罩相关 DOM 节点（每次即时查询，避免 DOM 重建后引用失效）。
    * @returns {Object} 遮罩与输入元素引用 */
   function els() {
@@ -44,28 +54,73 @@
       needLock = true;
       const mark = function () { if (document.body) document.body.classList.add('locked'); };
       if (document.body) mark(); else document.addEventListener('DOMContentLoaded', mark, { once: true });
-      document.addEventListener('DOMContentLoaded', function () { showLock(); }, { once: true });
+      // 脚本在 DOM 已就绪后才执行时（DOMContentLoaded 已错过），必须立即显示遮罩：
+      // 否则 body.locked 已隐藏主视图，遮罩却始终 display:none，表现为「只剩深色空白」（Bug-081）。
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () { showLock(); }, { once: true });
+      } else {
+        showLock();
+      }
     }
   })();
 
+  /* 强制重排重绘遮罩：窗口隐藏期间写入的显示态可能没有真正 paint，
+   * 恢复可见后 iframe/合成层会停留在「只有遮罩背景、卡片与密码框空白」的旧帧；
+   * display 先归零再恢复可丢弃旧合成帧并强制重新布局绘制（同帧内完成，不会闪烁）。
+   * @param {HTMLElement} screen 遮罩根节点
+   * @author huobing */
+  function forceRepaint(screen) {
+    if (!screen) return;
+    screen.style.display = 'none';
+    void screen.offsetHeight; // 读取布局，强制同步重排
+    screen.style.display = 'flex';
+  }
+
+  /* 下一帧校验卡片是否完成布局（宽高>0）；异常则再强制重绘，最多 3 次，兜底结构性空白。
+   * @param {HTMLElement} screen 遮罩根节点
+   * @param {number} tries 已重试次数
+   * @author huobing */
+  function ensureCardPainted(screen, tries) {
+    if (!screen || tries >= 3 || typeof window.requestAnimationFrame !== 'function') return;
+    window.requestAnimationFrame(function () {
+      const card = screen.querySelector('.lock-card');
+      const r = card ? card.getBoundingClientRect() : null;
+      if (!r || r.width < 1 || r.height < 1) {
+        forceRepaint(screen);
+        ensureCardPainted(screen, tries + 1);
+      }
+    });
+  }
+
   /* 展示遮罩：隐藏主视图（body.locked 由 CSS 控制），清空密码输入，聚焦输入框。
-   * @author 火 冰 */
+   * 已显示状态下再次调用（托盘召回/最小化恢复由主进程重复推送）时强制重绘，
+   * 避免隐藏期未完成的绘制导致「只有遮罩、看不到密码框」（Bug-081）。
+   * @author huobing */
   function showLock() {
     const e = els();
-    if (!e.screen) return;
+    if (!e.screen) {
+      log('error', 'showLock 失败：找不到 #lock-screen');
+      return;
+    }
+    const wasShown = e.screen.style.display === 'flex';
     e.screen.style.display = 'flex';
     document.body.classList.add('locked');
+    if (wasShown) forceRepaint(e.screen);
     if (e.err) e.err.textContent = '';
     if (e.pwd) { e.pwd.value = ''; try { e.pwd.focus(); } catch (_) {} }
+    log('info', 'showLock wasShown=' + wasShown + ' pwd=' + !!e.pwd
+      + ' card=' + !!e.screen.querySelector('.lock-card') + ' visibility=' + document.visibilityState);
+    ensureCardPainted(e.screen, 0);
   }
 
   /* 隐藏遮罩并恢复主界面。
-   * @author 火 冰 */
+   * @author huobing */
   function hideLock() {
     const e = els();
     if (e.screen) e.screen.style.display = 'none';
     document.body.classList.remove('locked');
     if (e.pwd) e.pwd.value = '';
+    log('info', 'hideLock');
   }
 
   /* 尝试解锁：调用主进程解锁（无主进程则视作已解锁）。成功隐藏遮罩，失败提示。
@@ -149,7 +204,11 @@
     bindLockActions();
     // 桌面端订阅主进程锁定推送（powerMonitor 超时 / 托盘召回）
     if (nd && nd.security && nd.security.onLocked) {
-      nd.security.onLocked(function () { needLock = true; showLock(); });
+      nd.security.onLocked(function () {
+        needLock = true;
+        log('info', '收到主进程 app:locked 推送 visibility=' + document.visibilityState);
+        showLock();
+      });
     }
     startWebIdleTimer();
     // 窗口由隐藏/最小化恢复可见（托盘召回）：设了密码则立即锁定。
@@ -157,6 +216,7 @@
     document.addEventListener('visibilitychange', function () {
       resetIdle();
       if (document.visibilityState !== 'visible') return;
+      log('info', 'visibilitychange=visible needLock=' + needLock);
       if (needLock) { showLock(); return; }
       if (nd && nd.security && nd.security.getState) {
         nd.security.getState().then(function (cfg) {
@@ -176,8 +236,12 @@
   }
 
   if (typeof window !== 'undefined') {
-    window.addEventListener('DOMContentLoaded', function () {
+    const boot = function () {
       try { init(); } catch (e) { if (window.SBLog) window.SBLog.warn('[security] init: ' + e); }
-    });
+    };
+    // 脚本在 DOM 已就绪后才执行时 DOMContentLoaded 已错过，必须直接 init，
+    // 否则解锁按钮无响应、锁定推送也订阅不到（Bug-081）。
+    if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', boot, { once: true });
+    else boot();
   }
 })();

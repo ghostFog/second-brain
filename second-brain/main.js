@@ -459,12 +459,12 @@ function createWindow(vaultPath, opts) {
   // 每次窗口「重新显示」（从托盘召回最小化/隐藏的窗口、或 restore 最小化窗口）且已设启动密码时，
   // 重置该窗口解锁并推送锁定事件，需重新输入密码才能查看内容（SEC-01 窗口级锁定）。
   // 窗口全程保持显示、仅正常前置时不触发，不打断已解锁的窗口使用。
-  win.on('show', function () { secRequireLock(win); });
-  win.on('restore', function () { secRequireLock(win); });
+  win.on('show', function () { secRequireLock(win, 'show'); });
+  win.on('restore', function () { secRequireLock(win, 'restore'); });
   // 最小化/缩托盘瞬间即锁定工作区（窗口已隐藏，锁定过程不可见）：召回显示时遮罩已在，
   // 直接呈现密码界面，彻底规避「先闪内容再弹密码框」。
-  win.on('minimize', function () { secRequireLock(win); });
-  win.on('hide', function () { secRequireLock(win); });
+  win.on('minimize', function () { secRequireLock(win, 'minimize'); });
+  win.on('hide', function () { secRequireLock(win, 'hide'); });
   // 兜底：渲染异常/过慢时强制显示，避免白窗/黑屏卡死；首帧渲染完成即取消兜底
   var _sbShowTimer = setTimeout(function () {
     if (!win.isDestroyed() && !win.isVisible()) win.show();
@@ -2958,11 +2958,18 @@ function secWinIsUnlocked(winId) {
 }
 /* 窗口重新显示（托盘召回最小化/隐藏、restore）时强制要求重新输入密码：
  * 重置该窗口解锁记录并推送锁定事件，配合渲染端弹遮罩隐藏内容。全程保持显示的窗口不触发。
+ * 注意：解锁状态统一按 webContents.id 记录（app:unlock / app:getSecurity 均用 sender.id），
+ * 此处曾误用 BrowserWindow.id 删除，两个 id 空间不一致时会残留「已解锁」旧态，
+ * 渲染端若走 getState 查询而非推送事件就会误判为已解锁、看不到密码框（Bug-081）。
  * @param {BrowserWindow} win 目标窗口
- * @author 火 冰 */
-function secRequireLock(win) {
+ * @param {string} reason 触发来源（show/restore/minimize/hide），仅用于日志定位
+ * @author huobing */
+function secRequireLock(win, reason) {
   if (!secPwdHash || !win || win.isDestroyed()) return;
-  secWinUnlocked.delete(win.id);
+  const wcId = (win.webContents && !win.webContents.isDestroyed()) ? win.webContents.id : null;
+  if (wcId != null) secWinUnlocked.delete(wcId);
+  appendLog({ level: 'info', msg: '[security] 锁定窗口 reason=' + (reason || 'unknown')
+    + ' win=' + win.id + ' wc=' + wcId });
   try { win.webContents.send('app:locked'); } catch (e) { /* 忽略 */ }
 }
 
@@ -3033,6 +3040,7 @@ async function secVerify(password) {
  * @author 火 冰 */
 function secBroadcastLocked() {
   secWinUnlocked.clear(); // 锁定后所有窗口一律需要重新验证
+  appendLog({ level: 'info', msg: '[security] 超时锁定广播 app:locked' });
   BrowserWindow.getAllWindows().forEach(function (w) {
     try { if (!w.isDestroyed()) w.webContents.send('app:locked'); } catch (e) { /* 忽略 */ }
   });
@@ -3100,12 +3108,16 @@ ipcMain.handle('app:setPassword', async (_e, data) => {
 ipcMain.handle('app:unlock', async (event, pwd) => {
   if (!secPwdHash) { appUnlocked = true; return true; }
   const ok = await secVerify(pwd);
+  const wcId = (event && event.sender) ? event.sender.id : null;
   if (ok) {
     appUnlocked = true;
     encAppPwdPlain = pwd; // 解锁后应用密码明文进内存作为盐（笔记加密密码组合解密的盐）；启动后未解锁时盐=固定盐，符合「不第一时间解密」
-    if (event && event.sender) secWinUnlocked.set(event.sender.id, true); // 窗口级解锁
+    if (wcId != null) secWinUnlocked.set(wcId, true); // 窗口级解锁
+    appendLog({ level: 'info', msg: '[security] 解锁成功 wc=' + wcId });
     // 盐就绪后补跑元数据全库重建：启动时被 metaScanReady 拦下的加密库需用明文收敛一次（Bug-077）
     try { scheduleMetaFull(); } catch (e) { /* 无打开的库时忽略 */ }
+  } else {
+    appendLog({ level: 'warn', msg: '[security] 解锁失败 wc=' + wcId });
   }
   return ok;
 });

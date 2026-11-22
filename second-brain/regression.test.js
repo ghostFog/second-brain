@@ -2706,10 +2706,60 @@ function testExternalFsWatch() {
     'Bug-080-7: paste 里表格边界判断 + 自动扩展行');
 }
 
+/* ---- Bug-081: 锁屏偶发只显示深色遮罩、看不到密码卡片 ----
+ * 根因：①脚本在 DOM 已就绪后才执行时，showLock/init 只在 DOMContentLoaded 里注册，事件已错过——
+ *       body.locked 隐藏了主视图、遮罩却始终 display:none，表现为「深色空白」；
+ *       ②窗口隐藏期间已把遮罩置为显示，恢复可见再次 showLock 只是重复赋同值，
+ *       合成层不重绘，停留在「有遮罩无卡片」的旧帧。
+ * 修复：按 readyState 立即执行 showLock/init；已显示状态再次 showLock 时强制重排+重绘。
+ * 作者: huobing */
+async function testSecurityLockOverlay() {
+  const dom = new JSDOM('<!DOCTYPE html><html><body>'
+    + '<main class="app-main">内容</main>'
+    + '<div id="lock-screen" style="display:none"><div class="lock-card">'
+    + '<input id="lock-pwd" type="password" /><div id="lock-err"></div>'
+    + '<button id="lock-unlock">解锁</button></div></div>'
+    + '</body></html>',
+  { url: 'https://localhost/', pretendToBeVisual: true, runScripts: 'dangerously' });
+  const W = dom.window;
+  let lockedCb = null;
+  W.noteDesktop = {
+    security: {
+      getStateSync: function () { return { hasPwd: true, unlocked: false }; },
+      getState: function () { return Promise.resolve({ hasPwd: true, unlocked: false }); },
+      onLocked: function (cb) { lockedCb = cb; },
+      unlock: function () { return Promise.resolve(true); },
+    },
+    log: function () {},
+  };
+  // 等 DOM 就绪后再注入脚本，复现「DOMContentLoaded 已错过」的真实场景（缓存/延迟加载）
+  await new Promise(function (resolve) {
+    if (W.document.readyState !== 'loading') { resolve(); return; }
+    W.document.addEventListener('DOMContentLoaded', function () { resolve(); }, { once: true });
+  });
+  const s = W.document.createElement('script');
+  s.textContent = fs.readFileSync(path.join(__dirname, 'js', 'app-security.js'), 'utf8');
+  W.document.body.appendChild(s);
+  const screen = W.document.getElementById('lock-screen');
+  assert(screen.style.display === 'flex', 'Bug-081-1: DOM 已就绪后加载脚本也立即显示锁屏遮罩');
+  assert(W.document.body.classList.contains('locked'), 'Bug-081-2: 锁定态同步隐藏主视图，防内容泄露');
+  assert(typeof lockedCb === 'function', 'Bug-081-3: init 立即执行并订阅 app:locked 推送');
+  if (lockedCb) lockedCb();
+  assert(screen.style.display === 'flex', 'Bug-081-4: 重复锁定推送后遮罩仍显示（强制重绘不破坏显示）');
+  W.document.getElementById('lock-pwd').value = 'pwd';
+  W.document.getElementById('lock-unlock').click();
+  await new Promise(function (r) { setTimeout(r, 0); });
+  assert(screen.style.display === 'none', 'Bug-081-5: 立即 init 后解锁按钮可隐藏遮罩');
+  assert(!W.document.body.classList.contains('locked'), 'Bug-081-6: 解锁后移除 body.locked');
+  dom.window.close();
+}
+
 /* 异步端到端测试结束后统一汇总全部断言并设置退出码（同步断言此前已执行完毕）。
  * 作者: 火 冰 */
 testMetaVaultIncremental().then(function () {
   testExternalFsWatch();
+  return testSecurityLockOverlay();
+}).then(function () {
   console.log('\n========================================');
   console.log('回归断言汇总: 通过 ' + pass + ' / 失败 ' + fail);
   console.log('========================================');

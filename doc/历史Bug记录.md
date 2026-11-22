@@ -91,6 +91,7 @@
 | Bug-077 | 已修复（测试完成） | 加密知识库每次打开（无编辑）6 个 `_meta.json` 全被重写（仅 updatedAt 变）：三个解密读函数先 `encKeyCache.get`（首调为 undefined）后 `ensureNoteKey` 才建缓存，首读经 `decryptNoteTextAny` 静默返回 ENC1 密文；与渲染端恢复标签的读取竞速，每轮污染边界不同→指纹每轮变→diff 误判全写。修复：三函数改为先 ensureNoteKey 再取 ring；真机二轮验证零写入。另确认 11:42 旧安装包（10-10 打包、无 meta-vault）是独立污染源，需重新打包覆盖安装。 | [查看](bugs/Bug-077.md) |
 | Bug-079 | 已修复（测试完成） | 切换页签后 Ctrl+Z 回退串内容 + 连续输入全部撤销 + 不支持 Ctrl+Shift+Z redo：vditor 单例 undo 栈跨 tab 共享且不处理 Shift+Z。最终方案：宿主层 per-tab 文档快照历史栈（vdTabHistory）+ capture 阶段 keydown 拦截 Ctrl+Z/Shift+Z/Y；Ctrl+Z 前先 flush pending debounce timer 确保步长正确。369 条回归断言全通过。 | [查看](bugs/Bug-079.md) |
 | Bug-080 | 已修复（测试完成） | vditor 表格单元格 Ctrl+V 粘贴 Excel 多单元格（tab 分隔）全部堆进一行：vditor 不处理 paste 表格语义。修复：宿主层 capture 阶段 paste 拦截器，光标在 TD/TH 内时解析 \t 列 \n 行逐格填充，超出边界自动扩展表格行列。 | [查看](bugs/Bug-080.md) |
+| Bug-081 | 已修复（测试完成） | 偶发锁屏只显示深色遮罩、看不到密码输入框与卡片：窗口隐藏期已把遮罩置为显示，恢复可见时重复赋同值不触发重绘，合成层停留旧帧；且 `secRequireLock` 误用 BrowserWindow.id 删除 webContents.id 记录的解锁态。修复：已显示时强制重排重绘 + 按 readyState 立即执行 + 统一解锁记录键 + 锁定/解锁日志。 | [查看](bugs/Bug-081.md) |
 
 > 说明（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——代码块语言选择器(chip)显隐保留为 Bug-011，编辑器链接弹框 `docButton` 那条纠正为 Bug-042。
 

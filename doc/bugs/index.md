@@ -83,6 +83,7 @@
 | [Bug-077](Bug-077.md) | 已修复（测试完成） | 加密知识库每次打开全部 `_meta.json` 被重写（仅 updatedAt 变）：解密读函数先取 `encKeyCache.get`（首调 undefined）后 `ensureNoteKey` 才建缓存，首读静默返回 ENC1 密文；与渲染端恢复标签读取竞速，污染边界逐轮不同致指纹每轮变、diff 误判全写。修复：三函数先 ensureNoteKey 再取 ring，真机第二轮零写入。 |
 | [Bug-079](Bug-079.md) | 已修复（测试完成） | 切换页签后 Ctrl+Z 回退串内容 + 连续输入会全部撤销 + 不支持 Ctrl+Shift+Z redo：vditor 单例 undo 栈跨 tab 共享且不处理 Shift+Z；宿主层 per-tab 文档快照历史栈解决，Ctrl+Z 前先 flush pending debounce timer 确保步长正确；Ctrl+Shift+Z/Ctrl+Y redo 也统一走宿主栈。 |
 | [Bug-080](Bug-080.md) | 已修复（测试完成） | 表格单元格 Ctrl+V 粘贴 Excel 多单元格（tab 分隔）全部堆进一行/单元格：vditor 不处理 paste 表格语义，宿主层 capture 阶段 paste 拦截器解析 tab/newline 逐格填充，超出边界自动扩展行列。 |
+| [Bug-081](Bug-081.md) | 已修复（测试完成） | 偶发锁屏只显示深色遮罩、看不到密码卡片：窗口隐藏期已置遮罩显示，恢复可见时重复赋同值不触发重绘，停留在旧帧；另 `secRequireLock` 误用 BrowserWindow.id 删除 webContents.id 记录的解锁态。修复：已显示时强制重排重绘 + readyState 立即执行 + 统一解锁记录键。 |
 
 > 注（2026-09-10 拆分归档修正）：原数据存在两条 Bug-011（编号重复），已纠正——语言选择器(chip)显隐保留为 Bug-011，链接弹框 `docButton` 那条纠正为 Bug-042。
 
