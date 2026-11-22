@@ -51,6 +51,8 @@ Desktop.ini
 
 # ---- TRAE IDE 本地目录 ----
 .trae/
+# TRAE IDE HTML 分享打包产物
+.trae-html-share-packages/
 
 # ---- CodeArts Agent 本地目录 ----
 .arts/
